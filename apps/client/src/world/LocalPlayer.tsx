@@ -39,6 +39,9 @@ export function LocalPlayer() {
     const onBlur = () => keys.current.clear();
     const onMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement !== canvas) return;
+      // 回転モード (つかんだオブジェクトを回している) の間は、視点を動かさない
+      const interaction = useInteraction.getState();
+      if (interaction.grabbedId && interaction.grabMode === "rotate") return;
       const p = player.current;
       p.yaw -= e.movementX * MOUSE_SENSITIVITY;
       p.pitch -= e.movementY * MOUSE_SENSITIVITY;

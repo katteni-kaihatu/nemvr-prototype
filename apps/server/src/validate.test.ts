@@ -137,6 +137,24 @@ describe("parseClientMessage", () => {
       expect(bad({ yaw: "1" })).toBeNull();
       expect(bad({ yaw: null })).toBeNull();
     });
+    it("accepts an optional pitch (finite number) in move_object", () => {
+      const withPitch = { type: "move_object", id, position: [1, 2, -2], yaw: 0.5, pitch: -0.7 };
+      expect(parseClientMessage(JSON.stringify(withPitch))).toEqual(withPitch);
+      const bad = (pitch: unknown) => parseClientMessage(JSON.stringify({ ...withPitch, pitch }));
+      expect(bad("1")).toBeNull();
+      expect(bad(null)).toBeNull();
+    });
+    it("parses place_box and validates size, color and pose", () => {
+      const ok = { type: "place_box", position: [1, 0, 2], yaw: 0, size: 1.5, color: "#aabbcc" };
+      expect(parseClientMessage(JSON.stringify(ok))).toEqual(ok);
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...ok, ...patch }));
+      expect(bad({ size: 0 })).toBeNull();
+      expect(bad({ size: 1000 })).toBeNull();
+      expect(bad({ color: "red" })).toBeNull();
+      expect(bad({ color: "#12345" })).toBeNull();
+      expect(bad({ position: [1, 2] })).toBeNull();
+      expect(bad({ pitch: "x" })).toBeNull();
+    });
   });
 
   it("returns null for garbage", () => {

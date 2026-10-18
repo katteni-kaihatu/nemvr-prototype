@@ -149,18 +149,18 @@ export const sendGrabObject = (id: string): void => send({ type: "grab_object", 
 export const sendReleaseObject = (id: string): void => send({ type: "release_object", id });
 export const sendDeleteObject = (id: string): void => send({ type: "delete_object", id });
 export const sendDuplicateObject = (id: string): void => send({ type: "duplicate_object", id });
-export function sendMoveObject(id: string, position: [number, number, number], yaw: number): void {
-  send({ type: "move_object", id, position, yaw });
+export function sendMoveObject(id: string, position: [number, number, number], yaw: number, pitch = 0): void {
+  send({ type: "move_object", id, position, yaw, pitch });
 }
 
 /**
  * 自分が動かしたオブジェクトの位置を、手元の状態にも反映する。
  * 移動中の自分への配信 (echo) は無いので、離したときに古い位置へ戻って見えないようにする。
  */
-export function applyLocalObjectPose(id: string, position: [number, number, number], yaw: number): void {
+export function applyLocalObjectPose(id: string, position: [number, number, number], yaw: number, pitch = 0): void {
   useNet.setState((s) => {
     const object = s.objects[id];
-    return object ? { objects: { ...s.objects, [id]: { ...object, position, yaw } } } : s;
+    return object ? { objects: { ...s.objects, [id]: { ...object, position, yaw, pitch } } } : s;
   });
 }
 
@@ -283,6 +283,7 @@ export function connect(name: string): void {
       case "object_added": {
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
+        if (object.kind === "box") break; // ボックスは中身 (IPFS) を持たない
         const name = pendingUploads.get(object.cid);
         pendingUploads.delete(object.cid);
         if (object.kind === "file" && !object.stored && object.owner === useNet.getState().self?.id) {

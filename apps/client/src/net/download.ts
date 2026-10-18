@@ -18,7 +18,7 @@ const downloading = new Set<string>();
  * 保存するファイル名。サーバーが整えた名前を、念のためもう一度整える。
  * 名前の無い画像 (古い配置など) は、CID と画像の形式から付ける。
  */
-export function downloadName(object: WorldObject, head?: Uint8Array): string {
+export function downloadName(object: Exclude<WorldObject, { kind: "box" }>, head?: Uint8Array): string {
   if (object.name) return sanitizeFileName(object.name, "download");
   const extension = head ? imageExtension(head) : "";
   return `image-${object.cid.slice(-8)}${extension ? `.${extension}` : ""}`;
@@ -42,6 +42,7 @@ function saveBlob(blob: Blob, name: string): void {
  * 進捗と結果は HUD に表示する。
  */
 export async function downloadObject(object: WorldObject): Promise<void> {
+  if (object.kind === "box") return; // ボックスはダウンロードできない
   if (downloading.has(object.id)) return;
   downloading.add(object.id);
 

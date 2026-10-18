@@ -1,6 +1,8 @@
 import { Canvas } from "@react-three/fiber";
 import { Grid } from "@react-three/drei";
 import { useNet } from "../net/connection";
+import { useInteraction } from "./interaction";
+import { BoxPlane } from "./BoxPlane";
 import { CursorDot } from "./CursorDot";
 import { DropTarget } from "./DropTarget";
 import { FilePlane } from "./FilePlane";
@@ -9,15 +11,6 @@ import { LocalPlayer } from "./LocalPlayer";
 import { ObjectInteraction } from "./ObjectInteraction";
 import { RemoteAvatar } from "./RemoteAvatar";
 import { RingMenu } from "./RingMenu";
-
-// 位置関係が分かるように置く静的オブジェクト (同期なし)
-const BOXES: { pos: [number, number, number]; size: number; color: string }[] = [
-  { pos: [0, 0.5, 0], size: 1, color: "#d9534f" },
-  { pos: [6, 1, -4], size: 2, color: "#5bc0de" },
-  { pos: [-7, 0.75, -6], size: 1.5, color: "#5cb85c" },
-  { pos: [10, 0.5, 8], size: 1, color: "#f0ad4e" },
-  { pos: [-10, 1.5, 7], size: 3, color: "#9b59b6" },
-];
 
 export function World() {
   const peers = useNet((s) => s.peers);
@@ -44,15 +37,14 @@ export function World() {
           fadeDistance={60}
         />
 
-        {BOXES.map((b, i) => (
-          <mesh key={i} position={b.pos}>
-            <boxGeometry args={[b.size, b.size, b.size]} />
-            <meshStandardMaterial color={b.color} />
-          </mesh>
-        ))}
-
         {Object.values(objects).map((o) =>
-          o.kind === "file" ? <FilePlane key={o.id} object={o} /> : <ImagePlane key={o.id} object={o} />,
+          o.kind === "file" ? (
+            <FilePlane key={o.id} object={o} />
+          ) : o.kind === "box" ? (
+            <BoxPlane key={o.id} object={o} />
+          ) : (
+            <ImagePlane key={o.id} object={o} />
+          ),
         )}
 
         <LocalPlayer />
@@ -73,6 +65,8 @@ function HUD({ count }: { count: number }) {
   const self = useNet((s) => s.self);
   const notice = useNet((s) => s.notice);
   const ipfs = useNet((s) => s.ipfs);
+  const grabbedId = useInteraction((s) => s.grabbedId);
+  const grabMode = useInteraction((s) => s.grabMode);
   const directPeers = useNet((s) => s.directPeers);
   const ipfsLabel =
     { idle: "-", starting: "接続中...", ready: "接続済み", error: "接続失敗" }[ipfs] +
@@ -96,7 +90,14 @@ function HUD({ count }: { count: number }) {
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>ファイルや画像をドロップして配置 (視点操作中は Esc で解除してから)</div>
-      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ / 中ボタンでメニュー (削除・複製・ダウンロード)</div>
+      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ (つかんだままマウスを上下: 持ち上げ、ホイール: 遠く・近く、E: 移動 / 回転モード) / 中ボタンでメニュー (削除・複製・ダウンロード)</div>
+      {grabbedId && (
+        <div style={{ color: "#a5d6a7" }}>
+          {grabMode === "rotate"
+            ? "回転モード: マウスで回す (左右 = 水平 / 上下 = 垂直) / ホイールで遠く・近く / E で移動モードへ"
+            : "移動モード: マウスを上下に動かすと持ち上がる / ホイールで遠く・近く / E で回転モードへ"}
+        </div>
+      )}
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
     </div>
   );

@@ -9,6 +9,7 @@ import {
   TICK_RATE,
   type PeerInfo,
   type PeerState,
+  type PlaceBox,
   type PlaceFile,
   type PlaceImage,
   type Pose,
@@ -31,6 +32,15 @@ const DUPLICATE_SIDE_OFFSET = { image: 0.6, file: FILE_ICON_WIDTH + 0.15 } as co
 const DUPLICATE_NORMAL_OFFSET = 0.05;
 
 const INITIAL_POSE: Pose = { position: [0, 0, 0], head: [0, 0, 0, 1] };
+
+/** デモ空間の初期ボックス (位置関係が分かる目印)。World.tsx の静的メッシュを移したもの。 */
+const INITIAL_BOXES: { position: Vec3; yaw: number; size: number; color: string }[] = [
+  { position: [0, 0, 0], yaw: 0, size: 1, color: "#d9534f" },
+  { position: [6, 0, -4], yaw: 0, size: 2, color: "#5bc0de" },
+  { position: [-7, 0, -6], yaw: 0, size: 1.5, color: "#5cb85c" },
+  { position: [10, 0, 8], yaw: 0, size: 1, color: "#f0ad4e" },
+  { position: [-10, 0, 7], yaw: 0, size: 3, color: "#9b59b6" },
+];
 
 interface Peer {
   socket: WebSocket;
@@ -74,6 +84,15 @@ export class Room {
     return state;
   }
 
+  /** デモ空間のボックスを配置する (つかんで動かせるサーバー同期オブジェクト)。サーバーの起動時に 1 回だけ呼ぶ。 */
+  seedDemoBoxes(): void {
+    for (const box of INITIAL_BOXES) {
+      if (this.isFull) break;
+      const object: WorldObject = { id: randomUUID(), kind: "box", ...box };
+      this.objects.set(object.id, object);
+    }
+  }
+
   setPose(id: string, pose: Pose): void {
     const peer = this.peers.get(id);
     if (peer) peer.state.pose = pose;
@@ -108,11 +127,13 @@ export class Room {
   }
 
   /** つかんでいる本人からの移動だけを受け付け、本人以外に配る (本人は手元で動かしている)。 */
-  moveObject(peerId: string, id: string, position: Vec3, yaw: number): void {
+  moveObject(peerId: string, id: string, position: Vec3, yaw: number, pitch?: number): void {
     const object = this.objects.get(id);
     if (!object || object.heldBy !== peerId) return;
     object.position = position;
     object.yaw = yaw;
+    if (pitch === undefined) delete object.pitch;
+    else object.pitch = pitch;
     this.broadcast({ type: "object_updated", object }, peerId);
   }
 
@@ -146,7 +167,7 @@ export class Room {
     }
     const { yaw } = object;
     const [x, y, z] = object.position;
-    const side = DUPLICATE_SIDE_OFFSET[object.kind];
+    const side = object.kind === "box" ? object.size + 0.2 : DUPLICATE_SIDE_OFFSET[object.kind]; // ボックスは重ならない距離
     const copy: WorldObject = {
       ...object,
       id: randomUUID(),
@@ -176,6 +197,15 @@ export class Room {
    * ファイルオブジェクトを追加して全員に通知する。上限に達していたら false。
    * size と category は、サーバーが中身を取得して決めた値を渡す (クライアントの申告は使わない)。
    */
+  /** デモ空間のボックスを追加して全員に通知する。上限に達していたら false。 */
+  addBox(place: PlaceBox): boolean {
+    if (this.objects.size >= MAX_OBJECTS) return false;
+    const object: WorldObject = { id: randomUUID(), kind: "box", ...place };
+    this.objects.set(object.id, object);
+    this.broadcast({ type: "object_added", object });
+    return true;
+  }
+
   addFile(place: PlaceFile & { size: number; category: FileCategory; stored: boolean; owner?: string }): boolean {
     if (this.objects.size >= MAX_OBJECTS) return false;
     const object: WorldObject = { id: randomUUID(), kind: "file", ...place };

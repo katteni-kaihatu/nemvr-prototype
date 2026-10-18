@@ -6,6 +6,7 @@ import {
   MIN_OBJECT_SIZE,
   sanitizeFileName,
   type ClientMessage,
+  type PlaceBox,
   type PlaceFile,
   type PlaceImage,
   type Pose,
@@ -71,12 +72,33 @@ function parseObjectId(v: unknown): string | null {
 }
 
 /** 位置 (有限・範囲内) と向き (有限) を検証する。置く・動かすメッセージで共通。 */
-function parsePlacement(v: Record<string, unknown>): { position: Vec3; yaw: number } | null {
-  const { position, yaw } = v;
+function parsePlacement(v: Record<string, unknown>): { position: Vec3; yaw: number; pitch?: number } | null {
+  const { position, yaw, pitch } = v;
   if (!isFiniteArray(position, 3)) return null;
   if (position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
   if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
-  return { position: position as Vec3, yaw };
+  if (pitch !== undefined && (typeof pitch !== "number" || !Number.isFinite(pitch))) return null;
+  return pitch === undefined ? { position: position as Vec3, yaw } : { position: position as Vec3, yaw, pitch };
+}
+
+/** 向き (yaw・pitch) の検証。 */
+function parseAngles(v: Record<string, unknown>): { yaw: number; pitch?: number } | null {
+  const { yaw, pitch } = v;
+  if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
+  if (pitch !== undefined && (typeof pitch !== "number" || !Number.isFinite(pitch))) return null;
+  return pitch === undefined ? { yaw } : { yaw, pitch };
+}
+
+const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/** place_box の検証。デモ用のボックス配置・テスト用。 */
+export function parsePlaceBox(v: Record<string, unknown>): PlaceBox | null {
+  const placement = parsePlacement(v);
+  if (!placement) return null;
+  const { size, color } = v;
+  if (typeof size !== "number" || !Number.isFinite(size) || size < MIN_OBJECT_SIZE || size > MAX_OBJECT_SIZE) return null;
+  if (typeof color !== "string" || !COLOR_RE.test(color)) return null;
+  return { ...placement, size, color };
 }
 
 export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
@@ -131,10 +153,14 @@ export function parseClientMessage(text: string): ClientMessage | null {
     }
     case "move_object": {
       const id = parseObjectId(msg.id);
-      const { position, yaw } = msg;
-      if (!id || !isFiniteArray(position, 3) || position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
-      if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
-      return { type: "move_object", id, position: position as Vec3, yaw };
+      const { position } = msg;
+      const angles = parseAngles(msg);
+      if (!id || !isFiniteArray(position, 3) || position.some((n) => Math.abs(n) > MAX_ABS_POSITION) || !angles) return null;
+      return { type: "move_object", id, position: position as Vec3, ...angles };
+    }
+    case "place_box": {
+      const place = parsePlaceBox(msg);
+      return place ? { type: "place_box", ...place } : null;
     }
     case "ipfs_peer": {
       // libp2p のピア ID (base58 / base32 の英数字)

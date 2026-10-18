@@ -9,13 +9,15 @@ interface MenuItem {
   label: string;
   /** 対象のオブジェクトに対して実行する */
   run: (object: WorldObject) => void;
+  /** このオブジェクトに出すか (省略すると常に出す) */
+  applies?: (object: WorldObject) => boolean;
 }
 
 /** リングに並べるボタン。増やすときはここに足す (等間隔に配置される)。 */
 const ITEMS: MenuItem[] = [
   { id: "delete", label: "削除", run: (o) => sendDeleteObject(o.id) },
   { id: "duplicate", label: "複製", run: (o) => sendDuplicateObject(o.id) },
-  { id: "download", label: "ダウンロード", run: (o) => void downloadObject(o) },
+  { id: "download", label: "ダウンロード", run: (o) => void downloadObject(o), applies: (o) => o.kind !== "box" },
 ];
 
 const RING_RADIUS = 108; // 中心からボタンの中心までの距離 (px)
@@ -49,6 +51,7 @@ function describe(object: WorldObject): { title: string; detail: string } {
     const state = object.stored ? "" : object.offline ? " / オフライン" : " / 未転送";
     return { title: object.name, detail: `${formatBytes(object.size)}${state}` };
   }
+  if (object.kind === "box") return { title: "ボックス", detail: `${object.size} m` };
   return { title: object.name ?? "画像", detail: "" };
 }
 
@@ -71,6 +74,7 @@ export function RingMenu() {
 
   if (!targetId || !object) return null;
   const { title, detail } = describe(object);
+  const items = ITEMS.filter((item) => item.applies?.(object) ?? true);
 
   return (
     <div
@@ -109,8 +113,8 @@ export function RingMenu() {
           <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: "bold" }}>{title}</div>
           {detail && <div style={{ opacity: 0.8 }}>{detail}</div>}
         </div>
-        {ITEMS.map((item, i) => {
-          const angle = ((START_ANGLE + (360 / ITEMS.length) * i) * Math.PI) / 180;
+        {items.map((item, i) => {
+          const angle = ((START_ANGLE + (360 / items.length) * i) * Math.PI) / 180;
           return (
             <button
               key={item.id}

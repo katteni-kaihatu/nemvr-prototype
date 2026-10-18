@@ -41,6 +41,7 @@ const ipfs = await startIpfs(IPFS_PORT, { host: HOST, publicPort: IPFS_PUBLIC_PO
 // TURN (WebRTC の中継)。TURN_HOST と TURN_SECRET が未設定なら使わない (クライアントは既定の公開 STUN のみ)
 const turn = turnConfigFromEnv(process.env);
 const room = new Room(ipfs.info, (userId) => iceServersFor(turn, userId));
+room.seedDemoBoxes(); // デモ空間のボックス (つかんで動かせる)
 // 置かれた画像・ファイルの中身 (CID) の保持。参照が無くなったら unpin + gc で解放する
 const content = new ContentStore(ipfs, {
   maxTotalBytes: MAX_TOTAL_MB * 1024 * 1024,
@@ -225,7 +226,7 @@ function stageFile(requesterId: string, object: FileObject): void {
 }
 
 /** サーバーが中身を保持しているオブジェクトか (保持していれば、削除・複製で参照を数える)。 */
-const holdsContent = (object: WorldObject): boolean => object.kind === "image" || object.stored;
+const holdsContent = (object: WorldObject): boolean => object.kind === "image" || (object.kind === "file" && object.stored);
 
 wss.on("connection", (ws) => {
   let peerId: string | null = null;
@@ -250,21 +251,29 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "grab_object") {
       if (peerId) room.grabObject(peerId, msg.id);
     } else if (msg.type === "move_object") {
-      if (peerId) room.moveObject(peerId, msg.id, msg.position, msg.yaw);
+      if (peerId) room.moveObject(peerId, msg.id, msg.position, msg.yaw, msg.pitch);
     } else if (msg.type === "release_object") {
       if (peerId) room.releaseObject(peerId, msg.id);
     } else if (msg.type === "delete_object") {
       if (!peerId) return;
       const removed = room.deleteObject(peerId, msg.id);
-      if (removed && holdsContent(removed)) content.release(removed.cid); // 最後の参照なら、unpin してディスクを空ける
+      if (removed && holdsContent(removed) && (removed.kind === "image" || removed.kind === "file")) content.release(removed.cid); // 最後の参照なら、unpin してディスクを空ける
     } else if (msg.type === "duplicate_object") {
       if (!peerId) return;
       const copy = room.duplicateObject(peerId, msg.id);
-      if (copy && holdsContent(copy)) content.retain(copy.cid); // 複製は同じ中身を指す
+      if (copy && holdsContent(copy) && (copy.kind === "image" || copy.kind === "file")) content.retain(copy.cid); // 複製は同じ中身を指す
     } else if (msg.type === "place_image") {
       if (!peerId) return;
       const { type: _type, ...place } = msg;
       placeImage(peerId, place);
+    } else if (msg.type === "place_box") {
+      if (!peerId) return;
+      const { type: _boxtype, ...box } = msg;
+      if (room.isFull) {
+        room.sendError(peerId, "これ以上オブジェクトを置けません");
+      } else if (!room.addBox(box)) {
+        room.sendError(peerId, "これ以上オブジェクトを置けません");
+      }
     } else if (msg.type === "place_file") {
       if (!peerId) return;
       const { type: _type, ...place } = msg;

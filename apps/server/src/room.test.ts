@@ -117,6 +117,52 @@ describe("grab / move / release", () => {
   });
 });
 
+describe("pitch (vertical rotation)", () => {
+  it("stores and broadcasts the pitch with the move, and clears it when the move has none", () => {
+    const { room, a, b, aId, objectId } = setup();
+    room.grabObject(aId, objectId);
+    a.clear();
+    b.clear();
+    room.moveObject(aId, objectId, [1, 3, 2], 0.5, 0.8);
+    const moved = b.of("object_updated")[0]!.object;
+    expect(moved.position).toEqual([1, 3, 2]); // 高さ (Y) も動く
+    expect(moved.pitch).toBe(0.8);
+    expect(a.sent).toEqual([]);
+    b.clear();
+    room.moveObject(aId, objectId, [1, 3, 2], 0.5);
+    expect(b.of("object_updated")[0]!.object.pitch).toBeUndefined();
+  });
+});
+
+describe("demo boxes", () => {
+  it("seeds the demo boxes, which late joiners get in welcome and can grab and move", () => {
+    const room = new Room({ peerId: "p", wsPort: 1 });
+    room.seedDemoBoxes();
+    const a = new FakeSocket();
+    const aId = room.join(a as unknown as WebSocket, "alice").id;
+    const objects = a.of("welcome")[0]!.objects;
+    expect(objects.length).toBe(5);
+    expect(objects.every((o) => o.kind === "box")).toBe(true);
+    const box = objects[0]!;
+    a.clear();
+    room.grabObject(aId, box.id);
+    room.moveObject(aId, box.id, [2, 4, 2], 1, 0.3);
+    room.releaseObject(aId, box.id);
+    expect(room.getObject(box.id)).toMatchObject({ kind: "box", position: [2, 4, 2], yaw: 1, pitch: 0.3 });
+  });
+
+  it("adds a box with place and duplicates it beside the original without overlapping", () => {
+    const room = new Room({ peerId: "p", wsPort: 1 });
+    const a = new FakeSocket();
+    const aId = room.join(a as unknown as WebSocket, "alice").id;
+    expect(room.addBox({ position: [0, 0, 0], yaw: 0, size: 2, color: "#ff0000" })).toBe(true);
+    const box = a.of("object_added")[0]!.object;
+    const copy = room.duplicateObject(aId, box.id)!;
+    expect(copy).toMatchObject({ kind: "box", size: 2, color: "#ff0000" });
+    expect(copy.position[0]).toBeGreaterThanOrEqual(2); // 一辺 (2m) 以上離れる
+  });
+});
+
 describe("delete", () => {
   it("removes the object for everyone", () => {
     const { room, a, b, aId, objectId } = setup();
@@ -164,7 +210,7 @@ describe("duplicate", () => {
     for (const s of [a, b]) {
       const copy = s.of("object_added")[0]!.object;
       expect(copy.id).not.toBe(objectId);
-      expect(copy.cid).toBe(CID);
+      expect((copy as { cid: string }).cid).toBe(CID);
       expect(copy).toMatchObject({ kind: "image", width: 2, height: 1 });
       expect(copy.yaw).toBe(0);
       // yaw 0: 右 (+X) に 0.6、法線 (+Z) に 0.05
@@ -246,7 +292,7 @@ describe("files", () => {
     room.addFile(file);
     const added = (room as unknown as { objects: Map<string, WorldObject> }).objects;
     const fileObject = [...added.values()].find((o) => o.kind === "file")!;
-    expect(room.deleteObject(aId, fileObject.id)?.cid).toBe(CID);
+    expect((room.deleteObject(aId, fileObject.id) as { cid: string } | null)?.cid).toBe(CID);
     expect(room.deleteObject(aId, fileObject.id)).toBeNull(); // 2 回目は存在しない
   });
 
@@ -275,7 +321,7 @@ describe("files", () => {
 
   it("returns the copy from duplicateObject, and null when nothing was copied", () => {
     const { room, aId, objectId } = setup();
-    expect(room.duplicateObject(aId, objectId)?.cid).toBe(CID);
+    expect((room.duplicateObject(aId, objectId) as { cid: string } | null)?.cid).toBe(CID);
     expect(room.duplicateObject(aId, "00000000-0000-4000-8000-000000000000")).toBeNull();
   });
 });

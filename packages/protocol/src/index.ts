@@ -48,6 +48,8 @@ interface ObjectBase {
   position: Vec3;
   /** Y 軸回りの向き (rad)。法線は +Z を yaw だけ回した向き。 */
   yaw: number;
+  /** X 軸回りの向き (rad, 上向きが正)。回転順序は YXZ。未指定なら 0。 */
+  pitch?: number;
   /** 今このオブジェクトをつかんでいる人 (PeerInfo.id)。つかまれていなければ無い。 */
   heldBy?: string;
 }
@@ -92,7 +94,17 @@ export interface FileObject extends ObjectBase {
   category: FileCategory;
 }
 
-export type WorldObject = ImageObject | FileObject;
+/**
+ * デモ空間のボックス。サーバー同期オブジェクトで、つかんで動かせる。
+ * size は一辺 (m)、color は "#rrggbb"。
+ */
+export interface BoxObject extends ObjectBase {
+  kind: "box";
+  size: number;
+  color: string;
+}
+
+export type WorldObject = ImageObject | FileObject | BoxObject;
 
 /** サーバーの IPFS (libp2p) ノードへの接続情報。ホスト名はクライアントがページの接続先から補う。 */
 export interface IpfsInfo {
@@ -119,19 +131,23 @@ export type PlaceImage = Pick<ImageObject, "cid" | "position" | "yaw" | "width" 
  */
 export type PlaceFile = Pick<FileObject, "cid" | "name" | "position" | "yaw">;
 
+/** place_box の本体部分 (id はサーバーが採番する)。デモ用のボックス配置・テスト用。 */
+export type PlaceBox = Pick<BoxObject, "position" | "yaw" | "size" | "color"> & { pitch?: number };
+
 // Client -> Server
 export type ClientMessage =
   | { type: "join"; name: string }
   | { type: "pose"; pose: Pose }
   | ({ type: "place_image" } & PlaceImage)
   | ({ type: "place_file" } & PlaceFile)
+  | ({ type: "place_box" } & PlaceBox)
   // まだサーバーが保持していないファイル (大きなファイル) を、ダウンロードするために、サーバーに取得させる
   | { type: "request_file"; id: string }
   // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
   | { type: "ipfs_peer"; peerId: string }
   // オブジェクトの操作。つかんでいる間は、つかんだ本人だけが move できる (排他)
   | { type: "grab_object"; id: string }
-  | { type: "move_object"; id: string; position: Vec3; yaw: number }
+  | { type: "move_object"; id: string; position: Vec3; yaw: number; pitch?: number }
   | { type: "release_object"; id: string }
   | { type: "delete_object"; id: string }
   | { type: "duplicate_object"; id: string };
