@@ -2,6 +2,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { MAX_MESSAGE_BYTES } from "@proto/protocol";
 import { ImageRejected, startIpfs } from "./ipfs.js";
 import { Room } from "./room.js";
+import { iceServersFor, turnConfigFromEnv } from "./turn.js";
 import { parseClientMessage } from "./validate.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -14,7 +15,9 @@ const PING_INTERVAL_MS = 30_000;
 const MAX_CONCURRENT_VERIFY = 4; // 同時に検証 (IPFS から取得) する画像の数
 
 const ipfs = await startIpfs(IPFS_PORT, { host: HOST, publicPort: IPFS_PUBLIC_PORT });
-const room = new Room(ipfs.info);
+// TURN (WebRTC の中継)。TURN_HOST と TURN_SECRET が未設定なら使わない (クライアントは既定の公開 STUN のみ)
+const turn = turnConfigFromEnv(process.env);
+const room = new Room(ipfs.info, (userId) => iceServersFor(turn, userId));
 const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: MAX_MESSAGE_BYTES });
 const alive = new WeakSet<WebSocket>();
 let verifying = 0;
@@ -97,6 +100,7 @@ const pingTimer = setInterval(() => {
 }, PING_INTERVAL_MS);
 
 wss.on("listening", () => {
+  console.log(turn ? `TURN: ${turn.host}:${turn.port} (credentials valid ${turn.ttlSeconds}s)` : "TURN: disabled");
   console.log(`WebSocket server listening on ${HOST}:${PORT}`);
   console.log(`IPFS (libp2p ws) listening on ${HOST}:${IPFS_PORT} (public port ${IPFS_PUBLIC_PORT}) as ${ipfs.info.peerId}`);
 });

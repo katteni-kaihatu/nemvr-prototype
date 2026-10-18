@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   MAX_OBJECTS,
+  type IceServer,
   type IpfsInfo,
   TICK_RATE,
   type PeerInfo,
@@ -26,7 +27,11 @@ interface Peer {
 }
 
 export class Room {
-  constructor(private readonly ipfs: IpfsInfo) {}
+  constructor(
+    private readonly ipfs: IpfsInfo,
+    /** 入室するユーザー用の STUN / TURN 設定を作る (TURN 未設定なら undefined)。 */
+    private readonly iceServersFor: (userId: string) => IceServer[] | undefined = () => undefined,
+  ) {}
 
   private peers = new Map<string, Peer>();
   private objects = new Map<string, WorldObject>();
@@ -50,6 +55,7 @@ export class Room {
       peers: others,
       objects: [...this.objects.values()],
       ipfs: this.ipfs,
+      iceServers: this.iceServersFor(id),
       tickRate: TICK_RATE,
     });
     this.broadcast({ type: "peer_joined", peer: state }, id);

@@ -10,7 +10,7 @@ import { yamux } from "@libp2p/yamux";
 import { multiaddr } from "@multiformats/multiaddr";
 import { createHeliaLight } from "helia";
 import { CID } from "multiformats/cid";
-import { MAX_IMAGE_BYTES, type IpfsInfo } from "@proto/protocol";
+import { MAX_IMAGE_BYTES, type IceServer, type IpfsInfo } from "@proto/protocol";
 
 const CONNECT_TIMEOUT_MS = 10_000;
 const FETCH_TIMEOUT_MS = 30_000;
@@ -33,13 +33,31 @@ export type DirectPeersListener = (count: number) => void;
 
 let serverAddr = "";
 
-async function createNode(info: IpfsInfo, onDirectPeers: DirectPeersListener) {
+/**
+ * WebRTC の設定。サーバーが TURN を配っていればそれを使う (NAT 越えできないときは TURN で中継される)。
+ * 配られていなければ libp2p の既定 (公開 STUN のみ) のまま。
+ * `?ice=relay` を付けて開くと中継 (TURN) だけを使う。TURN の動作確認・診断用。
+ */
+function webRtcInit(iceServers: IceServer[] | undefined) {
+  const relayOnly = new URLSearchParams(location.search).get("ice") === "relay";
+  if (!iceServers?.length && !relayOnly) return undefined;
+  const rtcConfiguration: RTCConfiguration = {};
+  if (iceServers?.length) rtcConfiguration.iceServers = iceServers;
+  if (relayOnly) rtcConfiguration.iceTransportPolicy = "relay";
+  return { rtcConfiguration };
+}
+
+async function createNode(
+  info: IpfsInfo,
+  iceServers: IceServer[] | undefined,
+  onDirectPeers: DirectPeersListener,
+) {
   serverAddr = serverMultiaddr(info);
   const helia = await withBitswap(
     withLibp2pLight(createHeliaLight(), {
       // 中継経由 / WebRTC で他のブラウザから到達できるようにする
       addresses: { listen: ["/p2p-circuit", "/webrtc"] },
-      transports: [webSockets(), webRTC(), circuitRelayTransport()],
+      transports: [webSockets(), webRTC(webRtcInit(iceServers)), circuitRelayTransport()],
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       // ローカル / 私設ネットワークのアドレスへの接続を許可する (プロトタイプ)
@@ -84,13 +102,17 @@ function assertSecureContext(): void {
 }
 
 /** ブラウザ内の IPFS ノードを起動してサーバーに接続する。入室 (welcome) 後に 1 回呼ぶ。 */
-export function startIpfs(info: IpfsInfo, onDirectPeers: DirectPeersListener): Promise<void> {
+export function startIpfs(
+  info: IpfsInfo,
+  iceServers: IceServer[] | undefined,
+  onDirectPeers: DirectPeersListener,
+): Promise<void> {
   try {
     assertSecureContext();
   } catch (err) {
     return Promise.reject(err);
   }
-  nodePromise ??= createNode(info, onDirectPeers);
+  nodePromise ??= createNode(info, iceServers, onDirectPeers);
   nodePromise.catch(() => {
     nodePromise = null; // 失敗したら次回やり直せるようにする
   });

@@ -63,7 +63,7 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 
 | type | フィールド | 説明 |
 |---|---|---|
-| `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: ImageObject[]`, `ipfs: { peerId, wsPort }`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト、サーバーの IPFS ノードの接続情報 |
+| `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: ImageObject[]`, `ipfs: { peerId, wsPort }`, `iceServers?: IceServer[]`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト、サーバーの IPFS ノードの接続情報、WebRTC 用の STUN / TURN 設定 (TURN 未設定なら省略) |
 | `object_added` | `object: ImageObject` | オブジェクトが置かれた (置いた本人を含む全員へ) |
 | `peer_ipfs` | `id: string`, `ipfsPeerId: string` | 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ WebRTC で接続しに行く |
 | `peer_joined` | `peer: PeerState` | 他ユーザーの入室 |
@@ -125,6 +125,7 @@ sequenceDiagram
   `<サーバーのアドレス>/p2p-circuit/webrtc/p2p/<相手>` へ接続する (既存の参加者 → 新しい参加者の一方向)。
   接続が確立すると bitswap が直接のピアからも取得するようになる。HUD の `P2P n` は直接接続の数。
   失敗しても (NAT 越えできないなど) サーバー経由の取得は続く。
+- **STUN / TURN**: サーバーに `TURN_HOST` / `TURN_SECRET` が設定されていると、`welcome.iceServers` に STUN (自前の coturn と公開 STUN) と、ユーザーごとの時間制限つき TURN 認証情報 (`username = <期限>:<ユーザー ID>`、`credential = base64(HMAC-SHA1(共有秘密, username))`) を入れて配る。クライアントはこれを libp2p の WebRTC (`rtcConfiguration.iceServers`) に渡す。未設定のときは libp2p の既定 (公開 STUN のみ)。ページに `?ice=relay` を付けると中継 (TURN) だけを使う (診断用)。
 
 ### 検証ルール (server)
 

@@ -132,7 +132,7 @@ export function connect(name: string): void {
         for (const o of msg.objects) objects[o.id] = o;
         useNet.setState({ status: "connected", self: msg.self, peers, objects, ipfs: "starting" });
         // 画像の取得・共有に使うブラウザ内 IPFS ノードを起動してサーバーに接続する
-        startIpfs(msg.ipfs, (directPeers) => useNet.setState({ directPeers })).then(
+        startIpfs(msg.ipfs, msg.iceServers, (directPeers) => useNet.setState({ directPeers })).then(
           () => {
             useNet.setState({ ipfs: "ready" });
             // 他のブラウザから直接接続してもらえる状態になったら、自分のピア ID を知らせる

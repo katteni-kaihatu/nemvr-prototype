@@ -7,6 +7,17 @@
 
 ### Added
 
+- TURN サーバー (coturn) による WebRTC の中継。別マシンのブラウザ同士が NAT などで直接つながれず `P2P 0` のままになる問題への対応。
+  - VPS: `deploy/setup-vps.sh` が coturn を導入・設定する。認証は共有秘密による時間制限つき認証情報 (TURN REST API)。
+    共有秘密は初回に生成して `/etc/proto/server.env` に置き (再実行しても変えない)、coturn とアプリで共有する (root と各サービスだけが読める)。
+    内部ネットワーク宛ての中継を拒否 (`denied-peer-ip`)、割り当て数・帯域・中継ポート範囲 (UDP 49160-49200) を制限。
+    ufw で 3478 (TCP / UDP) と中継ポート範囲を許可する。
+  - サーバー: 環境変数 `TURN_HOST` / `TURN_SECRET` (`TURN_PORT`, `TURN_TTL_SECONDS`) を設定すると、入室 (`welcome`) のたびに
+    `iceServers` (STUN と、ユーザーごとの有効期限つき TURN 認証情報) を配る。共有秘密はクライアントに渡らない。未設定なら従来どおり (公開 STUN のみ)。
+  - クライアント: 受け取った `iceServers` を libp2p の WebRTC に渡す。ページに `?ice=relay` を付けると中継 (TURN) だけを使う (診断用)。
+  - プロトコル: `welcome` に `iceServers?` を追加。
+  - テスト: 認証情報の形式・有効期限・ユーザーごとの違い・秘密が漏れないことの単体テストを追加。
+
 - VPS へのデプロイ構成 (`deploy/`, `docs/deploy.md`)。Caddy が TLS を終端し、`https://HOST/` (静的ファイル)、`wss://HOST/ws` (ワールド同期)、
   `wss://HOST:8443` (IPFS / libp2p) を公開する。アプリ本体は非 root の systemd サービスとして 127.0.0.1 でのみ待ち受ける。
   - `deploy/setup-vps.sh`: Node.js (公式 tarball を SHA256 検証) / pnpm / Caddy / ufw の導入、ユーザー・サービス・Caddyfile・ファイアウォールの設定 (冪等)。
@@ -78,6 +89,10 @@
 
 ### Notes
 
+- TURN をインターネット越しで確認済み: 3478 (TCP / UDP) と中継ポート範囲 (UDP 49160-49200) に外から通信が届く (ufw のカウンターで確認)。
+  公開 URL に対して、同じマシンの 2 つのヘッドレス Firefox を **既定設定のまま** (ローカルのアドレスを mDNS で隠すため、以前は `ICE failed` で `P2P 0` だった)
+  通常どおり開く場合も、`?ice=relay` (中継のみ) の場合も `P2P 1` になり、画像の配置と、退室後に入室した人への表示が動く。
+  別々のマシン・ネットワークのブラウザ同士での確認は未実施 (環境によっては TURN でも通らないことがある。TLS (5349 / 443) には未対応で、3478 しか通らない網では使えない)。
 - VPS (`https://172-104-89-28.ip.linodeusercontent.com/`) へのインターネット公開を確認済み: Let's Encrypt の証明書が自動取得され (HTTP/2、http → https へ 308)、
   `wss://HOST/ws` と `wss://HOST:8443` (libp2p) が通る。公開 URL に対してヘッドレス Firefox で、入室・IPFS 接続・画像の配置・退室後に入室した人への表示を確認した
   (WebRTC が通る場合は P2P 1、通らない場合はサーバー経由で画像が表示される)。

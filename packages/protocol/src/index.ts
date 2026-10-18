@@ -52,6 +52,16 @@ export interface IpfsInfo {
   wsPort: number; // libp2p の WebSocket 待受ポート
 }
 
+/**
+ * WebRTC (ブラウザ同士の直接接続) に使う STUN / TURN サーバー。RTCIceServer と同じ形。
+ * TURN の認証情報は時間制限つきで、サーバーが入室 (welcome) ごとに発行する。
+ */
+export interface IceServer {
+  urls: string[];
+  username?: string;
+  credential?: string;
+}
+
 /** place_image の本体部分 (id はサーバーが採番する)。サーバーは cid の中身を検証してから置く。 */
 export type PlaceImage = Omit<ImageObject, "id" | "kind">;
 
@@ -71,6 +81,8 @@ export type ServerMessage =
       peers: PeerState[];
       objects: WorldObject[];
       ipfs: IpfsInfo;
+      /** STUN / TURN の設定。サーバーに TURN が設定されていないときは省略される (クライアントは既定の公開 STUN を使う)。 */
+      iceServers?: IceServer[];
       tickRate: number;
     }
   | { type: "object_added"; object: WorldObject }
