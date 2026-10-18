@@ -9,6 +9,7 @@ import {
   type PeerState,
   type PlaceImage,
   type Pose,
+  type Vec3,
   type ServerMessage,
   type WorldObject,
 } from "@proto/protocol";
@@ -18,6 +19,10 @@ const COLORS = [
   "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
   "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
 ];
+
+/** 複製したときの、元からのずらし量 (m)。横にずらし、同一平面での重なり (描画のちらつき) を避けるため法線方向にも少しずらす。 */
+const DUPLICATE_SIDE_OFFSET = 0.6;
+const DUPLICATE_NORMAL_OFFSET = 0.05;
 
 const INITIAL_POSE: Pose = { position: [0, 0, 0], head: [0, 0, 0, 1] };
 
@@ -77,6 +82,87 @@ export class Room {
     return true;
   }
 
+  /**
+   * オブジェクトをつかむ。つかんでいる間は、つかんだ本人だけが動かせる (排他)。
+   * 他の人がつかんでいる場合は、本人にだけエラーと現在の状態を返す。
+   * 1 人が同時につかめるのは 1 個まで (別のものをつかむと、前のものは離す)。
+   */
+  grabObject(peerId: string, id: string): void {
+    const peer = this.peers.get(peerId);
+    const object = this.objects.get(id);
+    if (!peer || !object) return;
+    if (object.heldBy && object.heldBy !== peerId) {
+      this.send(peer.socket, { type: "error", message: "他の人がつかんでいます" });
+      this.send(peer.socket, { type: "object_updated", object }); // 楽観的に始めた本人の側をやり直させる
+      return;
+    }
+    this.releaseHeldBy(peerId, id);
+    object.heldBy = peerId;
+    this.broadcast({ type: "object_updated", object });
+  }
+
+  /** つかんでいる本人からの移動だけを受け付け、本人以外に配る (本人は手元で動かしている)。 */
+  moveObject(peerId: string, id: string, position: Vec3, yaw: number): void {
+    const object = this.objects.get(id);
+    if (!object || object.heldBy !== peerId) return;
+    object.position = position;
+    object.yaw = yaw;
+    this.broadcast({ type: "object_updated", object }, peerId);
+  }
+
+  releaseObject(peerId: string, id: string): void {
+    const object = this.objects.get(id);
+    if (!object || object.heldBy !== peerId) return;
+    delete object.heldBy;
+    this.broadcast({ type: "object_updated", object });
+  }
+
+  /** 削除する。他の人がつかんでいるものは削除できない。 */
+  deleteObject(peerId: string, id: string): void {
+    const object = this.objects.get(id);
+    if (!object) return;
+    if (object.heldBy && object.heldBy !== peerId) {
+      this.sendError(peerId, "他の人がつかんでいます");
+      return;
+    }
+    this.objects.delete(id);
+    this.broadcast({ type: "object_removed", id });
+  }
+
+  /** 複製する。元の隣 (横に少しずらした位置) に、同じ画像・向き・大きさで置く。 */
+  duplicateObject(peerId: string, id: string): void {
+    const object = this.objects.get(id);
+    if (!object) return;
+    if (this.isFull) {
+      this.sendError(peerId, "これ以上オブジェクトを置けません");
+      return;
+    }
+    const { yaw } = object;
+    const [x, y, z] = object.position;
+    const copy: WorldObject = {
+      ...object,
+      id: randomUUID(),
+      // 平面のローカル +X (右) と法線 (+Z) を yaw 回したもの
+      position: [
+        x + Math.cos(yaw) * DUPLICATE_SIDE_OFFSET + Math.sin(yaw) * DUPLICATE_NORMAL_OFFSET,
+        y,
+        z - Math.sin(yaw) * DUPLICATE_SIDE_OFFSET + Math.cos(yaw) * DUPLICATE_NORMAL_OFFSET,
+      ],
+    };
+    delete copy.heldBy;
+    this.objects.set(copy.id, copy);
+    this.broadcast({ type: "object_added", object: copy });
+  }
+
+  /** 指定のピアがつかんでいるオブジェクトを離す (keepId は除く)。 */
+  private releaseHeldBy(peerId: string, keepId?: string): void {
+    for (const object of this.objects.values()) {
+      if (object.heldBy !== peerId || object.id === keepId) continue;
+      delete object.heldBy;
+      this.broadcast({ type: "object_updated", object });
+    }
+  }
+
   /** ピアの libp2p ID を本人以外に知らせる (受け取った側が直接接続しに行く)。 */
   announceIpfs(id: string, ipfsPeerId: string): void {
     if (this.peers.has(id)) this.broadcast({ type: "peer_ipfs", id, ipfsPeerId }, id);
@@ -91,6 +177,7 @@ export class Room {
   leave(id: string): void {
     if (!this.peers.delete(id)) return;
     this.broadcast({ type: "peer_left", id });
+    this.releaseHeldBy(id); // つかんだまま切断しても、オブジェクトが固まらないようにする
     if (this.peers.size === 0) this.stopTimer();
   }
 

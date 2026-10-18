@@ -61,6 +61,13 @@ function isSize(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v >= MIN_OBJECT_SIZE && v <= MAX_OBJECT_SIZE;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** オブジェクト ID (サーバーが randomUUID で採番したもの)。 */
+function parseObjectId(v: unknown): string | null {
+  return typeof v === "string" && UUID_RE.test(v) ? v : null;
+}
+
 export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
   const { position, yaw, width, height } = v;
   const cid = normalizeCid(v.cid);
@@ -94,6 +101,20 @@ export function parseClientMessage(text: string): ClientMessage | null {
     case "pose": {
       const pose = parsePose(msg.pose);
       return pose ? { type: "pose", pose } : null;
+    }
+    case "grab_object":
+    case "release_object":
+    case "delete_object":
+    case "duplicate_object": {
+      const id = parseObjectId(msg.id);
+      return id ? { type: msg.type, id } : null;
+    }
+    case "move_object": {
+      const id = parseObjectId(msg.id);
+      const { position, yaw } = msg;
+      if (!id || !isFiniteArray(position, 3) || position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
+      if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
+      return { type: "move_object", id, position: position as Vec3, yaw };
     }
     case "ipfs_peer": {
       // libp2p のピア ID (base58 / base32 の英数字)

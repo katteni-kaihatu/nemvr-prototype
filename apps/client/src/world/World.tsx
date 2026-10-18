@@ -1,10 +1,13 @@
 import { Canvas } from "@react-three/fiber";
 import { Grid } from "@react-three/drei";
 import { useNet } from "../net/connection";
+import { CursorDot } from "./CursorDot";
 import { DropTarget } from "./DropTarget";
 import { ImagePlane } from "./ImagePlane";
 import { LocalPlayer } from "./LocalPlayer";
+import { ObjectInteraction } from "./ObjectInteraction";
 import { RemoteAvatar } from "./RemoteAvatar";
+import { RingMenu } from "./RingMenu";
 
 // 位置関係が分かるように置く静的オブジェクト (同期なし)
 const BOXES: { pos: [number, number, number]; size: number; color: string }[] = [
@@ -53,10 +56,13 @@ export function World() {
 
         <LocalPlayer />
         <DropTarget />
+        <ObjectInteraction />
         {Object.values(peers).map((p) => (
           <RemoteAvatar key={p.id} peer={p} />
         ))}
       </Canvas>
+      <CursorDot />
+      <RingMenu />
       <HUD count={Object.keys(peers).length + 1} />
     </>
   );
@@ -89,6 +95,7 @@ function HUD({ count }: { count: number }) {
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>画像ファイルをドロップして配置 (視点操作中は Esc で解除してから)</div>
+      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ / 中ボタンでメニュー (削除・複製)</div>
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
     </div>
   );

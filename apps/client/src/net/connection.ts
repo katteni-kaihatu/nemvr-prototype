@@ -7,6 +7,7 @@ import {
   type ServerMessage,
   type WorldObject,
 } from "@proto/protocol";
+import { resetInteraction, useInteraction } from "../world/interaction";
 import { PoseBuffer } from "./interpolation";
 import {
   describeError,
@@ -83,7 +84,27 @@ export function sendPlaceImage(place: PlaceImage): void {
   send({ type: "place_image", ...place });
 }
 
+export const sendGrabObject = (id: string): void => send({ type: "grab_object", id });
+export const sendReleaseObject = (id: string): void => send({ type: "release_object", id });
+export const sendDeleteObject = (id: string): void => send({ type: "delete_object", id });
+export const sendDuplicateObject = (id: string): void => send({ type: "duplicate_object", id });
+export function sendMoveObject(id: string, position: [number, number, number], yaw: number): void {
+  send({ type: "move_object", id, position, yaw });
+}
+
+/**
+ * 自分が動かしたオブジェクトの位置を、手元の状態にも反映する。
+ * 移動中の自分への配信 (echo) は無いので、離したときに古い位置へ戻って見えないようにする。
+ */
+export function applyLocalObjectPose(id: string, position: [number, number, number], yaw: number): void {
+  useNet.setState((s) => {
+    const object = s.objects[id];
+    return object ? { objects: { ...s.objects, [id]: { ...object, position, yaw } } } : s;
+  });
+}
+
 function reset(): void {
+  resetInteraction();
   void stopIpfs();
   peerBuffers.clear();
   serverTimeOffset = null;
@@ -152,6 +173,30 @@ export function connect(name: string): void {
             );
           },
         );
+        break;
+      }
+      case "object_updated": {
+        const { object } = msg;
+        useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
+        // 自分がつかもうとしたが、先に他の人がつかんでいた (サーバーに拒否された)
+        const interaction = useInteraction.getState();
+        const selfId = useNet.getState().self?.id;
+        if (interaction.grabbedId === object.id && object.heldBy && object.heldBy !== selfId) {
+          useInteraction.setState({ grabbedId: null });
+        }
+        break;
+      }
+      case "object_removed": {
+        useNet.setState((s) => {
+          const { [msg.id]: _removed, ...rest } = s.objects;
+          return { objects: rest };
+        });
+        const interaction = useInteraction.getState();
+        useInteraction.setState({
+          hoverId: interaction.hoverId === msg.id ? null : interaction.hoverId,
+          grabbedId: interaction.grabbedId === msg.id ? null : interaction.grabbedId,
+          menuTargetId: interaction.menuTargetId === msg.id ? null : interaction.menuTargetId,
+        });
         break;
       }
       case "peer_ipfs": {

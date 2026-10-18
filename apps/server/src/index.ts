@@ -68,6 +68,16 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "ipfs_peer") {
       if (!peerId) return;
       room.announceIpfs(peerId, msg.peerId);
+    } else if (msg.type === "grab_object") {
+      if (peerId) room.grabObject(peerId, msg.id);
+    } else if (msg.type === "move_object") {
+      if (peerId) room.moveObject(peerId, msg.id, msg.position, msg.yaw);
+    } else if (msg.type === "release_object") {
+      if (peerId) room.releaseObject(peerId, msg.id);
+    } else if (msg.type === "delete_object") {
+      if (peerId) room.deleteObject(peerId, msg.id);
+    } else if (msg.type === "duplicate_object") {
+      if (peerId) room.duplicateObject(peerId, msg.id);
     } else if (msg.type === "place_image") {
       if (!peerId) return;
       const { type: _type, ...place } = msg;

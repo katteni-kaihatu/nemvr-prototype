@@ -43,6 +43,7 @@ interface ImageObject {
   yaw: number;
   width: number;   // 0.1〜20
   height: number;  // 0.1〜20
+  heldBy?: string; // 今つかんでいる人 (PeerInfo.id)。つかまれていなければ無い
 }
 ```
 
@@ -58,6 +59,11 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 | `pose` | `pose: Pose` | 自分の姿勢。20Hz で送信 |
 | `place_image` | `cid`, `position`, `yaw`, `width`, `height` | IPFS に追加済みの画像を置く (`ImageObject` から `id` / `kind` を除いたもの)。サーバーが中身を検証してから配置する |
 | `ipfs_peer` | `peerId: string` | 自分の libp2p ピア ID を知らせる。他のブラウザから WebRTC で接続してもらえる状態になってから送る |
+| `grab_object` | `id` | オブジェクトをつかむ。他の人がつかんでいると拒否される |
+| `move_object` | `id`, `position`, `yaw` | つかんでいる間の移動 (つかんでいる本人だけが送れる)。20Hz |
+| `release_object` | `id` | 離す |
+| `delete_object` | `id` | 削除する。他の人がつかんでいるものは削除できない |
+| `duplicate_object` | `id` | 複製する (元の隣に置かれる) |
 
 ### Server → Client
 
@@ -65,6 +71,8 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 |---|---|---|
 | `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: ImageObject[]`, `ipfs: { peerId, wsPort }`, `iceServers?: IceServer[]`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト、サーバーの IPFS ノードの接続情報、WebRTC 用の STUN / TURN 設定 (TURN 未設定なら省略) |
 | `object_added` | `object: ImageObject` | オブジェクトが置かれた (置いた本人を含む全員へ) |
+| `object_updated` | `object: ImageObject` | 位置・向き・つかまれている状態が変わった (オブジェクト全体を送る) |
+| `object_removed` | `id: string` | オブジェクトが削除された |
 | `peer_ipfs` | `id: string`, `ipfsPeerId: string` | 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ WebRTC で接続しに行く |
 | `peer_joined` | `peer: PeerState` | 他ユーザーの入室 |
 | `peer_left` | `id: string` | 他ユーザーの退室 |
@@ -135,6 +143,7 @@ sequenceDiagram
 - 位置は絶対値 1000 を超える場合破棄する。クォータニオンは受信時に正規化する。
 - 1 メッセージの最大サイズは 4KB。超えたら切断する。
 - `ipfs_peer`: `peerId` は英数字 10〜128 文字。
+- `grab_object` / `release_object` / `delete_object` / `duplicate_object` / `move_object`: `id` は UUID 形式。`move_object` の `position` は有限かつ絶対値 1000 以下、`yaw` は有限。
 - `place_image`: `cid` は dag-pb / raw・sha2-256 の CID (128 文字以内)、`position` は有限かつ絶対値 1000 以下、`yaw` は有限、`width` / `height` は 0.1〜20。
 
 ## 4. 同期方式
@@ -191,7 +200,13 @@ world/
   RemoteAvatar.tsx  他ユーザー 1 人分の描画
   Avatar.tsx        アバター見た目 + 名前タグ (canvas テクスチャの Sprite)
   DropTarget.tsx    画像ファイルのドロップ処理 (床への raycast、アップロード、配置)
-  ImagePlane.tsx    置かれた画像 1 枚の描画 (CID から IPFS で取得してテクスチャ化)
+  ImagePlane.tsx    置かれた画像 1 枚の描画 (CID から IPFS で取得してテクスチャ化、位置の補間、輪郭の強調)
+  ObjectInteraction.tsx  画面中央のカーソルでの操作 (狙う、右ボタンでつかむ、中ボタンでメニュー、カーソル表示の制御)
+  CursorDot.tsx     画面中央の白い点
+  RingMenu.tsx      リング状のコンテキストメニュー (削除・複製)
+  carry.ts          つかんだオブジェクトを運ぶ計算 (純粋関数)
+  interaction.ts    操作の状態 (狙っている / つかんでいる / メニュー対象 / カーソル表示) と、つかんでいる物の手元の位置
+  registry.ts       描画中のオブジェクトのメッシュ (当たり判定用)
 ```
 
 ### 状態管理の注意
@@ -237,13 +252,50 @@ world/
 - Pointer Lock 中はマウスが固定されドラッグ操作ができないため、Esc で解除してからドロップする。
 - テクスチャの読み込み中・失敗時は灰色の板を表示する。
 
+### オブジェクトの操作
+
+画面中央を「カーソル」にして、置かれた画像オブジェクトを操作する (`ObjectInteraction`)。
+床の箱は同期されない飾りなので対象外。
+
+**カーソル (白い点)**
+- 画面中央の小さな白い点 (`CursorDot`)。視点・位置が動いている間と、止まってから 3 秒間だけ表示する (入室直後も 3 秒)。
+  つかんでいる間は表示し続け、メニューを開いている間は出さない。
+- 選択はこの点を通るレイ (画面中央から、届く距離 `GRAB_REACH` = 8m) で行う。最初に当たったオブジェクトが「狙っている」対象で、白い輪郭で強調する。
+  他の人がつかんでいるものは琥珀色の輪郭にする。
+
+**つかむ (右ボタン)**
+1. 右ボタンを押すと、狙っているオブジェクトをつかむ。他の人がつかんでいれば何もせず HUD に通知する。
+2. `grab_object` を送り、応答を待たずに手元でつかみ始める (楽観的)。他の人に先を越されていた場合は、サーバーが本人にだけエラーと現在の状態 (`object_updated`) を返し、手元のつかみを取り消す。
+3. つかんでいる間、オブジェクトは自分の動きについてくる。つかんだ瞬間の「カメラの水平な向きから見た相対位置・向き」を覚えておき、毎フレーム現在のカメラ位置と yaw から求め直す (`carry.ts`)。
+   視点の上下には追従しない (鉛直に立ったまま、高さは変わらない)。範囲はワールド内に丸める。
+4. 手元の位置を 20Hz で `move_object` として送る。サーバーはつかんでいる本人からの移動だけを受け付け、**本人以外**に `object_updated` を配る。
+5. 右ボタンを離す (ウィンドウが非アクティブになる場合も) と、最後の位置を `move_object` で送ってから `release_object` を送る。手元の状態にも最後の位置を反映して、古い位置に戻って見えないようにする。
+6. つかんだまま切断すると、サーバーが自動で離す。
+
+**排他制御 (サーバー)**
+- オブジェクトごとに「つかんでいる人」(`heldBy`) を持つ。つかんでいる間は本人だけが動かせ、他の人はつかめない・削除できない。
+- 1 人が同時につかめるのは 1 個まで。別のものをつかむと、前のものは自動で離される。
+- 複製は、つかまれているものにもできる。複製には `heldBy` を引き継がない。
+
+**他の人の画面**
+- 受け取った位置・向きへ、毎フレーム滑らかに近づける (指数的に追従。20Hz の更新でも滑らかに見える)。
+  自分でつかんでいるものは補間せず、手元の位置をそのまま使う (遅れないように)。
+
+**リングメニュー (中ボタン)**
+- 中ボタンで、狙っているオブジェクト (つかんでいればそれ) のメニューを画面中央に開く (`RingMenu`)。何も狙っていなければ HUD に通知する。
+- ボタンは円環に等間隔で並ぶ (先頭が真上)。いまは「削除」「複製」。`ITEMS` に足せば増やせる。
+- マウスで選べるよう、開くときに Pointer Lock を解除し、選択したら (クリック = ユーザー操作の中で) 取り直す。
+  外側のクリック・中ボタン・Esc で何もせず閉じる。開いている間は視点・移動を止める。
+- 削除: `delete_object`。複製: `duplicate_object`。サーバーが、元の右に 0.6m・手前に 5cm ずらした位置 (向き・大きさ・画像は同じ) に新しいオブジェクトを置く
+  (同一平面での描画のちらつきを避けるため、手前に少しずらす)。上限 (100 個) に達していれば拒否する。
+
 ## 6. サーバー設計
 
 ### モジュール構成 (apps/server/src)
 
 ```
 index.ts     起動 (WebSocketServer、画像の検証と配置の受け付け)
-room.ts      Room クラス: ピア管理、オブジェクト管理、snapshot ループ
+room.ts      Room クラス: ピア管理、オブジェクト管理 (配置・つかむ・移動・削除・複製)、snapshot ループ
 ipfs.ts      Helia ノード (libp2p ws / circuit relay)、CID の取得・検証・pin
 images.ts    マジックナンバーによる画像形式の判定
 validate.ts  受信メッセージの検証・正規化
@@ -278,7 +330,7 @@ validate.ts  受信メッセージの検証・正規化
 | 複数ルーム | `join` に `roomId` を追加し、server に `Room` を複数持たせる |
 | アバター差し替え | `PeerInfo` に `avatarUrl` を追加。`Avatar` コンポーネントを差し替える |
 | ボイスチャット | 別途 SFU (LiveKit 等) を用意。ピア ID をトークン発行時の identity に使う |
-| 画像以外のオブジェクト・移動・削除 | `WorldObject` に `kind` を追加し、`object_moved` / `object_removed` を足す。オブジェクト状態は既にサーバーが保持している |
+| 画像以外のオブジェクト・回転 / 拡大縮小・元に戻す | `WorldObject` に `kind` を追加する。`object_updated` はオブジェクト全体を送るので、プロパティを足せばそのまま同期できる。操作・排他制御はサーバーが既に持っている |
 | バイナリプロトコル | `type` 毎に固定レイアウトの `ArrayBuffer` へ移行 |
 
 ## 9. テスト・検証方針

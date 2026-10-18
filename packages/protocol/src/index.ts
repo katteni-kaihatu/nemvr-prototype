@@ -10,6 +10,7 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりの上限
 export const MAX_OBJECTS = 100; // ワールドに置けるオブジェクトの最大数
 export const MIN_OBJECT_SIZE = 0.1; // m
 export const MAX_OBJECT_SIZE = 20; // m
+export const GRAB_REACH = 8; // m。画面中央のレイがこの距離までのオブジェクトをつかめる
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
@@ -42,6 +43,8 @@ export interface ImageObject {
   yaw: number;
   width: number;
   height: number;
+  /** 今このオブジェクトをつかんでいる人 (PeerInfo.id)。つかまれていなければ無い。 */
+  heldBy?: string;
 }
 
 export type WorldObject = ImageObject;
@@ -71,7 +74,13 @@ export type ClientMessage =
   | { type: "pose"; pose: Pose }
   | ({ type: "place_image" } & PlaceImage)
   // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
-  | { type: "ipfs_peer"; peerId: string };
+  | { type: "ipfs_peer"; peerId: string }
+  // オブジェクトの操作。つかんでいる間は、つかんだ本人だけが move できる (排他)
+  | { type: "grab_object"; id: string }
+  | { type: "move_object"; id: string; position: Vec3; yaw: number }
+  | { type: "release_object"; id: string }
+  | { type: "delete_object"; id: string }
+  | { type: "duplicate_object"; id: string };
 
 // Server -> Client
 export type ServerMessage =
@@ -86,6 +95,9 @@ export type ServerMessage =
       tickRate: number;
     }
   | { type: "object_added"; object: WorldObject }
+  // 位置・向き・つかまれている状態が変わった (全体の状態を送る)
+  | { type: "object_updated"; object: WorldObject }
+  | { type: "object_removed"; id: string }
   // 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ接続しに行く
   | { type: "peer_ipfs"; id: string; ipfsPeerId: string }
   | { type: "peer_joined"; peer: PeerState }

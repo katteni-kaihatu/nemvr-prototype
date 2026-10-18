@@ -3,6 +3,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { TICK_RATE } from "@proto/protocol";
 import { sendPose } from "../net/connection";
 import { EYE_HEIGHT } from "./Avatar";
+import { useInteraction } from "./interaction";
 
 const SPEED = 3; // m/s
 const MOUSE_SENSITIVITY = 0.0022;
@@ -22,6 +23,11 @@ export function LocalPlayer() {
     pitch: 0,
   });
   const keys = useRef(new Set<string>());
+
+  // 開発時のみ、E2E テストから位置・向きを直接設定できるようにする
+  useEffect(() => {
+    if (import.meta.env.DEV) (window as unknown as { __player: unknown }).__player = player.current;
+  }, []);
 
   useEffect(() => {
     camera.rotation.order = "YXZ";
@@ -71,7 +77,8 @@ export function LocalPlayer() {
     const k = keys.current;
     const forward = (k.has("KeyW") || k.has("ArrowUp") ? 1 : 0) - (k.has("KeyS") || k.has("ArrowDown") ? 1 : 0);
     const right = (k.has("KeyD") || k.has("ArrowRight") ? 1 : 0) - (k.has("KeyA") || k.has("ArrowLeft") ? 1 : 0);
-    if (forward !== 0 || right !== 0) {
+    const menuOpen = useInteraction.getState().menuTargetId !== null; // メニューを選んでいる間は動かない
+    if (!menuOpen && (forward !== 0 || right !== 0)) {
       const len = Math.hypot(forward, right);
       const step = (SPEED * delta) / len;
       const sin = Math.sin(p.yaw);
