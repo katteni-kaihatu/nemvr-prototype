@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { ServerMessage, WorldObject } from "@proto/protocol";
+import { FILE_ICON_WIDTH, type ServerMessage, type WorldObject } from "@proto/protocol";
 import { Room } from "./room.js";
 
 /** Room が使う最小限の WebSocket。送られたメッセージを溜める。 */
@@ -165,8 +165,7 @@ describe("duplicate", () => {
       const copy = s.of("object_added")[0]!.object;
       expect(copy.id).not.toBe(objectId);
       expect(copy.cid).toBe(CID);
-      expect(copy.width).toBe(2);
-      expect(copy.height).toBe(1);
+      expect(copy).toMatchObject({ kind: "image", width: 2, height: 1 });
       expect(copy.yaw).toBe(0);
       // yaw 0: 右 (+X) に 0.6、法線 (+Z) に 0.05
       expect(copy.position[0]).toBeCloseTo(1.6);
@@ -211,5 +210,72 @@ describe("duplicate", () => {
     room.duplicateObject(aId, objectId);
     expect(a.of("error")[0]!.message).toMatch(/これ以上/);
     expect(a.of("object_added")).toEqual([]);
+  });
+});
+
+describe("files", () => {
+  const file = { cid: CID, name: "report.pdf", position: [1, 0.4, 2] as [number, number, number], yaw: 0, size: 1234, category: "file" as const };
+
+  it("adds a file object and broadcasts it (size and category as decided by the server)", () => {
+    const { room, a, b } = setup();
+    expect(room.addFile(file)).toBe(true);
+    for (const s of [a, b]) {
+      const o = s.of("object_added")[0]!.object;
+      expect(o).toMatchObject({ kind: "file", cid: CID, name: "report.pdf", size: 1234, category: "file" });
+      expect(o.id).toBeTruthy();
+    }
+  });
+
+  it("includes files in welcome for later joiners, alongside images", () => {
+    const { room } = setup();
+    room.addFile(file);
+    const c = new FakeSocket();
+    room.join(c as unknown as WebSocket, "carol");
+    const kinds = c.of("welcome")[0]!.objects.map((o) => o.kind).sort();
+    expect(kinds).toEqual(["file", "image"]);
+  });
+
+  it("refuses to add a file when the world is full", () => {
+    const { room } = setup();
+    while (!room.isFull) room.addFile(file);
+    expect(room.addFile(file)).toBe(false);
+  });
+
+  it("returns the removed object on delete (so the server can release its content)", () => {
+    const { room, aId } = setup();
+    room.addFile(file);
+    const added = (room as unknown as { objects: Map<string, WorldObject> }).objects;
+    const fileObject = [...added.values()].find((o) => o.kind === "file")!;
+    expect(room.deleteObject(aId, fileObject.id)?.cid).toBe(CID);
+    expect(room.deleteObject(aId, fileObject.id)).toBeNull(); // 2 回目は存在しない
+  });
+
+  it("returns null when deleting something another peer holds", () => {
+    const { room, b, aId, bId, objectId } = setup();
+    room.grabObject(aId, objectId);
+    b.clear();
+    expect(room.deleteObject(bId, objectId)).toBeNull();
+    expect(b.of("error")[0]!.message).toMatch(/つかんでいます/);
+  });
+
+  it("duplicates a file next to the original with no overlap, keeping name / size / category", () => {
+    const { room, a, aId } = setup();
+    room.addFile({ ...file, position: [0, 0.4, 0] });
+    const id = a.of("object_added").at(-1)!.object.id;
+    a.clear();
+
+    const copy = room.duplicateObject(aId, id)!;
+    expect(copy).toMatchObject({ kind: "file", name: "report.pdf", size: 1234, category: "file", cid: CID });
+    expect(copy.id).not.toBe(id);
+    // アイコンの幅より離れて置く (重ならない)
+    expect(copy.position[0]).toBeGreaterThanOrEqual(FILE_ICON_WIDTH);
+    expect(copy.position[1]).toBe(0.4);
+    expect(a.of("object_added")[0]!.object.id).toBe(copy.id);
+  });
+
+  it("returns the copy from duplicateObject, and null when nothing was copied", () => {
+    const { room, aId, objectId } = setup();
+    expect(room.duplicateObject(aId, objectId)?.cid).toBe(CID);
+    expect(room.duplicateObject(aId, "00000000-0000-4000-8000-000000000000")).toBeNull();
   });
 });

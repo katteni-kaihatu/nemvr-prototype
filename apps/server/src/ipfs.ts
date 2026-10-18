@@ -6,24 +6,59 @@ import { yamux } from "@libp2p/yamux";
 import { circuitRelayServer } from "@libp2p/circuit-relay-v2";
 import { identify } from "@libp2p/identify";
 import { webSockets } from "@libp2p/websockets";
+import { FsBlockstore } from "blockstore-fs";
 import { createHeliaLight } from "helia";
+import { mkdir, rm } from "node:fs/promises";
 import { CID } from "multiformats/cid";
-import { MAX_IMAGE_BYTES, type IpfsInfo } from "@proto/protocol";
-import { sniffImageType } from "./images.js";
+import type { IpfsInfo } from "@proto/protocol";
 
-const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
 const SNIFF_BYTES = 16;
 
 /** クライアントにそのまま見せてよいメッセージを持つエラー。 */
-export class ImageRejected extends Error {}
+export class ContentRejected extends Error {}
+
+/** 取得するときの制限。 */
+export interface FetchLimits {
+  /** この大きさを超えたら取得を打ち切る (バイト) */
+  maxBytes: number;
+  /**
+   * データが届かない状態がこの時間 (ミリ秒) 続いたら打ち切る。
+   * 合計時間ではなく、止まっているかどうかで判断する (数 GB の転送は、動いている限り時間がかかってよい)。
+   */
+  idleTimeoutMs: number;
+  /** 合計の時間の上限 (ミリ秒)。少しずつ送って居座られるのを防ぐ。既定は 1 時間。 */
+  maxTotalMs?: number;
+  /** 上限を超えたときに見せるメッセージ */
+  tooLargeMessage: string;
+  /**
+   * ルートのブロックから分かった、宣言されたサイズ (バイト)。ここで ContentRejected を投げると、中身を取得せずに拒否できる
+   * (容量の事前確認に使う)。宣言は偽れるので、取得中の実測の上限 (maxBytes) は別に守る。
+   */
+  onDeclaredSize?: (bytes: number) => void;
+  /** 取得したバイト数の途中経過 (チャンクごとに呼ばれる)。declared は宣言されたサイズ。 */
+  onProgress?: (loadedBytes: number, declaredBytes: number) => void;
+}
+
+export interface Fetched {
+  /** 実際に取得して測ったバイト数 */
+  size: number;
+  /** 先頭の最大 16 バイト (種類の判定用) */
+  head: Uint8Array;
+}
 
 export interface IpfsNode {
   info: IpfsInfo;
   /**
-   * CID の中身を IPFS から取得して検証 (サイズ上限・画像形式) し、通れば pin する。
-   * 通らなければ ImageRejected を投げる。
+   * CID の中身を IPFS から取得して、実測のサイズと先頭バイトを返す (pin はしない)。
+   * ディレクトリ・上限超過・取得できない場合は ContentRejected を投げる。
    */
-  fetchAndPin(cid: string): Promise<void>;
+  fetchVerified(cid: string, limits: FetchLimits): Promise<Fetched>;
+  pin(cid: string): Promise<void>;
+  unpin(cid: string): Promise<void>;
+  /** pin されていないブロックを消してメモリを空ける。 */
+  gc(): Promise<void>;
+  /** このノードがそのブロックを持っているか。 */
+  has(cid: string): Promise<boolean>;
   stop(): Promise<void>;
 }
 
@@ -31,24 +66,38 @@ export interface IpfsNode {
  * サーバー側の Helia ノード。役割は次の 3 つ。
  * - libp2p の WebSocket で待ち受け、ブラウザの Helia ノードの接続先 (bootstrap) になる
  * - circuit relay でブラウザ同士の接続 (WebRTC) の仲介をする
- * - 置かれた画像を取得して pin し、アップロードした人が退室した後も配信し続ける
+ * - 置かれた画像・ファイルを取得して pin し、アップロードした人が退室した後も配信し続ける
  */
 export async function startIpfs(
   wsPort: number,
   {
-    fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
     host = "0.0.0.0",
     publicPort = wsPort,
+    blockstoreDir,
   }: {
-    fetchTimeoutMs?: number;
     /** libp2p の WebSocket を待ち受けるアドレス。リバースプロキシの背後なら 127.0.0.1。 */
     host?: string;
     /** ブラウザから見たポート (リバースプロキシで変わる場合)。クライアントへ `welcome` で伝える。 */
     publicPort?: number;
+    /**
+     * ブロックを置くディレクトリ。指定すると、中身はメモリではなくディスクに置く (大きなファイルのために必須)。
+     * 起動時に空にする: このサーバーは、再起動するとワールドの状態 (どのオブジェクトがどの中身を指すか) を失うので、
+     * 前回のブロックを残しても、誰からも参照されないままディスクを埋めるだけになる。
+     * 指定しなければメモリ上 (テスト用)。
+     */
+    blockstoreDir?: string;
   } = {},
 ): Promise<IpfsNode> {
+  let blockstore: FsBlockstore | undefined;
+  if (blockstoreDir) {
+    await rm(blockstoreDir, { recursive: true, force: true });
+    await mkdir(blockstoreDir, { recursive: true });
+    blockstore = new FsBlockstore(blockstoreDir);
+    await blockstore.open();
+  }
+
   const helia = await withBitswap(
-    withLibp2pLight(createHeliaLight(), {
+    withLibp2pLight(createHeliaLight(blockstore ? { blockstore } : {}), {
       addresses: { listen: [`/ip4/${host}/tcp/${wsPort}/ws`] },
       transports: [webSockets()],
       connectionEncrypters: [noise()],
@@ -71,41 +120,79 @@ export async function startIpfs(
 
   const fs = unixfs(helia);
 
-  async function fetchAndPin(cidString: string): Promise<void> {
+  async function fetchVerified(cidString: string, limits: FetchLimits): Promise<Fetched> {
     const cid = CID.parse(cidString);
-    const limit = new AbortController();
-    const signal = AbortSignal.any([limit.signal, AbortSignal.timeout(fetchTimeoutMs)]);
-
-    let size = 0;
-    const head = new Uint8Array(SNIFF_BYTES);
-    let headLength = 0;
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(limits.maxTotalMs ?? 60 * 60_000)]);
     let tooLarge = false;
-    try {
-      for await (const chunk of fs.cat(cid, { signal })) {
-        if (headLength < SNIFF_BYTES) {
-          const part = chunk.subarray(0, SNIFF_BYTES - headLength);
-          head.set(part, headLength);
-          headLength += part.length;
-        }
-        size += chunk.length;
-        if (size > MAX_IMAGE_BYTES) {
-          tooLarge = true;
-          limit.abort();
-          break;
-        }
-      }
-    } catch (err) {
-      if (tooLarge) throw new ImageRejected("画像が大きすぎます");
-      if (signal.aborted) throw new ImageRejected("画像を IPFS から取得できませんでした (タイムアウト)");
-      console.warn("[ipfs] fetch failed:", err);
-      throw new ImageRejected("画像を IPFS から取得できませんでした");
-    }
-    if (tooLarge) throw new ImageRejected("画像が大きすぎます");
-    if (!sniffImageType(head.subarray(0, headLength))) {
-      throw new ImageRejected("対応していない画像形式です (PNG / JPEG / GIF / WebP)");
-    }
+    let idle = false;
 
-    // 同じ画像が再び置かれることがある (pin 済みの CID を再度 add するとエラーになる)
+    // データが届かない状態が続いたら打ち切る。届くたびに時計を戻す
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const touch = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idle = true;
+        abort.abort();
+      }, limits.idleTimeoutMs);
+    };
+
+    const failed = (err: unknown): ContentRejected => {
+      if (tooLarge) return new ContentRejected(limits.tooLargeMessage);
+      if (idle) return new ContentRejected("IPFS から取得できませんでした (一定時間データが届かず、タイムアウトしました)");
+      if (signal.aborted) return new ContentRejected("IPFS から取得できませんでした (時間がかかりすぎて、タイムアウトしました)");
+      console.warn("[ipfs] fetch failed:", err);
+      return new ContentRejected("IPFS から取得できませんでした");
+    };
+
+    touch();
+    try {
+      // 中身を取得する前に、ルートのブロックだけで種別とサイズを確かめる
+      let declared: number;
+      try {
+        const stat = await fs.stat(cid, { signal });
+        if (stat.type === "directory") throw new ContentRejected("ディレクトリは置けません");
+        if (stat.size > BigInt(limits.maxBytes)) throw new ContentRejected(limits.tooLargeMessage);
+        declared = Number(stat.size);
+        limits.onDeclaredSize?.(declared);
+      } catch (err) {
+        if (err instanceof ContentRejected) throw err;
+        throw failed(err);
+      }
+
+      // サイズは申告 (DAG のメタデータ) ではなく、実際に取得したバイト数で測る
+      let size = 0;
+      const head = new Uint8Array(SNIFF_BYTES);
+      let headLength = 0;
+      try {
+        for await (const chunk of fs.cat(cid, { signal })) {
+          touch();
+          if (headLength < SNIFF_BYTES) {
+            const part = chunk.subarray(0, SNIFF_BYTES - headLength);
+            head.set(part, headLength);
+            headLength += part.length;
+          }
+          size += chunk.length;
+          if (size > limits.maxBytes) {
+            tooLarge = true;
+            abort.abort();
+            break;
+          }
+          limits.onProgress?.(size, declared);
+        }
+      } catch (err) {
+        throw failed(err);
+      }
+      if (tooLarge) throw new ContentRejected(limits.tooLargeMessage);
+      return { size, head: head.slice(0, headLength) };
+    } finally {
+      clearTimeout(idleTimer);
+    }
+  }
+
+  async function pin(cidString: string): Promise<void> {
+    const cid = CID.parse(cidString);
+    // 同じ内容が再び置かれることがある (pin 済みの CID を再度 add するとエラーになる)
     if (await helia.pins.isPinned(cid)) return;
     // pins.add はジェネレーターなので最後まで回す
     for await (const _ of helia.pins.add(cid)) {
@@ -113,9 +200,21 @@ export async function startIpfs(
     }
   }
 
+  async function unpin(cidString: string): Promise<void> {
+    const cid = CID.parse(cidString);
+    if (!(await helia.pins.isPinned(cid))) return;
+    for await (const _ of helia.pins.rm(cid)) {
+      // 何もしない
+    }
+  }
+
   return {
     info: { peerId: helia.libp2p.peerId.toString(), wsPort: publicPort },
-    fetchAndPin,
+    fetchVerified,
+    pin,
+    unpin,
+    gc: () => helia.gc(),
+    has: async (cid) => helia.blockstore.has(CID.parse(cid)),
     stop: async () => {
       await helia.stop();
     },

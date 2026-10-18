@@ -1,15 +1,28 @@
 import { useEffect } from "react";
 import { useThree } from "@react-three/fiber";
 import { Plane, Raycaster, Vector2, Vector3, type Camera } from "three";
-import { MAX_IMAGE_BYTES, MIN_OBJECT_SIZE } from "@proto/protocol";
-import { sendPlaceImage, showNotice, useNet } from "../net/connection";
-import { addImage } from "../net/ipfs";
+import {
+  FILE_FLOAT_HEIGHT,
+  FILE_ICON_HEIGHT,
+  FILE_ICON_WIDTH,
+  MAX_FILE_BYTES,
+  MAX_IMAGE_BYTES,
+  MIN_OBJECT_SIZE,
+  formatBytes,
+} from "@proto/protocol";
+import { expectUpload, sendPlaceFile, sendPlaceImage, showNotice } from "../net/connection";
+import { addContent } from "../net/ipfs";
 
 const IMAGE_LONG_EDGE = 2.5; // 置く画像の長辺 (m)
 const GAP = 0.3; // 複数枚を同時に置くときの間隔 (m)
+const PROGRESS_NOTICE_BYTES = 8 * 1024 * 1024; // これより大きいファイルは、追加の進捗を表示する
+const PROGRESS_INTERVAL_MS = 300;
 const MAX_PLACE_DISTANCE = 20; // これより遠い地点は使わず、正面に置く
 const FALLBACK_DISTANCE = 4;
 const WORLD_HALF_SIZE = 24;
+
+/** サーバーが画像として扱える形式。これ以外 (SVG など) の画像ファイルは、ファイルとして置く。 */
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 const FLOOR = new Plane(new Vector3(0, 1, 0), 0);
 
@@ -44,17 +57,13 @@ function resolveDropPoint(
   return point;
 }
 
-interface Prepared {
-  file: File;
-  width: number;
-  height: number;
-}
+type Prepared =
+  | { kind: "image"; file: File; width: number; height: number }
+  | { kind: "file"; file: File; width: number; height: number };
 
-async function prepare(file: File): Promise<Prepared | null> {
-  if (file.size > MAX_IMAGE_BYTES) {
-    showNotice(`${file.name}: 画像が大きすぎます (上限 ${MAX_IMAGE_BYTES / 1024 / 1024}MB)`);
-    return null;
-  }
+/** 画像として表示できるなら、大きさを決めて返す。できなければ null (ファイルとして置く)。 */
+async function prepareImage(file: File): Promise<Prepared | null> {
+  if (!IMAGE_TYPES.has(file.type) || file.size > MAX_IMAGE_BYTES) return null;
   let w: number;
   let h: number;
   try {
@@ -63,20 +72,29 @@ async function prepare(file: File): Promise<Prepared | null> {
     h = bitmap.height;
     bitmap.close();
   } catch {
-    showNotice(`${file.name}: 画像として読み込めません`);
     return null;
   }
   const scale = IMAGE_LONG_EDGE / Math.max(w, h);
   const width = w * scale;
   const height = h * scale;
-  if (Math.min(width, height) < MIN_OBJECT_SIZE) {
-    showNotice(`${file.name}: 縦横比が極端なため置けません`);
-    return null;
-  }
-  return { file, width, height };
+  if (Math.min(width, height) < MIN_OBJECT_SIZE) return null; // 極端な縦横比
+  return { kind: "image", file, width, height };
 }
 
-/** ドロップされた画像を IPFS に追加し、ドロップ地点に (複数なら横並びで) 置く。 */
+/**
+ * ドロップされたファイルを、画像 (板) かファイル (アイコン) かに振り分ける。
+ * 画像として表示できるもの (PNG / JPEG / GIF / WebP で、5MB 以下、読み込める) だけが画像で、
+ * それ以外はすべてファイルとして置く。置けないもの (大きすぎる) は null。
+ */
+async function prepare(file: File): Promise<Prepared | null> {
+  if (file.size > MAX_FILE_BYTES) {
+    showNotice(`${file.name}: ファイルが大きすぎます (上限 ${formatBytes(MAX_FILE_BYTES)})`);
+    return null;
+  }
+  return (await prepareImage(file)) ?? { kind: "file", file, width: FILE_ICON_WIDTH, height: FILE_ICON_HEIGHT };
+}
+
+/** ドロップされたものを IPFS に追加し、ドロップ地点に (複数なら横並びで) 置く。 */
 async function placeFiles(files: File[], point: Vector3, from: Vector3): Promise<void> {
   const prepared = (await Promise.all(files.map(prepare))).filter((p): p is Prepared => p !== null);
   if (prepared.length === 0) return;
@@ -87,28 +105,44 @@ async function placeFiles(files: File[], point: Vector3, from: Vector3): Promise
   const total = prepared.reduce((sum, p) => sum + p.width, 0) + GAP * (prepared.length - 1);
   let cursor = -total / 2;
 
-  showNotice("画像を IPFS に追加中...");
+  showNotice("IPFS に追加中...");
   for (const p of prepared) {
     const center = point.clone().addScaledVector(right, cursor + p.width / 2);
     cursor += p.width + GAP;
     try {
-      const cid = await addImage(p.file);
-      sendPlaceImage({
-        cid,
-        position: [center.x, 0, center.z],
-        yaw,
-        width: p.width,
-        height: p.height,
+      // 大きなファイルは、ブラウザ内の IPFS ノードへ追加するだけでも時間がかかるので、進捗を表示する
+      let lastNoticeAt = 0;
+      const cid = await addContent(p.file, {
+        onProgress: (loaded, total) => {
+          const now = performance.now();
+          if (total < PROGRESS_NOTICE_BYTES || now - lastNoticeAt < PROGRESS_INTERVAL_MS) return;
+          lastNoticeAt = now;
+          showNotice(`${p.file.name}: IPFS に追加中 ${Math.floor((loaded / total) * 100)}%`, 8000);
+        },
       });
+      expectUpload(cid, p.file.name); // サーバーからの転送の進捗に、ファイル名を付ける
+      if (p.kind === "image") {
+        sendPlaceImage({
+          cid,
+          position: [center.x, 0, center.z],
+          yaw,
+          width: p.width,
+          height: p.height,
+          name: p.file.name,
+        });
+      } else {
+        // ファイルのアイコンは床から少し浮かせる。種類 (アイコン) とサイズは、サーバーが中身から決める
+        sendPlaceFile({ cid, name: p.file.name, position: [center.x, FILE_FLOAT_HEIGHT, center.z], yaw });
+      }
+      showNotice(`${p.file.name}: サーバーへ転送中...`, 6000);
     } catch (e) {
-      showNotice(e instanceof Error ? e.message : "画像を IPFS に追加できませんでした");
+      showNotice(e instanceof Error ? e.message : "IPFS に追加できませんでした");
       return;
     }
   }
-  useNet.setState({ notice: null });
 }
 
-/** 画像ファイルのドラッグ&ドロップを受け付ける (描画なし)。 */
+/** ファイル (画像を含む) のドラッグ&ドロップを受け付ける (描画なし)。 */
 export function DropTarget() {
   const camera = useThree((s) => s.camera);
   const canvas = useThree((s) => s.gl.domElement);
@@ -128,9 +162,15 @@ export function DropTarget() {
     const onDrop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      // フォルダは置けない (中身を読めない)。イベントの中で、フォルダかどうかを調べておく
+      const items = [...(e.dataTransfer?.items ?? [])].filter((i) => i.kind === "file");
+      const dropped = items.length
+        ? items.map((i) => ({ file: i.getAsFile(), directory: i.webkitGetAsEntry?.()?.isDirectory === true }))
+        : [...(e.dataTransfer?.files ?? [])].map((file) => ({ file, directory: false }));
+      if (dropped.some((d) => d.directory)) showNotice("フォルダは置けません。ファイルをドロップしてください");
+      const files = dropped.flatMap((d) => (d.file && !d.directory ? [d.file] : []));
       if (files.length === 0) {
-        showNotice("画像ファイルをドロップしてください");
+        if (!dropped.some((d) => d.directory)) showNotice("ファイルをドロップしてください");
         return;
       }
       const point = resolveDropPoint(camera, canvas, e.clientX, e.clientY);

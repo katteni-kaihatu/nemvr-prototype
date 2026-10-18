@@ -53,9 +53,21 @@ importers:
       '@react-three/fiber':
         specifier: ^9.8.2
         version: 9.8.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-native@0.88.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.3.0)(react@19.3.1)(supports-color@10.2.2))(react@19.3.1)(three@0.186.1)
+      blockstore-core:
+        specifier: ^7.0.1
+        version: 7.0.1
       helia:
         specifier: ^7.1.16
         version: 7.1.16(react-native@0.88.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.3.0)(react@19.3.1)(supports-color@10.2.2))(supports-color@10.2.2)
+      interface-blockstore:
+        specifier: ^7.0.1
+        version: 7.0.1
+      interface-store:
+        specifier: ^8.0.0
+        version: 8.0.0
+      ipfs-unixfs-importer:
+        specifier: ^17.1.1
+        version: 17.1.1(supports-color@10.2.2)
       libp2p:
         specifier: ^3.4.0
         version: 3.4.0
@@ -87,6 +99,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.1.2
         version: 6.1.2(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(terser@5.51.2)(tsx@4.23.15))
+      ipfs-unixfs-exporter:
+        specifier: ^16.2.3
+        version: 16.2.3
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -126,6 +141,9 @@ importers:
       '@proto/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      blockstore-fs:
+        specifier: ^4.0.1
+        version: 4.0.1
       helia:
         specifier: ^7.1.16
         version: 7.1.16(react-native@0.88.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.3.0)(react@19.3.1)(supports-color@10.2.2))(supports-color@10.2.2)
@@ -161,7 +179,11 @@ importers:
         specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(terser@5.51.2)(tsx@4.23.15))
 
-  packages/protocol: {}
+  packages/protocol:
+    devDependencies:
+      vitest:
+        specifier: ^5.0.5
+        version: 5.0.5(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(terser@5.51.2)(tsx@4.23.15))
 
 packages:
 
@@ -1287,6 +1309,9 @@ packages:
 
   blockstore-core@7.0.1:
     resolution: {integrity: sha512-HgLzdH8oL6DrMC6J7snxmV0TXzJ/BMPSbskH4v7BBuUO9foDBOMEKUfoMX9yoBpxbH+r3Z9afXHDgXlTifMxHQ==}
+
+  blockstore-fs@4.0.1:
+    resolution: {integrity: sha512-UXTG85jT+b4xumiHwqyZBnAqfxCqGgGl5ZszSGpnje7yEIrv2pO3NzttAz9DHwzaZxE2nBPMaPlg+SJ8VGlPrg==}
 
   braces@3.0.3:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
@@ -2515,6 +2540,10 @@ packages:
 
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
+
+  steno@4.0.2:
+    resolution: {integrity: sha512-yhPIQXjrlt1xv7dyPQg2P17URmXbuM5pdGkpiMB3RenprfiBlvK415Lctfe0eshk90oA7/tNq7WEiMK8RSP39A==}
+    engines: {node: '>=18'}
 
   string-width@4.2.3:
     resolution: {integrity: sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==}
@@ -4537,6 +4566,18 @@ snapshots:
       it-merge: 3.0.15
       multiformats: 14.0.5
 
+  blockstore-fs@4.0.1:
+    dependencies:
+      abort-error: 1.0.2
+      interface-blockstore: 7.0.1
+      interface-store: 8.0.0
+      it-glob: 3.0.6
+      it-map: 3.1.6
+      it-parallel-batch: 3.0.11
+      multiformats: 14.0.5
+      race-signal: 2.0.2
+      steno: 4.0.2
+
   braces@3.0.3:
     dependencies:
       fill-range: 7.1.1
@@ -5957,6 +5998,8 @@ snapshots:
   statuses@2.0.2: {}
 
   std-env@4.3.0: {}
+
+  steno@4.0.2: {}
 
   string-width@4.2.3:
     dependencies:

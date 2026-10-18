@@ -86,12 +86,19 @@ Group=proto
 WorkingDirectory=/opt/proto/app/apps/server
 # リバースプロキシ (Caddy) の背後で動かす。公開するのは Caddy だけ
 Environment=NODE_ENV=production HOME=/opt/proto HOST=127.0.0.1 PORT=8080 IPFS_PORT=8081 IPFS_PUBLIC_PORT=8443
+# 画像・ファイルの中身 (ブロック) はディスクに置く。起動のたびに空にする (再起動でワールドの状態が消えるため)
+Environment=BLOCKSTORE_DIR=/var/lib/proto/blocks
+# 保持する合計サイズの上限 (MB)。ディスクの空きより十分小さくする
+Environment=CONTENT_MAX_TOTAL_MB=20480
 # TURN_HOST / TURN_PORT / TURN_SECRET (coturn と共有。root と proto だけが読める)
 EnvironmentFile=/etc/proto/server.env
 ExecStart=/opt/proto/app/apps/server/node_modules/.bin/tsx src/index.ts
 Restart=on-failure
 RestartSec=3
-MemoryMax=1G
+# 実測: 2 GiB のファイル 1 件で RSS +200MiB 程度、同時 4 件で最大 +340MiB (基準は約 210MiB)。余裕を見て 1.5G
+MemoryMax=1536M
+# ブロックの置き場 (/var/lib/proto)。ProtectSystem=strict でも、ここは書き込める
+StateDirectory=proto
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

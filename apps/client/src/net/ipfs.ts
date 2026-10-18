@@ -11,9 +11,18 @@ import { multiaddr } from "@multiformats/multiaddr";
 import { createHeliaLight } from "helia";
 import { CID } from "multiformats/cid";
 import { MAX_IMAGE_BYTES, type IceServer, type IpfsInfo } from "@proto/protocol";
+import { assembleBlob } from "./blobAssembly";
+import { ServingBlockstore, importFileBacked } from "./fileBackedBlockstore";
 
 const CONNECT_TIMEOUT_MS = 10_000;
-const FETCH_TIMEOUT_MS = 30_000;
+/** データが届かない状態がこの時間続いたら、取得を打ち切る。合計時間ではなく止まっているかで見る (大きなファイルは時間がかかってよい)。 */
+const IDLE_TIMEOUT_MS = 30_000;
+/** 1 回の取得の合計時間の上限。 */
+const MAX_TOTAL_MS = 60 * 60_000;
+/** Blob は、このバイト数ごとにまとめて作る (全チャンクを配列に溜めて、メモリを使い切らないように)。 */
+const BLOB_BATCH_BYTES = 32 * 1024 * 1024;
+/** アップロードしたファイルは、サーバーが取り終える (object_added が届く) まで配る。進捗が止まってからこの時間で諦める。 */
+const UPLOAD_HOLD_IDLE_MS = 2 * 60_000;
 
 /** ページを開いたホスト名から、サーバーの libp2p (WebSocket) の multiaddr を組み立てる。 */
 function serverMultiaddr(info: IpfsInfo): string {
@@ -53,8 +62,13 @@ async function createNode(
   onDirectPeers: DirectPeersListener,
 ) {
   serverAddr = serverMultiaddr(info);
+  // ブロックは保存しない。アップロード中のファイルは元のファイルから直接配り、取得したブロックは流して捨てる。
+  // (IndexedDB に保存すると、Firefox で 1MiB あたり 0.2〜0.3 秒かかり、サーバーが数十ブロックを一度に要求すると
+  //  応答が間に合わず止まった。メモリに保存すると、ファイルのサイズ分のメモリを使う)
+  const serving = new ServingBlockstore();
+  servingStore = serving;
   const helia = await withBitswap(
-    withLibp2pLight(createHeliaLight(), {
+    withLibp2pLight(createHeliaLight({ blockstore: serving }), {
       // 中継経由 / WebRTC で他のブラウザから到達できるようにする
       addresses: { listen: ["/p2p-circuit", "/webrtc"] },
       transports: [webSockets(), webRTC(webRtcInit(iceServers)), circuitRelayTransport()],
@@ -78,12 +92,14 @@ async function createNode(
   helia.libp2p.addEventListener("connection:open", notify);
   helia.libp2p.addEventListener("connection:close", notify);
 
-  return { helia, fs: unixfs(helia) };
+  return { helia, fs: unixfs(helia), serving };
 }
 
 type Node = Awaited<ReturnType<typeof createNode>>;
 
 let nodePromise: Promise<Node> | null = null;
+/** アップロード中のファイルを配るブロックストア (ノードを起動したら入る)。 */
+let servingStore: ServingBlockstore | null = null;
 const imageUrls = new Map<string, Promise<string>>();
 
 /** この環境では IPFS を使えない (利用者が対処できる原因が分かっている) ことを表す。 */
@@ -122,6 +138,9 @@ export function startIpfs(
 export async function stopIpfs(): Promise<void> {
   const pending = nodePromise;
   nodePromise = null;
+  servingStore = null;
+  for (const timer of heldUploads.values()) clearTimeout(timer);
+  heldUploads.clear();
   for (const url of imageUrls.values()) void url.then((u) => URL.revokeObjectURL(u), () => {});
   imageUrls.clear();
   if (!pending) return;
@@ -177,18 +196,100 @@ function requireNode(): Promise<Node> {
   return nodePromise;
 }
 
-/** 画像を IPFS に追加して CID (文字列) を返す。追加した内容はこのノードが保持する。 */
-export async function addImage(file: Blob): Promise<string> {
+// ---- アップロードしたファイルを、サーバーが取り終えるまで配る ----
+
+const heldUploads = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * アップロードしたファイルを、サーバーが取り終えるまで配り続ける。
+ * 進捗の通知が来るたびに呼んで、延ばす。通知が途絶えたら (サーバーが断った・失敗した) 諦める。
+ */
+export function holdUpload(cid: string): void {
+  clearTimeout(heldUploads.get(cid));
+  heldUploads.set(cid, setTimeout(() => releaseUpload(cid), UPLOAD_HOLD_IDLE_MS));
+}
+
+/** サーバーが取り終えた (または、もう取らない) ので、配るのをやめて、索引を捨てる。 */
+export function releaseUpload(cid: string): void {
+  clearTimeout(heldUploads.get(cid));
+  heldUploads.delete(cid);
+  servingStore?.stop(cid);
+}
+
+export interface AddContentOptions {
+  /** 読み込み済みのバイト数と、全体のバイト数 */
+  onProgress?: (loadedBytes: number, totalBytes: number) => void;
+}
+
+/**
+ * 画像・ファイルを IPFS に取り込んで CID (文字列) を返す。
+ * ファイルを丸ごとメモリに読まず、ブロックも保存しない。「どのブロックがファイルのどこか」の索引だけを作り、
+ * サーバーが取りに来たら元のファイルから読んで渡す (数 GB でも、メモリもディスクも使わない)。
+ * サーバーが取り終える (object_added が届く) まで、このファイルを読み続けられる必要がある。
+ */
+export async function addContent(file: Blob, { onProgress }: AddContentOptions = {}): Promise<string> {
+  await requireNode();
+  const { cid, blockstore } = await importFileBacked(file, { onProgress });
+  const root = cid.toString();
+  servingStore?.serve(root, blockstore);
+  holdUpload(root);
+  return root;
+}
+
+export interface FetchBlobOptions {
+  /** この大きさを超えたら中止する (バイト) */
+  maxBytes: number;
+  /** データが届かない状態がこの時間 (ミリ秒) 続いたら中止する。 */
+  idleTimeoutMs?: number;
+  /** 合計の時間の上限 (ミリ秒) */
+  maxTotalMs?: number;
+  /** 取得したバイト数の途中経過 */
+  onProgress?: (loadedBytes: number) => void;
+}
+
+/**
+ * CID の中身を IPFS から取得して Blob にする。上限を超える・取得できない場合は例外を投げる。
+ * 全チャンクを配列に溜めず、一定のサイズごとに Blob にまとめていく (ブラウザは大きな Blob をディスクに置ける)。
+ * 取得したブロックはブラウザ内に保存しない (流して Blob にするだけ)。
+ */
+export async function fetchBlob(
+  cid: string,
+  { maxBytes, idleTimeoutMs = IDLE_TIMEOUT_MS, maxTotalMs = MAX_TOTAL_MS, onProgress }: FetchBlobOptions,
+): Promise<Blob> {
   const { fs } = await requireNode();
-  const cid = await fs.addBytes(new Uint8Array(await file.arrayBuffer()));
-  return cid.toString();
+  const abort = new AbortController();
+  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(maxTotalMs)]);
+  let idle = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      idle = true;
+      abort.abort();
+    }, idleTimeoutMs);
+  };
+
+  touch();
+  try {
+    return await assembleBlob(fs.cat(CID.parse(cid), { signal }), {
+      maxBytes,
+      batchBytes: BLOB_BATCH_BYTES,
+      onChunk: touch,
+      onProgress,
+    });
+  } catch (err) {
+    if (idle) throw new Error("一定時間データが届かず、タイムアウトしました");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** CID の画像を取得して、テクスチャ読み込み用の blob URL を返す (CID ごとにキャッシュ)。 */
 export function getImageUrl(cid: string): Promise<string> {
   let url = imageUrls.get(cid);
   if (!url) {
-    url = fetchImageUrl(cid);
+    url = fetchBlob(cid, { maxBytes: MAX_IMAGE_BYTES }).then((blob) => URL.createObjectURL(blob));
     imageUrls.set(cid, url);
     // 失敗はキャッシュしない
     url.catch(() => imageUrls.delete(cid));
@@ -196,19 +297,14 @@ export function getImageUrl(cid: string): Promise<string> {
   return url;
 }
 
-async function fetchImageUrl(cid: string): Promise<string> {
-  const { fs } = await requireNode();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of fs.cat(CID.parse(cid), { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })) {
-    size += chunk.length;
-    if (size > MAX_IMAGE_BYTES) throw new Error("画像が大きすぎます");
-    chunks.push(chunk);
-  }
-  return URL.createObjectURL(new Blob(chunks as BlobPart[]));
-}
-
 // 開発時のみ、ブラウザのコンソールや E2E テストから動作確認できるようにする
 if (import.meta.env.DEV) {
-  (window as unknown as { __ipfs: unknown }).__ipfs = { addImage, getImageUrl };
+  (window as unknown as { __ipfs: unknown }).__ipfs = {
+    addImage: addContent,
+    addContent,
+    getImageUrl,
+    fetchBlob,
+    /** 内部状態 (いま配っているアップロードの数) */
+    state: () => ({ serving: servingStore?.servingCount ?? 0, heldUploads: heldUploads.size }),
+  };
 }

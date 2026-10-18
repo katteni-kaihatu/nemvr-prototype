@@ -3,6 +3,7 @@ import { Grid } from "@react-three/drei";
 import { useNet } from "../net/connection";
 import { CursorDot } from "./CursorDot";
 import { DropTarget } from "./DropTarget";
+import { FilePlane } from "./FilePlane";
 import { ImagePlane } from "./ImagePlane";
 import { LocalPlayer } from "./LocalPlayer";
 import { ObjectInteraction } from "./ObjectInteraction";
@@ -50,9 +51,9 @@ export function World() {
           </mesh>
         ))}
 
-        {Object.values(objects).map((o) => (
-          <ImagePlane key={o.id} object={o} />
-        ))}
+        {Object.values(objects).map((o) =>
+          o.kind === "file" ? <FilePlane key={o.id} object={o} /> : <ImagePlane key={o.id} object={o} />,
+        )}
 
         <LocalPlayer />
         <DropTarget />
@@ -94,8 +95,8 @@ function HUD({ count }: { count: number }) {
         {self?.name} / 接続中: {count} 人 / IPFS: {ipfsLabel}
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Esc で解除</div>
-      <div style={{ opacity: 0.7 }}>画像ファイルをドロップして配置 (視点操作中は Esc で解除してから)</div>
-      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ / 中ボタンでメニュー (削除・複製)</div>
+      <div style={{ opacity: 0.7 }}>ファイルや画像をドロップして配置 (視点操作中は Esc で解除してから)</div>
+      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ / 中ボタンでメニュー (削除・複製・ダウンロード)</div>
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
     </div>
   );

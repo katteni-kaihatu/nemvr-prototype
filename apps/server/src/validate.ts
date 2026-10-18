@@ -4,7 +4,9 @@ import {
   MAX_NAME_LENGTH,
   MAX_OBJECT_SIZE,
   MIN_OBJECT_SIZE,
+  sanitizeFileName,
   type ClientMessage,
+  type PlaceFile,
   type PlaceImage,
   type Pose,
   type Quat,
@@ -68,15 +70,32 @@ function parseObjectId(v: unknown): string | null {
   return typeof v === "string" && UUID_RE.test(v) ? v : null;
 }
 
-export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
-  const { position, yaw, width, height } = v;
-  const cid = normalizeCid(v.cid);
-  if (!cid) return null;
+/** 位置 (有限・範囲内) と向き (有限) を検証する。置く・動かすメッセージで共通。 */
+function parsePlacement(v: Record<string, unknown>): { position: Vec3; yaw: number } | null {
+  const { position, yaw } = v;
   if (!isFiniteArray(position, 3)) return null;
   if (position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
   if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
+  return { position: position as Vec3, yaw };
+}
+
+export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
+  const cid = normalizeCid(v.cid);
+  const placement = parsePlacement(v);
+  if (!cid || !placement) return null;
+  const { width, height } = v;
   if (!isSize(width) || !isSize(height)) return null;
-  return { cid, position: position as Vec3, yaw, width, height };
+  // ファイル名は任意 (ダウンロード時の名前)。あれば整える
+  const name = typeof v.name === "string" ? sanitizeFileName(v.name, "") : "";
+  return { cid, ...placement, width, height, ...(name ? { name } : {}) };
+}
+
+/** size と category はサーバーが中身から決めるので、受け取らない。 */
+export function parsePlaceFile(v: Record<string, unknown>): PlaceFile | null {
+  const cid = normalizeCid(v.cid);
+  const placement = parsePlacement(v);
+  if (!cid || !placement) return null;
+  return { cid, name: sanitizeFileName(v.name), ...placement };
 }
 
 export function sanitizeName(raw: unknown, fallbackSuffix: string): string {
@@ -122,6 +141,10 @@ export function parseClientMessage(text: string): ClientMessage | null {
       return typeof id === "string" && /^[A-Za-z0-9]{10,128}$/.test(id)
         ? { type: "ipfs_peer", peerId: id }
         : null;
+    }
+    case "place_file": {
+      const place = parsePlaceFile(msg);
+      return place ? { type: "place_file", ...place } : null;
     }
     case "place_image": {
       const place = parsePlaceImage(msg);

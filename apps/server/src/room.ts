@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
+  FILE_ICON_WIDTH,
   MAX_OBJECTS,
+  type FileCategory,
   type IceServer,
   type IpfsInfo,
   TICK_RATE,
   type PeerInfo,
   type PeerState,
+  type PlaceFile,
   type PlaceImage,
   type Pose,
   type Vec3,
@@ -20,8 +23,11 @@ const COLORS = [
   "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
 ];
 
-/** 複製したときの、元からのずらし量 (m)。横にずらし、同一平面での重なり (描画のちらつき) を避けるため法線方向にも少しずらす。 */
-const DUPLICATE_SIDE_OFFSET = 0.6;
+/**
+ * 複製したときの、元からのずらし量 (m)。横にずらし、同一平面での重なり (描画のちらつき) を避けるため法線方向にも少しずらす。
+ * 画像は大きいので少しだけ (重なってよい)、ファイルのアイコンは重ならない距離だけずらす。
+ */
+const DUPLICATE_SIDE_OFFSET = { image: 0.6, file: FILE_ICON_WIDTH + 0.15 } as const;
 const DUPLICATE_NORMAL_OFFSET = 0.05;
 
 const INITIAL_POSE: Pose = { position: [0, 0, 0], head: [0, 0, 0, 1] };
@@ -117,41 +123,44 @@ export class Room {
     this.broadcast({ type: "object_updated", object });
   }
 
-  /** 削除する。他の人がつかんでいるものは削除できない。 */
-  deleteObject(peerId: string, id: string): void {
+  /** 削除して、削除したオブジェクトを返す。他の人がつかんでいるものや、存在しないものは null。 */
+  deleteObject(peerId: string, id: string): WorldObject | null {
     const object = this.objects.get(id);
-    if (!object) return;
+    if (!object) return null;
     if (object.heldBy && object.heldBy !== peerId) {
       this.sendError(peerId, "他の人がつかんでいます");
-      return;
+      return null;
     }
     this.objects.delete(id);
     this.broadcast({ type: "object_removed", id });
+    return object;
   }
 
-  /** 複製する。元の隣 (横に少しずらした位置) に、同じ画像・向き・大きさで置く。 */
-  duplicateObject(peerId: string, id: string): void {
+  /** 複製して、できたオブジェクトを返す。元の隣 (横に少しずらした位置) に、同じ内容・向き・大きさで置く。置けなければ null。 */
+  duplicateObject(peerId: string, id: string): WorldObject | null {
     const object = this.objects.get(id);
-    if (!object) return;
+    if (!object) return null;
     if (this.isFull) {
       this.sendError(peerId, "これ以上オブジェクトを置けません");
-      return;
+      return null;
     }
     const { yaw } = object;
     const [x, y, z] = object.position;
+    const side = DUPLICATE_SIDE_OFFSET[object.kind];
     const copy: WorldObject = {
       ...object,
       id: randomUUID(),
       // 平面のローカル +X (右) と法線 (+Z) を yaw 回したもの
       position: [
-        x + Math.cos(yaw) * DUPLICATE_SIDE_OFFSET + Math.sin(yaw) * DUPLICATE_NORMAL_OFFSET,
+        x + Math.cos(yaw) * side + Math.sin(yaw) * DUPLICATE_NORMAL_OFFSET,
         y,
-        z - Math.sin(yaw) * DUPLICATE_SIDE_OFFSET + Math.cos(yaw) * DUPLICATE_NORMAL_OFFSET,
+        z - Math.sin(yaw) * side + Math.cos(yaw) * DUPLICATE_NORMAL_OFFSET,
       ],
     };
     delete copy.heldBy;
     this.objects.set(copy.id, copy);
     this.broadcast({ type: "object_added", object: copy });
+    return copy;
   }
 
   /** 指定のピアがつかんでいるオブジェクトを離す (keepId は除く)。 */
@@ -163,9 +172,27 @@ export class Room {
     }
   }
 
+  /**
+   * ファイルオブジェクトを追加して全員に通知する。上限に達していたら false。
+   * size と category は、サーバーが中身を取得して決めた値を渡す (クライアントの申告は使わない)。
+   */
+  addFile(place: PlaceFile & { size: number; category: FileCategory }): boolean {
+    if (this.objects.size >= MAX_OBJECTS) return false;
+    const object: WorldObject = { id: randomUUID(), kind: "file", ...place };
+    this.objects.set(object.id, object);
+    this.broadcast({ type: "object_added", object });
+    return true;
+  }
+
   /** ピアの libp2p ID を本人以外に知らせる (受け取った側が直接接続しに行く)。 */
   announceIpfs(id: string, ipfsPeerId: string): void {
     if (this.peers.has(id)) this.broadcast({ type: "peer_ipfs", id, ipfsPeerId }, id);
+  }
+
+  /** 置こうとしている中身の取得の進捗を、置いている本人にだけ知らせる。 */
+  sendPlaceProgress(id: string, cid: string, loaded: number, total?: number, queued?: boolean): void {
+    const peer = this.peers.get(id);
+    if (peer) this.send(peer.socket, { type: "place_progress", cid, loaded, total, ...(queued ? { queued } : {}) });
   }
 
   /** 1 人にだけエラーを通知する (切断はしない)。 */

@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import {
+  formatBytes,
   type ClientMessage,
   type PeerInfo,
+  type PlaceFile,
   type PlaceImage,
   type Pose,
   type ServerMessage,
@@ -12,7 +14,9 @@ import { PoseBuffer } from "./interpolation";
 import {
   describeError,
   dialPeer,
+  holdUpload,
   IpfsUnavailableError,
+  releaseUpload,
   startIpfs,
   stopIpfs,
   waitForDialable,
@@ -84,6 +88,18 @@ export function sendPlaceImage(place: PlaceImage): void {
   send({ type: "place_image", ...place });
 }
 
+/** サーバーへ転送中のアップロード (CID → ファイル名)。進捗の通知にファイル名を付けるために覚えておく。 */
+const pendingUploads = new Map<string, string>();
+
+/** 置こうとしているファイル (CID とファイル名) を覚える。サーバーからの進捗の通知に使う。 */
+export function expectUpload(cid: string, name: string): void {
+  pendingUploads.set(cid, name);
+}
+
+export function sendPlaceFile(place: PlaceFile): void {
+  send({ type: "place_file", ...place });
+}
+
 export const sendGrabObject = (id: string): void => send({ type: "grab_object", id });
 export const sendReleaseObject = (id: string): void => send({ type: "release_object", id });
 export const sendDeleteObject = (id: string): void => send({ type: "delete_object", id });
@@ -104,6 +120,7 @@ export function applyLocalObjectPose(id: string, position: [number, number, numb
 }
 
 function reset(): void {
+  pendingUploads.clear();
   resetInteraction();
   void stopIpfs();
   peerBuffers.clear();
@@ -207,6 +224,24 @@ export function connect(name: string): void {
       case "object_added": {
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
+        // 自分が置いたものをサーバーが取り終えた。ブラウザ側のブロックは、もう保持しなくてよい
+        pendingUploads.delete(object.cid);
+        releaseUpload(object.cid);
+        break;
+      }
+      case "place_progress": {
+        // サーバーが、置こうとしている中身を取得している途中。大きなファイルは数分かかるので、状況を表示する
+        holdUpload(msg.cid); // 動いている間は、ブラウザ側のブロックを消さない
+        const name = pendingUploads.get(msg.cid) ?? "ファイル";
+        if (msg.queued) {
+          // サーバーが、先に送った分の取り込みを終えるまで待っている (同じ人の分は、1 件ずつ順に取り込む)
+          showNotice(`${name}: 順番待ち (前の転送が終わるまで待っています)`, 15_000);
+          break;
+        }
+        const amount = msg.total
+          ? `${Math.min(100, Math.floor((msg.loaded / msg.total) * 100))}% (${formatBytes(msg.loaded)} / ${formatBytes(msg.total)})`
+          : formatBytes(msg.loaded);
+        showNotice(`${name}: サーバーへ転送中 ${amount}`, 8000);
         break;
       }
       case "peer_joined": {
