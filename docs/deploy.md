@@ -30,6 +30,7 @@ graph LR
 - **ホスト名が必要**: Let's Encrypt の証明書はホスト名に対して発行される。IP アドレスだけでは取れない。
   Linode の逆引きホスト名 (`172-104-89-28.ip.linodeusercontent.com`) は、その IP アドレスに正引きもできるので、独自ドメインが無くても使える。
   独自ドメインを使う場合は A レコードを VPS の IP アドレスに向けて、`PROTO_HOST` をそのドメインにする。
+  現在の公開先は `nemvr.nemnomi.dev` (A レコードで VPS を指す)。ホスト名を変えるときは、新しい名前で `setup-vps.sh` を再実行し (`TURN_HOST` も更新される)、`proto-server` を再起動する。古いホスト名は配信されなくなる。
 - アプリ本体は `proto` ユーザー (非 root) の systemd サービス `proto-server` として 127.0.0.1 のみで待ち受ける。外に出るのは Caddy だけ。
 - クライアントは、HTTPS で開かれたときだけ、ワールド同期を `wss://<オリジン>/ws`、libp2p を `/dns4/<host>/tcp/<IPFS_PUBLIC_PORT>/tls/ws/...` に接続する
   (`apps/client/src/net/connection.ts`, `ipfs.ts`)。HTTP (開発時) の挙動は変わらない。
@@ -123,7 +124,8 @@ VPS に coturn を入れてあり、サーバーが入室 (`welcome`) のたび�
 
 ## 検証状況
 
-- 公開 URL `https://172-104-89-28.ip.linodeusercontent.com/` (Linode, Ubuntu 26.04) で確認済み。
+- 公開 URL `https://nemvr.nemnomi.dev/` (Linode, Ubuntu 26.04) で確認済み。以下の確認の多くは、移行前のホスト名 `172-104-89-28.ip.linodeusercontent.com` で行った。
+  `nemvr.nemnomi.dev` への移行後は、証明書の自動取得、`https://HOST/` と `:8443`、`welcome` の `iceServers` (TURN のホスト名)、3 ポート (443 / 8443 / 3478) の到達、ヘッドレス Firefox による本番の操作テスト (21 項目) を確認した。
   - Let's Encrypt の証明書が自動取得され、HTTP/2、`http://` は `https://` へ 308 リダイレクト。
   - `wss://HOST/ws` で入室でき、`welcome.ipfs.wsPort` は 8443。`https://HOST:8443` は libp2p の WebSocket サーバー (HTTP リクエストには 400) に届く。
   - ヘッドレス Firefox (puppeteer-core) で、入室・IPFS 接続・画像の配置・配置した人が退室した後に入室した人への表示を確認。

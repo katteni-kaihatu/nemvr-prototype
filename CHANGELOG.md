@@ -135,6 +135,8 @@
 
 ### Changed
 
+- 公開先のホスト名を `nemvr.nemnomi.dev` にした (A レコードで VPS を指す)。`deploy/setup-vps.sh` は、再実行のたびに `/etc/proto/server.env` の `TURN_HOST` を `PROTO_HOST` に合わせる (秘密は変えない)。
+  Caddy が新しい名前の証明書を自動で取得する。移行前のホスト名 (`172-104-89-28.ip.linodeusercontent.com`) は配信されなくなった。
 - ファイルのアップロード上限を 20MB から 2 GiB に、サーバーが保持する合計の既定を 256MB (メモリ) から 20 GiB (ディスク) にした。
   サーバーは `BLOCKSTORE_DIR` に書き込める必要がある。`startIpfs` の `fetchTimeoutMs` はなくなり、取得の制限は `FetchLimits` (`idleTimeoutMs` など) に移った。
 - **破壊的変更**: `WorldObject` が `ImageObject | FileObject` になった。サーバーの `Room.deleteObject` / `duplicateObject` は、結果のオブジェクトを返す

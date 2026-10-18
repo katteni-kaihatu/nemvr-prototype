@@ -69,6 +69,8 @@ TURN_SECRET=${secret}
 ENVFILE
   )
 fi
+# ホスト名を変えて再実行したときのために、TURN_HOST は毎回合わせる (秘密は変えない)
+sed -i "s/^TURN_HOST=.*/TURN_HOST=${PROTO_HOST}/" /etc/proto/server.env
 chown root:proto /etc/proto/server.env
 chmod 640 /etc/proto/server.env
 TURN_SECRET="$(grep '^TURN_SECRET=' /etc/proto/server.env | cut -d= -f2-)"
