@@ -1,3 +1,4 @@
+import { CID } from "multiformats/cid";
 import {
   MAX_ABS_POSITION,
   MAX_NAME_LENGTH,
@@ -35,20 +36,40 @@ export function parsePose(v: unknown): Pose | null {
   return { position: position as Vec3, head: q };
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MAX_CID_LENGTH = 128;
+const CODEC_DAG_PB = 0x70;
+const CODEC_RAW = 0x55;
+const HASH_SHA2_256 = 0x12;
+
+/**
+ * UnixFS ファイルの CID (dag-pb または raw, sha2-256) だけを受け付け、正規化した文字列を返す。
+ * 解釈できなければ null。
+ */
+export function normalizeCid(v: unknown): string | null {
+  if (typeof v !== "string" || v.length === 0 || v.length > MAX_CID_LENGTH) return null;
+  try {
+    const cid = CID.parse(v);
+    if (cid.code !== CODEC_DAG_PB && cid.code !== CODEC_RAW) return null;
+    if (cid.multihash.code !== HASH_SHA2_256) return null;
+    return cid.toString();
+  } catch {
+    return null;
+  }
+}
 
 function isSize(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v >= MIN_OBJECT_SIZE && v <= MAX_OBJECT_SIZE;
 }
 
 export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
-  const { imageId, position, yaw, width, height } = v;
-  if (typeof imageId !== "string" || !UUID_RE.test(imageId)) return null;
+  const { position, yaw, width, height } = v;
+  const cid = normalizeCid(v.cid);
+  if (!cid) return null;
   if (!isFiniteArray(position, 3)) return null;
   if (position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
   if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
   if (!isSize(width) || !isSize(height)) return null;
-  return { imageId, position: position as Vec3, yaw, width, height };
+  return { cid, position: position as Vec3, yaw, width, height };
 }
 
 export function sanitizeName(raw: unknown, fallbackSuffix: string): string {
@@ -73,6 +94,13 @@ export function parseClientMessage(text: string): ClientMessage | null {
     case "pose": {
       const pose = parsePose(msg.pose);
       return pose ? { type: "pose", pose } : null;
+    }
+    case "ipfs_peer": {
+      // libp2p のピア ID (base58 / base32 の英数字)
+      const id = msg.peerId;
+      return typeof id === "string" && /^[A-Za-z0-9]{10,128}$/.test(id)
+        ? { type: "ipfs_peer", peerId: id }
+        : null;
     }
     case "place_image": {
       const place = parsePlaceImage(msg);

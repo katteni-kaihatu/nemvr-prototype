@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import {
-  IMAGE_UPLOAD_PATH,
   type ClientMessage,
   type PeerInfo,
   type PlaceImage,
@@ -9,6 +8,14 @@ import {
   type WorldObject,
 } from "@proto/protocol";
 import { PoseBuffer } from "./interpolation";
+import {
+  describeError,
+  dialPeer,
+  IpfsUnavailableError,
+  startIpfs,
+  stopIpfs,
+  waitForDialable,
+} from "./ipfs";
 
 /** 補間のために描画を遅らせる時間 (2 tick 分)。 */
 export const INTERPOLATION_DELAY_MS = 100;
@@ -16,13 +23,6 @@ export const INTERPOLATION_DELAY_MS = 100;
 const WS_URL =
   (import.meta.env.VITE_WS_URL as string | undefined) ??
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8080`;
-
-/** 画像のアップロード・取得に使う HTTP のベース URL (WebSocket と同じホスト・ポート)。 */
-const HTTP_BASE = WS_URL.replace(/^ws/, "http");
-
-export function imageUrl(imageId: string): string {
-  return `${HTTP_BASE}${IMAGE_UPLOAD_PATH}/${imageId}`;
-}
 
 interface NetState {
   status: "idle" | "connecting" | "connected";
@@ -34,6 +34,10 @@ interface NetState {
   objects: Record<string, WorldObject>;
   /** 入室中に HUD へ一時表示するメッセージ。 */
   notice: string | null;
+  /** ブラウザ内 IPFS ノードの状態。 */
+  ipfs: "idle" | "starting" | "ready" | "error";
+  /** 他のブラウザとの直接 (WebRTC) 接続の数。 */
+  directPeers: number;
 }
 
 export const useNet = create<NetState>(() => ({
@@ -43,13 +47,15 @@ export const useNet = create<NetState>(() => ({
   peers: {},
   objects: {},
   notice: null,
+  ipfs: "idle",
+  directPeers: 0,
 }));
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
-export function showNotice(text: string): void {
+export function showNotice(text: string, durationMs = 5000): void {
   clearTimeout(noticeTimer);
   useNet.setState({ notice: text });
-  noticeTimer = setTimeout(() => useNet.setState({ notice: null }), 5000);
+  noticeTimer = setTimeout(() => useNet.setState({ notice: null }), durationMs);
 }
 
 /** 毎フレーム参照される姿勢履歴。React state にはしない。 */
@@ -75,27 +81,8 @@ export function sendPlaceImage(place: PlaceImage): void {
   send({ type: "place_image", ...place });
 }
 
-/** 画像をサーバーへアップロードして imageId を返す。失敗時は理由付きで throw する。 */
-export async function uploadImage(file: Blob): Promise<string> {
-  let res: Response;
-  try {
-    res = await fetch(`${HTTP_BASE}${IMAGE_UPLOAD_PATH}`, {
-      method: "POST",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
-      body: file,
-    });
-  } catch {
-    throw new Error("画像のアップロードに失敗しました (サーバーに接続できません)");
-  }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? `画像のアップロードに失敗しました (${res.status})`);
-  }
-  const { id } = (await res.json()) as { id: string };
-  return id;
-}
-
 function reset(): void {
+  void stopIpfs();
   peerBuffers.clear();
   serverTimeOffset = null;
   socket = null;
@@ -110,6 +97,8 @@ export function connect(name: string): void {
     peers: {},
     objects: {},
     notice: null,
+    ipfs: "idle",
+    directPeers: 0,
   });
 
   const ws = new WebSocket(WS_URL);
@@ -139,7 +128,33 @@ export function connect(name: string): void {
         }
         const objects: Record<string, WorldObject> = {};
         for (const o of msg.objects) objects[o.id] = o;
-        useNet.setState({ status: "connected", self: msg.self, peers, objects });
+        useNet.setState({ status: "connected", self: msg.self, peers, objects, ipfs: "starting" });
+        // 画像の取得・共有に使うブラウザ内 IPFS ノードを起動してサーバーに接続する
+        startIpfs(msg.ipfs, (directPeers) => useNet.setState({ directPeers })).then(
+          () => {
+            useNet.setState({ ipfs: "ready" });
+            // 他のブラウザから直接接続してもらえる状態になったら、自分のピア ID を知らせる
+            waitForDialable().then(
+              (peerId) => send({ type: "ipfs_peer", peerId }),
+              (err: unknown) => console.warn(`[ipfs] not dialable: ${describeError(err)}`, err),
+            );
+          },
+          (err: unknown) => {
+            console.warn(`[ipfs] start failed: ${describeError(err)}`, err);
+            useNet.setState({ ipfs: "error" });
+            showNotice(
+              err instanceof IpfsUnavailableError
+                ? err.message
+                : "IPFS ノードに接続できません。画像の共有ができません",
+              15_000,
+            );
+          },
+        );
+        break;
+      }
+      case "peer_ipfs": {
+        // 後から準備ができた人へ、既にいる側から直接接続しに行く
+        void dialPeer(msg.ipfsPeerId);
         break;
       }
       case "object_added": {
@@ -190,6 +205,8 @@ export function connect(name: string): void {
       peers: {},
       objects: {},
       notice: null,
+      ipfs: "idle",
+      directPeers: 0,
       message:
         prev.message ??
         (welcomed ? "サーバーとの接続が切断されました" : "サーバーに接続できませんでした"),

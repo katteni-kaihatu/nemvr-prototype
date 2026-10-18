@@ -65,6 +65,11 @@ export function World() {
 function HUD({ count }: { count: number }) {
   const self = useNet((s) => s.self);
   const notice = useNet((s) => s.notice);
+  const ipfs = useNet((s) => s.ipfs);
+  const directPeers = useNet((s) => s.directPeers);
+  const ipfsLabel =
+    { idle: "-", starting: "接続中...", ready: "接続済み", error: "接続失敗" }[ipfs] +
+    (ipfs === "ready" ? ` (P2P ${directPeers})` : "");
   return (
     <div
       style={{
@@ -80,7 +85,7 @@ function HUD({ count }: { count: number }) {
       }}
     >
       <div>
-        {self?.name} / 接続中: {count} 人
+        {self?.name} / 接続中: {count} 人 / IPFS: {ipfsLabel}
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>画像ファイルをドロップして配置 (視点操作中は Esc で解除してから)</div>

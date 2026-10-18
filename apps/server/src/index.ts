@@ -1,27 +1,45 @@
-import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { MAX_MESSAGE_BYTES } from "@proto/protocol";
-import { createHttpHandler } from "./http.js";
-import { ImageStore } from "./images.js";
+import { ImageRejected, startIpfs } from "./ipfs.js";
 import { Room } from "./room.js";
 import { parseClientMessage } from "./validate.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
+const IPFS_PORT = Number(process.env.IPFS_PORT ?? 8081);
 const PING_INTERVAL_MS = 30_000;
+const MAX_CONCURRENT_VERIFY = 4; // 同時に検証 (IPFS から取得) する画像の数
 
-const room = new Room();
-const images = new ImageStore();
-
-// 同じポートで HTTP (画像のアップロード・配信) と WebSocket (同期) を提供する
-const httpServer = createServer((req, res) => {
-  createHttpHandler(images)(req, res).catch((err: unknown) => {
-    console.warn("[http error]", err);
-    if (!res.headersSent) res.writeHead(500);
-    res.end();
-  });
-});
-const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_MESSAGE_BYTES });
+const ipfs = await startIpfs(IPFS_PORT);
+const room = new Room(ipfs.info);
+const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_MESSAGE_BYTES });
 const alive = new WeakSet<WebSocket>();
+let verifying = 0;
+
+/** 画像の中身を IPFS から取得・検証して pin し、通ったらワールドに置く。 */
+function placeImage(peerId: string, place: Parameters<Room["addImage"]>[0]): void {
+  if (room.isFull) {
+    room.sendError(peerId, "これ以上オブジェクトを置けません");
+    return;
+  }
+  if (verifying >= MAX_CONCURRENT_VERIFY) {
+    room.sendError(peerId, "処理中の画像が多すぎます。少し待ってからやり直してください");
+    return;
+  }
+  verifying++;
+  ipfs
+    .fetchAndPin(place.cid)
+    .then(() => {
+      if (room.addImage(place)) console.log(`[place_image] ${place.cid} by ${peerId}`);
+      else room.sendError(peerId, "これ以上オブジェクトを置けません");
+    })
+    .catch((err: unknown) => {
+      if (!(err instanceof ImageRejected)) console.warn("[place_image] unexpected error:", err);
+      room.sendError(peerId, err instanceof ImageRejected ? err.message : "画像を置けませんでした");
+    })
+    .finally(() => {
+      verifying--;
+    });
+}
 
 wss.on("connection", (ws) => {
   let peerId: string | null = null;
@@ -40,16 +58,13 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "pose") {
       if (!peerId) return; // join 前は無視
       room.setPose(peerId, msg.pose);
+    } else if (msg.type === "ipfs_peer") {
+      if (!peerId) return;
+      room.announceIpfs(peerId, msg.peerId);
     } else if (msg.type === "place_image") {
       if (!peerId) return;
       const { type: _type, ...place } = msg;
-      if (!images.has(place.imageId)) {
-        room.sendError(peerId, "画像が見つかりません");
-      } else if (!room.addImage(place)) {
-        room.sendError(peerId, "これ以上オブジェクトを置けません");
-      } else {
-        console.log(`[place_image] by ${peerId}`);
-      }
+      placeImage(peerId, place);
     }
   });
 
@@ -77,14 +92,16 @@ const pingTimer = setInterval(() => {
   }
 }, PING_INTERVAL_MS);
 
-httpServer.listen(PORT, () => console.log(`HTTP + WebSocket server listening on :${PORT}`));
+wss.on("listening", () => {
+  console.log(`WebSocket server listening on :${PORT}`);
+  console.log(`IPFS (libp2p ws) listening on :${IPFS_PORT} as ${ipfs.info.peerId}`);
+});
 
 function shutdown(): void {
   clearInterval(pingTimer);
   room.close();
   wss.close();
-  httpServer.close(() => process.exit(0));
-  httpServer.closeAllConnections();
+  void ipfs.stop().finally(() => process.exit(0));
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

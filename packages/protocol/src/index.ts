@@ -5,13 +5,11 @@ export const MAX_NAME_LENGTH = 24;
 export const MAX_MESSAGE_BYTES = 4096;
 export const MAX_ABS_POSITION = 1000;
 
-// 画像オブジェクト
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりのアップロード上限
-export const MAX_IMAGES = 50; // サーバーが保持する画像の最大数
+// 画像オブジェクト (画像本体は IPFS で共有し、ワールドには CID だけを載せる)
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりの上限
 export const MAX_OBJECTS = 100; // ワールドに置けるオブジェクトの最大数
 export const MIN_OBJECT_SIZE = 0.1; // m
 export const MAX_OBJECT_SIZE = 20; // m
-export const IMAGE_UPLOAD_PATH = "/images"; // POST で登録、GET /images/:id で取得
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
@@ -39,7 +37,7 @@ export interface PeerState extends PeerInfo {
 export interface ImageObject {
   id: string;
   kind: "image";
-  imageId: string; // GET /images/:imageId で取得できる
+  cid: string; // 画像 (UnixFS ファイル) の CID。IPFS から取得する
   position: Vec3;
   yaw: number;
   width: number;
@@ -48,14 +46,22 @@ export interface ImageObject {
 
 export type WorldObject = ImageObject;
 
-/** place_image の本体部分 (id はサーバーが採番する)。 */
+/** サーバーの IPFS (libp2p) ノードへの接続情報。ホスト名はクライアントがページの接続先から補う。 */
+export interface IpfsInfo {
+  peerId: string;
+  wsPort: number; // libp2p の WebSocket 待受ポート
+}
+
+/** place_image の本体部分 (id はサーバーが採番する)。サーバーは cid の中身を検証してから置く。 */
 export type PlaceImage = Omit<ImageObject, "id" | "kind">;
 
 // Client -> Server
 export type ClientMessage =
   | { type: "join"; name: string }
   | { type: "pose"; pose: Pose }
-  | ({ type: "place_image" } & PlaceImage);
+  | ({ type: "place_image" } & PlaceImage)
+  // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
+  | { type: "ipfs_peer"; peerId: string };
 
 // Server -> Client
 export type ServerMessage =
@@ -64,9 +70,12 @@ export type ServerMessage =
       self: PeerInfo;
       peers: PeerState[];
       objects: WorldObject[];
+      ipfs: IpfsInfo;
       tickRate: number;
     }
   | { type: "object_added"; object: WorldObject }
+  // 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ接続しに行く
+  | { type: "peer_ipfs"; id: string; ipfsPeerId: string }
   | { type: "peer_joined"; peer: PeerState }
   | { type: "peer_left"; id: string }
   | { type: "snapshot"; time: number; poses: Record<string, Pose> }

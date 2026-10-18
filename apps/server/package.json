@@ -11,10 +11,23 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@helia/bitswap": "^4.0.20",
+    "@helia/libp2p": "^2.1.5",
+    "@helia/unixfs": "^8.0.9",
+    "@libp2p/circuit-relay-v2": "^4.2.15",
+    "@libp2p/identify": "^4.1.16",
+    "@libp2p/noise": "^17.0.5",
+    "@libp2p/websockets": "^10.1.23",
+    "@libp2p/yamux": "^8.0.5",
     "@proto/protocol": "workspace:*",
+    "helia": "^7.1.16",
+    "libp2p": "^3.4.0",
+    "multiformats": "^14.0.5",
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@libp2p/interface": "^3.4.0",
+    "@multiformats/multiaddr": "^13.0.3",
     "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",

@@ -21,7 +21,7 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 | 移動 | デスクトップ操作 (WASD + マウス視点) |
 | アバター | 色付きの簡易アバター (胴体 + 頭) + 名前表示 |
 | 同期 | 全ユーザーの位置・向きをリアルタイム表示 |
-| 画像の配置 | 画像ファイルをドラッグ&ドロップして 3D 空間に置く。全員に同期される |
+| 画像の配置 | 画像ファイルをドラッグ&ドロップして 3D 空間に置く。画像本体は IPFS (CID) で共有し、全員に同期される |
 
 ### 対象外 (後続)
 
@@ -33,20 +33,28 @@ WebXR / VR コントローラ、ボイスチャット、glTF・VRM アバター�
 ```mermaid
 graph LR
     subgraph Browser A
-        CA[client<br/>Vite + R3F]
+        CA[client<br/>Vite + R3F + Helia]
     end
     subgraph Browser B
-        CB[client<br/>Vite + R3F]
+        CB[client<br/>Vite + R3F + Helia]
     end
-    S[server<br/>Node.js + ws]
+    subgraph Server
+        S[server<br/>Node.js + ws]
+        H[Helia ノード<br/>libp2p ws / circuit relay / pin]
+    end
 
-    CA <-->|WebSocket / JSON| S
+    CA <-->|WebSocket / JSON<br/>姿勢・配置・ピア ID| S
     CB <-->|WebSocket / JSON| S
+    CA <-->|libp2p WebSocket<br/>bitswap| H
+    CB <-->|libp2p WebSocket<br/>bitswap| H
+    CA <-.->|WebRTC (直接)<br/>bitswap| CB
 ```
 
 - クライアントは自分の姿勢を一定間隔でサーバーに送る。
 - サーバーは全員の姿勢をまとめて (スナップショット) 一定間隔で全員に配信する。
 - クライアントは受信した他人の姿勢を補間して描画する。自分自身はローカルで即時反映する。
+- 画像は IPFS で共有する。ワールドの同期 (WebSocket) には CID だけを載せ、画像本体は libp2p の bitswap で取得する。
+  取得元は、サーバーの Helia ノード (常に接続・pin 済み) と、直接つながった他のブラウザ (WebRTC)。
 
 ## 4. 技術選定
 
@@ -58,6 +66,7 @@ graph LR
 | XR (後続) | @react-three/xr | WebXR のラッパー |
 | サーバー | Node.js + `ws` | WebSocket のみ必要。フレームワーク不要 |
 | メッセージ形式 | JSON | デバッグ容易。必要になったらバイナリ化 |
+| 画像の共有 | IPFS ([Helia](https://github.com/ipfs/helia) 7 + libp2p) | 画像を内容アドレス (CID) で扱い、ブラウザ同士 (WebRTC) でも配れる |
 
 > Node / pnpm のバージョンは実装着手時に確認して `package.json` の `engines` に記載する。
 
@@ -87,9 +96,10 @@ graph LR
 - 受信した `pose` を最新値としてメモリ上に保持する。
 - 一定間隔 (20Hz) で全ユーザーの姿勢を `snapshot` として配信する。
 - 切断時にユーザーを削除し、`peer_left` を通知する。
-- 同じポートで HTTP も提供し、画像のアップロード (`POST /images`) と配信 (`GET /images/:id`) を行う。
-  画像はメモリ上に保持し、形式はマジックナンバーで判定する (PNG / JPEG / GIF / WebP のみ)。
-- `place_image` を受けたらワールドのオブジェクトとして登録し、`object_added` を全員に通知する。
+- 同じプロセスで Helia (IPFS) ノードを動かす。libp2p の WebSocket で待ち受け (既定 8081)、ブラウザの接続先 (bootstrap) と circuit relay (ブラウザ同士の接続の仲介) を兼ねる。
+- `place_image` を受けたら、CID の中身を IPFS から取得して検証 (サイズ上限・画像形式をマジックナンバーで判定) し、pin してから `object_added` を全員に通知する。
+  pin しておくので、置いた人が退室した後も画像を配り続けられる。
+- `ipfs_peer` を受けたら、本人以外に `peer_ipfs` で libp2p ピア ID を知らせる (ブラウザ同士の直接接続用)。
 - 入力値の最低限の検証 (型・数値範囲・名前の長さ) のみ行う。
 
 ### client (`apps/client`)
@@ -98,8 +108,9 @@ graph LR
 - ローカルプレイヤーの入力処理と移動 (クライアント権威)。
 - 自分の姿勢を 20Hz で送信。
 - 他ユーザーのアバターを `snapshot` から生成・更新・削除し、補間表示する。
-- 画像ファイルのドロップを受け付け、ドロップ位置の床に置く (アップロード → `place_image`)。
-- ワールドのオブジェクト (画像) を描画する。
+- ブラウザ内で Helia ノードを動かし、サーバー (と他のブラウザ) に接続する。
+- 画像ファイルのドロップを受け付け、ドロップ位置の床に置く (IPFS に追加 → CID を `place_image` で送る)。
+- ワールドのオブジェクト (画像) を CID で IPFS から取得して描画する。
 
 ### protocol (`packages/protocol`)
 
@@ -114,9 +125,9 @@ graph LR
 | 1 ワールド・1 ルーム | ルーム ID を持たない | スコープ削減。将来はルーム ID をメッセージに追加 |
 | 認証なし | 表示名のみ | プロトタイプの目的外 |
 | 永続化なし | サーバー再起動で状態は消える (置かれた画像も) | 同上 |
-| 画像は HTTP で別送 | WebSocket (JSON, 4KB 上限) には載せず、`POST /images` でアップロードして ID だけを送る | 大きなバイナリでリアルタイム同期を詰まらせない。キャッシュも効く |
-| 画像は ID で参照 | 配置メッセージには `imageId` と位置・サイズだけを載せる | 後から入室した人も `welcome` のオブジェクト一覧から同じ URL で取得できる |
-| 画像の CORS は全許可 | `Access-Control-Allow-Origin: *` | client (Vite) と server が別ポートのため。公開運用では絞る |
+| 画像は IPFS で共有 | WebSocket (JSON, 4KB 上限) には載せず、CID だけを送る。画像本体は bitswap で取得する | 大きなバイナリでリアルタイム同期を詰まらせない。内容アドレスなので改ざんできず、同じ画像は同じ CID になる |
+| サーバーが検証して pin | `place_image` の CID をサーバーが取得・検証 (サイズ・形式) してから配置する | 不正なデータを全員に配らない。置いた人が退室しても画像が残る (サーバーが常駐の提供元になる) |
+| ブラウザ同士は WebRTC で直接接続 | 入室後に libp2p ピア ID を共有し、既存の参加者が新しい参加者へ中継 (circuit relay) 経由で WebRTC 接続する | サーバーの負荷と単一障害点を減らす。通らない環境ではサーバー経由で取得できる |
 
 ## 8. 想定する制約・リスク
 
@@ -124,3 +135,15 @@ graph LR
   将来的に WebRTC DataChannel / WebTransport への移行を検討する。
 - 状態同期の見た目の品質は補間実装に依存する (`design.md` 参照)。
 - WebXR 対応は端末・ブラウザ依存が大きい。デスクトップ操作は常に併存させる。
+- IPFS (libp2p) の制約:
+  - **安全なコンテキストが必須**: Helia / libp2p は Web Crypto (`crypto.subtle`: 鍵のインポート・生成・署名・ダイジェスト) を使う。
+    ブラウザはこれを HTTPS か `localhost` にしか提供しないため、`http://<LAN の IP>` で開いたページでは IPFS を起動できない
+    (`crypto.subtle` が undefined になる)。`digest` だけを補っても `importKey` などで失敗するため、フォールバックは設けていない。
+    クライアントは起動前にこれを検出して HUD に原因を表示する。対処は README を参照 (localhost へのポート転送、開発用の許可設定、HTTPS)。
+  - ブラウザから接続できるのは WebSocket / WebRTC のみ。現状は平文の `ws://` で接続するため、`https://` で配信するページからは混在コンテンツとして拒否される。
+    HTTPS 化するにはページ・ワールド同期 (8080)・libp2p (8081) のすべてを TLS (`wss://`) にし、ドメインと証明書が必要になる。
+  - ブラウザ同士の直接接続 (WebRTC) には STUN が必要で、libp2p の既定 (公開 STUN) に依存している。TURN は使わないため、
+    対称 NAT などでは直接つながらない。その場合もサーバー経由 (bitswap) で画像は取得できる。
+  - 中継の予約は切断しても有効期限 (2 時間) まで残る。ブラウザはページを開くたびに新しいピア ID になるため、
+    予約の上限を 1000 に引き上げている (既定は 15)。
+  - ブロックストアはメモリ上。サーバーを再起動すると pin した画像は消える。

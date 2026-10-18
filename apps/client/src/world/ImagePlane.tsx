@@ -1,18 +1,26 @@
 import { useEffect, useState } from "react";
 import { DoubleSide, SRGBColorSpace, TextureLoader, type Texture } from "three";
 import type { ImageObject } from "@proto/protocol";
-import { imageUrl } from "../net/connection";
+import { getImageUrl } from "../net/ipfs";
 
-/** URL から画像テクスチャを読み込む。読み込み前・失敗時は null (例外は投げない)。 */
-function useImageTexture(url: string): Texture | null {
+/**
+ * CID の画像を IPFS から取得してテクスチャにする。
+ * 取得前・失敗時は null (例外は投げない)。
+ */
+function useImageTexture(cid: string): Texture | null {
   const [texture, setTexture] = useState<Texture | null>(null);
 
   useEffect(() => {
     let disposed = false;
     let loaded: Texture | null = null;
-    new TextureLoader().load(
-      url,
-      (t) => {
+    getImageUrl(cid)
+      .then(
+        (url) =>
+          new Promise<Texture>((resolve, reject) => {
+            new TextureLoader().load(url, resolve, undefined, () => reject(new Error("decode failed")));
+          }),
+      )
+      .then((t) => {
         if (disposed) {
           t.dispose();
           return;
@@ -21,24 +29,23 @@ function useImageTexture(url: string): Texture | null {
         t.anisotropy = 8;
         loaded = t;
         setTexture(t);
-      },
-      undefined,
-      () => {
-        // 読み込み失敗時はプレースホルダーのままにする
-      },
-    );
+      })
+      .catch((err: unknown) => {
+        // 取得失敗時はプレースホルダーのままにする
+        console.warn(`[image] ${cid}:`, err);
+      });
     return () => {
       disposed = true;
       loaded?.dispose();
     };
-  }, [url]);
+  }, [cid]);
 
   return texture;
 }
 
 /** ワールドに置かれた画像。position は下辺中央、鉛直に立ち、法線は +Z を yaw 回したもの。 */
 export function ImagePlane({ object }: { object: ImageObject }) {
-  const texture = useImageTexture(imageUrl(object.imageId));
+  const texture = useImageTexture(object.cid);
   return (
     <group position={object.position} rotation={[0, object.yaw, 0]}>
       <mesh position={[0, object.height / 2, 0]}>

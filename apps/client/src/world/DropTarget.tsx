@@ -2,7 +2,8 @@ import { useEffect } from "react";
 import { useThree } from "@react-three/fiber";
 import { Plane, Raycaster, Vector2, Vector3, type Camera } from "three";
 import { MAX_IMAGE_BYTES, MIN_OBJECT_SIZE } from "@proto/protocol";
-import { sendPlaceImage, showNotice, uploadImage, useNet } from "../net/connection";
+import { sendPlaceImage, showNotice, useNet } from "../net/connection";
+import { addImage } from "../net/ipfs";
 
 const IMAGE_LONG_EDGE = 2.5; // 置く画像の長辺 (m)
 const GAP = 0.3; // 複数枚を同時に置くときの間隔 (m)
@@ -75,7 +76,7 @@ async function prepare(file: File): Promise<Prepared | null> {
   return { file, width, height };
 }
 
-/** ドロップされた画像をアップロードし、ドロップ地点に (複数なら横並びで) 置く。 */
+/** ドロップされた画像を IPFS に追加し、ドロップ地点に (複数なら横並びで) 置く。 */
 async function placeFiles(files: File[], point: Vector3, from: Vector3): Promise<void> {
   const prepared = (await Promise.all(files.map(prepare))).filter((p): p is Prepared => p !== null);
   if (prepared.length === 0) return;
@@ -86,21 +87,21 @@ async function placeFiles(files: File[], point: Vector3, from: Vector3): Promise
   const total = prepared.reduce((sum, p) => sum + p.width, 0) + GAP * (prepared.length - 1);
   let cursor = -total / 2;
 
-  showNotice("画像をアップロード中...");
+  showNotice("画像を IPFS に追加中...");
   for (const p of prepared) {
     const center = point.clone().addScaledVector(right, cursor + p.width / 2);
     cursor += p.width + GAP;
     try {
-      const imageId = await uploadImage(p.file);
+      const cid = await addImage(p.file);
       sendPlaceImage({
-        imageId,
+        cid,
         position: [center.x, 0, center.z],
         yaw,
         width: p.width,
         height: p.height,
       });
     } catch (e) {
-      showNotice(e instanceof Error ? e.message : "画像のアップロードに失敗しました");
+      showNotice(e instanceof Error ? e.message : "画像を IPFS に追加できませんでした");
       return;
     }
   }

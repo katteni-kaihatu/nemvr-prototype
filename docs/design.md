@@ -38,7 +38,7 @@ interface PeerState extends PeerInfo {
 interface ImageObject {
   id: string;      // サーバーが採番
   kind: "image";
-  imageId: string; // GET /images/:imageId で取得できる
+  cid: string;     // 画像 (UnixFS ファイル) の CID。IPFS から取得する
   position: Vec3;
   yaw: number;
   width: number;   // 0.1〜20
@@ -56,14 +56,16 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 |---|---|---|
 | `join` | `name: string` | 入室要求。接続後に最初に 1 回だけ送る |
 | `pose` | `pose: Pose` | 自分の姿勢。20Hz で送信 |
-| `place_image` | `imageId`, `position`, `yaw`, `width`, `height` | アップロード済みの画像を置く (`ImageObject` から `id` / `kind` を除いたもの) |
+| `place_image` | `cid`, `position`, `yaw`, `width`, `height` | IPFS に追加済みの画像を置く (`ImageObject` から `id` / `kind` を除いたもの)。サーバーが中身を検証してから配置する |
+| `ipfs_peer` | `peerId: string` | 自分の libp2p ピア ID を知らせる。他のブラウザから WebRTC で接続してもらえる状態になってから送る |
 
 ### Server → Client
 
 | type | フィールド | 説明 |
 |---|---|---|
-| `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: ImageObject[]`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト |
+| `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: ImageObject[]`, `ipfs: { peerId, wsPort }`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト、サーバーの IPFS ノードの接続情報 |
 | `object_added` | `object: ImageObject` | オブジェクトが置かれた (置いた本人を含む全員へ) |
+| `peer_ipfs` | `id: string`, `ipfsPeerId: string` | 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ WebRTC で接続しに行く |
 | `peer_joined` | `peer: PeerState` | 他ユーザーの入室 |
 | `peer_left` | `id: string` | 他ユーザーの退室 |
 | `snapshot` | `time: number`, `poses: Record<id, Pose>` | 全ユーザーの最新姿勢。20Hz |
@@ -87,18 +89,42 @@ sequenceDiagram
     S-->>Others: peer_left {id}
 ```
 
-### 画像の HTTP API
+### 画像の共有 (IPFS)
 
-同じポートで提供する。CORS は全オリジン許可 (プロトタイプ)。
+画像本体は WebSocket に載せず、IPFS (Helia 7 / libp2p) で共有する。ワールドには CID だけを載せる。
 
-| メソッド / パス | 説明 |
-|---|---|
-| `POST /images` | body に画像のバイト列。成功: `201 {"id": "<uuid>"}`。`413` サイズ超過 (5MB) / `415` 非対応形式 / `507` 保持上限 (50 枚) |
-| `GET /images/:id` | 画像本体。サーバーが判定した `Content-Type` と `nosniff` を付ける。ID は UUID で内容は不変のため長期キャッシュ可 |
+```mermaid
+sequenceDiagram
+    participant A as Client A (置く人)
+    participant S as Server (WS + Helia)
+    participant B as Client B
 
-- 形式は先頭バイトで判定する (クライアント申告の Content-Type は信用しない)。SVG は XSS の恐れがあるため対象外。
-- 置く手順: `POST /images` で `imageId` を得る → WebSocket で `place_image` を送る → サーバーが `object_added` を全員に配信する。
-- `place_image` の `imageId` はアップロード済みのものに限る。オブジェクト数の上限は 100。
+    A->>S: libp2p 接続 (ws://host:8081, bitswap)
+    A->>A: fs.addBytes(画像) → CID
+    A->>S: place_image {cid, position, ...}
+    S->>A: bitswap で CID を取得 (サイズ・形式を検証)
+    S->>S: pin
+    S-->>A: object_added
+    S-->>B: object_added
+    B->>S: bitswap で CID を取得 (または A から直接)
+    B->>B: blob URL → テクスチャ
+```
+
+- **サーバーの Helia ノード**: libp2p の WebSocket (`IPFS_PORT`, 既定 8081) で待ち受ける。ブラウザの接続先、circuit relay、pin 済み画像の提供元を兼ねる。
+  ブロックストアはメモリ上 (再起動で消える)。
+- **ブラウザの Helia ノード**: 入室 (`welcome`) 後に起動し、`welcome.ipfs` とページのホスト名から組み立てた
+  `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` でサーバーに接続する。
+  トランスポートは WebSocket / WebRTC / circuit relay。ルーティング (DHT・公開ゲートウェイ) は使わない。
+- **取得**: CID を `unixfs.cat` で取得し (上限 5MB・30 秒)、Blob → blob URL → `TextureLoader` で読み込む。CID ごとにキャッシュする。
+  失敗したら灰色の板のままにする。
+- **検証 (server)**: `place_image` の CID を取得しながら、5MB を超えたら中止、先頭バイトが PNG / JPEG / GIF / WebP でなければ拒否 (SVG は不可)、
+  20 秒で取得できなければ拒否する。通ったら pin する (pin 済みの CID は何もしない)。同時に検証するのは 4 件まで。オブジェクト数の上限は 100。
+- **CID の形式**: UnixFS ファイルの CID (codec は dag-pb / raw、ハッシュは sha2-256) のみ。サーバーは正規化した文字列を保持する。
+- **ブラウザ同士の直接接続**: ブラウザは中継に予約を作り (`/p2p-circuit/webrtc` のアドレスを持つ) 、
+  ダイヤル可能になってから `ipfs_peer` を送る。サーバーは本人以外に `peer_ipfs` を送り、受け取った側が
+  `<サーバーのアドレス>/p2p-circuit/webrtc/p2p/<相手>` へ接続する (既存の参加者 → 新しい参加者の一方向)。
+  接続が確立すると bitswap が直接のピアからも取得するようになる。HUD の `P2P n` は直接接続の数。
+  失敗しても (NAT 越えできないなど) サーバー経由の取得は続く。
 
 ### 検証ルール (server)
 
@@ -107,7 +133,8 @@ sequenceDiagram
 - `pose` の数値が有限 (`Number.isFinite`) でなければ破棄する。
 - 位置は絶対値 1000 を超える場合破棄する。クォータニオンは受信時に正規化する。
 - 1 メッセージの最大サイズは 4KB。超えたら切断する。
-- `place_image`: `imageId` は UUID 形式、`position` は有限かつ絶対値 1000 以下、`yaw` は有限、`width` / `height` は 0.1〜20。
+- `ipfs_peer`: `peerId` は英数字 10〜128 文字。
+- `place_image`: `cid` は dag-pb / raw・sha2-256 の CID (128 文字以内)、`position` は有限かつ絶対値 1000 以下、`yaw` は有限、`width` / `height` は 0.1〜20。
 
 ## 4. 同期方式
 
@@ -153,8 +180,9 @@ main.tsx            エントリ
 App.tsx             画面遷移 (Lobby / World)
 Lobby.tsx           入室画面
 net/
-  connection.ts     WebSocket 接続・送受信、画像アップロード、zustand ストア
-                    (入退室・オブジェクトの「集合」と HUD 通知のみを state にする)
+  connection.ts     WebSocket 接続・送受信、zustand ストア
+                    (入退室・オブジェクトの「集合」・IPFS の状態・HUD 通知のみを state にする)
+  ipfs.ts           ブラウザ内の Helia ノード (起動・サーバー接続・画像の追加と取得・ピアへの直接接続)
   interpolation.ts  スナップショットバッファと補間
 world/
   World.tsx         <Canvas>、ライト、床、静的ボックス、HUD
@@ -162,7 +190,7 @@ world/
   RemoteAvatar.tsx  他ユーザー 1 人分の描画
   Avatar.tsx        アバター見た目 + 名前タグ (canvas テクスチャの Sprite)
   DropTarget.tsx    画像ファイルのドロップ処理 (床への raycast、アップロード、配置)
-  ImagePlane.tsx    置かれた画像 1 枚の描画 (テクスチャ読み込み)
+  ImagePlane.tsx    置かれた画像 1 枚の描画 (CID から IPFS で取得してテクスチャ化)
 ```
 
 ### 状態管理の注意
@@ -201,7 +229,7 @@ world/
    当たらない (地平線より上) / 20m より遠い場合は、視線方向 4m 先の床にする。範囲はワールド内に丸める。
 3. 画像の長辺を 2.5m に正規化してサイズを決める (縦横比を保つ)。
 4. 置いた人の方を向くよう `yaw` を決める。複数ファイルは `right` 方向に間隔 0.3m で横並びにする。
-5. `POST /images` でアップロードし、得た `imageId` で `place_image` を送る。
+5. IPFS に追加して CID を得て、`place_image` を送る (ブラウザの IPFS ノードがサーバーに接続済みである必要がある)。
 6. `object_added` を受けた全員 (本人含む) が `ImagePlane` を描画する。本人もサーバー経由で表示する (経路を 1 本にするため)。
 
 - `drop` 以外の場所にドロップしてもブラウザがページ遷移しないよう、`window` の `dragover` / `drop` も抑止する。
@@ -213,10 +241,10 @@ world/
 ### モジュール構成 (apps/server/src)
 
 ```
-index.ts     起動 (HTTP サーバー + WebSocketServer)
+index.ts     起動 (WebSocketServer、画像の検証と配置の受け付け)
 room.ts      Room クラス: ピア管理、オブジェクト管理、snapshot ループ
-http.ts      画像のアップロード / 配信
-images.ts    ImageStore (メモリ保持)、マジックナンバーによる形式判定
+ipfs.ts      Helia ノード (libp2p ws / circuit relay)、CID の取得・検証・pin
+images.ts    マジックナンバーによる画像形式の判定
 validate.ts  受信メッセージの検証・正規化
 ```
 
@@ -224,7 +252,8 @@ validate.ts  受信メッセージの検証・正規化
 
 | 名前 | 既定値 | 説明 |
 |---|---|---|
-| `PORT` | `8080` | HTTP / WebSocket 待受ポート |
+| `PORT` | `8080` | WebSocket (ワールド同期) の待受ポート |
+| `IPFS_PORT` | `8081` | libp2p の WebSocket の待受ポート。ブラウザから到達できる必要がある |
 
 ### 色の割り当て
 

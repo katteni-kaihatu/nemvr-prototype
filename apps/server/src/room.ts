@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   MAX_OBJECTS,
+  type IpfsInfo,
   TICK_RATE,
   type PeerInfo,
   type PeerState,
@@ -25,6 +26,8 @@ interface Peer {
 }
 
 export class Room {
+  constructor(private readonly ipfs: IpfsInfo) {}
+
   private peers = new Map<string, Peer>();
   private objects = new Map<string, WorldObject>();
   private joinCount = 0;
@@ -46,6 +49,7 @@ export class Room {
       self: info,
       peers: others,
       objects: [...this.objects.values()],
+      ipfs: this.ipfs,
       tickRate: TICK_RATE,
     });
     this.broadcast({ type: "peer_joined", peer: state }, id);
@@ -67,6 +71,11 @@ export class Room {
     return true;
   }
 
+  /** ピアの libp2p ID を本人以外に知らせる (受け取った側が直接接続しに行く)。 */
+  announceIpfs(id: string, ipfsPeerId: string): void {
+    if (this.peers.has(id)) this.broadcast({ type: "peer_ipfs", id, ipfsPeerId }, id);
+  }
+
   /** 1 人にだけエラーを通知する (切断はしない)。 */
   sendError(id: string, message: string): void {
     const peer = this.peers.get(id);
@@ -77,6 +86,10 @@ export class Room {
     if (!this.peers.delete(id)) return;
     this.broadcast({ type: "peer_left", id });
     if (this.peers.size === 0) this.stopTimer();
+  }
+
+  get isFull(): boolean {
+    return this.objects.size >= MAX_OBJECTS;
   }
 
   get size(): number {
