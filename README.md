@@ -4,7 +4,7 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 最初のゴールは「複数ユーザーがアクセスできる 3D 空間」。
 
 - スタック: TypeScript / Three.js (React Three Fiber) / Node.js + WebSocket
-- ステータス: M1 実装済み (複数ユーザーが入室し、互いのアバターが見える)
+- ステータス: M2 実装済み (複数ユーザーが入室し、画像をドラッグ&ドロップで 3D 空間に置ける)
 
 ## 起動方法
 
@@ -15,6 +15,9 @@ pnpm dev   # server (ws://localhost:8080) と client (http://localhost:5173) を
 
 ブラウザで `http://localhost:5173` を複数タブで開き、名前を入力して入室する。
 クリックで視点操作開始、WASD で移動、Esc で解除。
+画像ファイル (PNG / JPEG / GIF / WebP, 5MB まで) を画面にドラッグ&ドロップすると、
+ドロップ位置の床に置かれ、全員に表示される (視点操作中は Esc で解除してからドラッグする)。
+画像はサーバーのメモリ上にのみ保持され、再起動で消える。
 
 別ホストの server に繋ぐ場合は `VITE_WS_URL=ws://host:8080` を指定する。
 

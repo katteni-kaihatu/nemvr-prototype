@@ -1,5 +1,8 @@
+import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { MAX_MESSAGE_BYTES } from "@proto/protocol";
+import { createHttpHandler } from "./http.js";
+import { ImageStore } from "./images.js";
 import { Room } from "./room.js";
 import { parseClientMessage } from "./validate.js";
 
@@ -7,7 +10,17 @@ const PORT = Number(process.env.PORT ?? 8080);
 const PING_INTERVAL_MS = 30_000;
 
 const room = new Room();
-const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_MESSAGE_BYTES });
+const images = new ImageStore();
+
+// 同じポートで HTTP (画像のアップロード・配信) と WebSocket (同期) を提供する
+const httpServer = createServer((req, res) => {
+  createHttpHandler(images)(req, res).catch((err: unknown) => {
+    console.warn("[http error]", err);
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  });
+});
+const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_MESSAGE_BYTES });
 const alive = new WeakSet<WebSocket>();
 
 wss.on("connection", (ws) => {
@@ -27,6 +40,16 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "pose") {
       if (!peerId) return; // join 前は無視
       room.setPose(peerId, msg.pose);
+    } else if (msg.type === "place_image") {
+      if (!peerId) return;
+      const { type: _type, ...place } = msg;
+      if (!images.has(place.imageId)) {
+        room.sendError(peerId, "画像が見つかりません");
+      } else if (!room.addImage(place)) {
+        room.sendError(peerId, "これ以上オブジェクトを置けません");
+      } else {
+        console.log(`[place_image] by ${peerId}`);
+      }
     }
   });
 
@@ -54,12 +77,14 @@ const pingTimer = setInterval(() => {
   }
 }, PING_INTERVAL_MS);
 
-wss.on("listening", () => console.log(`WebSocket server listening on :${PORT}`));
+httpServer.listen(PORT, () => console.log(`HTTP + WebSocket server listening on :${PORT}`));
 
 function shutdown(): void {
   clearInterval(pingTimer);
   room.close();
-  wss.close(() => process.exit(0));
+  wss.close();
+  httpServer.close(() => process.exit(0));
+  httpServer.closeAllConnections();
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

@@ -1,7 +1,10 @@
 import {
   MAX_ABS_POSITION,
   MAX_NAME_LENGTH,
+  MAX_OBJECT_SIZE,
+  MIN_OBJECT_SIZE,
   type ClientMessage,
+  type PlaceImage,
   type Pose,
   type Quat,
   type Vec3,
@@ -32,6 +35,22 @@ export function parsePose(v: unknown): Pose | null {
   return { position: position as Vec3, head: q };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function isSize(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= MIN_OBJECT_SIZE && v <= MAX_OBJECT_SIZE;
+}
+
+export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
+  const { imageId, position, yaw, width, height } = v;
+  if (typeof imageId !== "string" || !UUID_RE.test(imageId)) return null;
+  if (!isFiniteArray(position, 3)) return null;
+  if (position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
+  if (typeof yaw !== "number" || !Number.isFinite(yaw)) return null;
+  if (!isSize(width) || !isSize(height)) return null;
+  return { imageId, position: position as Vec3, yaw, width, height };
+}
+
 export function sanitizeName(raw: unknown, fallbackSuffix: string): string {
   const name = typeof raw === "string" ? raw.trim().slice(0, MAX_NAME_LENGTH) : "";
   return name.length > 0 ? name : `Guest-${fallbackSuffix}`;
@@ -54,6 +73,10 @@ export function parseClientMessage(text: string): ClientMessage | null {
     case "pose": {
       const pose = parsePose(msg.pose);
       return pose ? { type: "pose", pose } : null;
+    }
+    case "place_image": {
+      const place = parsePlaceImage(msg);
+      return place ? { type: "place_image", ...place } : null;
     }
     default:
       return null;

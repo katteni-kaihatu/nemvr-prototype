@@ -1,6 +1,8 @@
 import { Canvas } from "@react-three/fiber";
 import { Grid } from "@react-three/drei";
 import { useNet } from "../net/connection";
+import { DropTarget } from "./DropTarget";
+import { ImagePlane } from "./ImagePlane";
 import { LocalPlayer } from "./LocalPlayer";
 import { RemoteAvatar } from "./RemoteAvatar";
 
@@ -15,6 +17,7 @@ const BOXES: { pos: [number, number, number]; size: number; color: string }[] = 
 
 export function World() {
   const peers = useNet((s) => s.peers);
+  const objects = useNet((s) => s.objects);
 
   return (
     <>
@@ -44,7 +47,12 @@ export function World() {
           </mesh>
         ))}
 
+        {Object.values(objects).map((o) => (
+          <ImagePlane key={o.id} object={o} />
+        ))}
+
         <LocalPlayer />
+        <DropTarget />
         {Object.values(peers).map((p) => (
           <RemoteAvatar key={p.id} peer={p} />
         ))}
@@ -56,6 +64,7 @@ export function World() {
 
 function HUD({ count }: { count: number }) {
   const self = useNet((s) => s.self);
+  const notice = useNet((s) => s.notice);
   return (
     <div
       style={{
@@ -74,6 +83,8 @@ function HUD({ count }: { count: number }) {
         {self?.name} / 接続中: {count} 人
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Esc で解除</div>
+      <div style={{ opacity: 0.7 }}>画像ファイルをドロップして配置 (視点操作中は Esc で解除してから)</div>
+      {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
     </div>
   );
 }

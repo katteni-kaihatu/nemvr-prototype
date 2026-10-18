@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
+  MAX_OBJECTS,
   TICK_RATE,
   type PeerInfo,
   type PeerState,
+  type PlaceImage,
   type Pose,
   type ServerMessage,
+  type WorldObject,
 } from "@proto/protocol";
 import { sanitizeName } from "./validate.js";
 
@@ -23,6 +26,7 @@ interface Peer {
 
 export class Room {
   private peers = new Map<string, Peer>();
+  private objects = new Map<string, WorldObject>();
   private joinCount = 0;
   private timer: NodeJS.Timeout | null = null;
 
@@ -37,7 +41,13 @@ export class Room {
     const others = [...this.peers.values()].map((p) => p.state);
     this.peers.set(id, { socket, state });
 
-    this.send(socket, { type: "welcome", self: info, peers: others, tickRate: TICK_RATE });
+    this.send(socket, {
+      type: "welcome",
+      self: info,
+      peers: others,
+      objects: [...this.objects.values()],
+      tickRate: TICK_RATE,
+    });
     this.broadcast({ type: "peer_joined", peer: state }, id);
     this.startTimer();
     return state;
@@ -46,6 +56,21 @@ export class Room {
   setPose(id: string, pose: Pose): void {
     const peer = this.peers.get(id);
     if (peer) peer.state.pose = pose;
+  }
+
+  /** 画像オブジェクトを追加して全員に通知する。上限に達していたら false。 */
+  addImage(place: PlaceImage): boolean {
+    if (this.objects.size >= MAX_OBJECTS) return false;
+    const object: WorldObject = { id: randomUUID(), kind: "image", ...place };
+    this.objects.set(object.id, object);
+    this.broadcast({ type: "object_added", object });
+    return true;
+  }
+
+  /** 1 人にだけエラーを通知する (切断はしない)。 */
+  sendError(id: string, message: string): void {
+    const peer = this.peers.get(id);
+    if (peer) this.send(peer.socket, { type: "error", message });
   }
 
   leave(id: string): void {

@@ -39,6 +39,30 @@ describe("parseClientMessage", () => {
       ),
     ).toMatchObject({ type: "pose" });
   });
+  describe("place_image", () => {
+    const valid = {
+      type: "place_image",
+      imageId: "123e4567-e89b-12d3-a456-426614174000",
+      position: [1, 0, -2],
+      yaw: 1.5,
+      width: 2,
+      height: 1.5,
+    };
+    it("accepts a valid message", () => {
+      expect(parseClientMessage(JSON.stringify(valid))).toEqual(valid);
+    });
+    it("rejects invalid fields", () => {
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...valid, ...patch }));
+      expect(bad({ imageId: "../etc/passwd" })).toBeNull();
+      expect(bad({ position: [1, 0] })).toBeNull();
+      expect(bad({ position: [5000, 0, 0] })).toBeNull();
+      expect(bad({ yaw: "1" })).toBeNull();
+      expect(bad({ width: 0 })).toBeNull();
+      expect(bad({ height: 1000 })).toBeNull();
+      expect(bad({ width: null })).toBeNull();
+    });
+  });
+
   it("returns null for garbage", () => {
     expect(parseClientMessage("not json")).toBeNull();
     expect(parseClientMessage("123")).toBeNull();
