@@ -23,7 +23,9 @@ function serverMultiaddr(info: IpfsInfo): string {
     : host.includes(":")
       ? `/ip6/${host.replace(/^\[|\]$/g, "")}`
       : `/dns4/${host}`;
-  return `${prefix}/tcp/${info.wsPort}/ws/p2p/${info.peerId}`;
+  // HTTPS のページからは TLS (wss) でしか接続できない。リバースプロキシが TLS を終端する前提
+  const transport = location.protocol === "https:" ? "tls/ws" : "ws";
+  return `${prefix}/tcp/${info.wsPort}/${transport}/p2p/${info.peerId}`;
 }
 
 /** WebRTC (ブラウザ同士の直接接続) の接続数を通知するコールバック。 */

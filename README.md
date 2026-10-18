@@ -52,3 +52,4 @@ pnpm test        # 単体テスト
 - [アーキテクチャ](docs/architecture.md) - スコープ、全体構成、技術選定、設計判断
 - [詳細設計](docs/design.md) - プロトコル、同期方式、クライアント / サーバー内部設計
 - [マイルストーン](docs/milestones.md) - 段階的な進め方
+- [デプロイ (VPS)](docs/deploy.md) - インターネット公開の構成 (Caddy + HTTPS / wss)、手順、注意点

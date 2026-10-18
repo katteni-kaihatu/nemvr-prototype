@@ -35,16 +35,29 @@ export interface IpfsNode {
  */
 export async function startIpfs(
   wsPort: number,
-  { fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS }: { fetchTimeoutMs?: number } = {},
+  {
+    fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
+    host = "0.0.0.0",
+    publicPort = wsPort,
+  }: {
+    fetchTimeoutMs?: number;
+    /** libp2p の WebSocket を待ち受けるアドレス。リバースプロキシの背後なら 127.0.0.1。 */
+    host?: string;
+    /** ブラウザから見たポート (リバースプロキシで変わる場合)。クライアントへ `welcome` で伝える。 */
+    publicPort?: number;
+  } = {},
 ): Promise<IpfsNode> {
   const helia = await withBitswap(
     withLibp2pLight(createHeliaLight(), {
-      addresses: { listen: [`/ip4/0.0.0.0/tcp/${wsPort}/ws`] },
+      addresses: { listen: [`/ip4/${host}/tcp/${wsPort}/ws`] },
       transports: [webSockets()],
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       // ローカル / 私設ネットワークのアドレスへの接続を許可する (プロトタイプ)
       connectionGater: { denyDialMultiaddr: () => false },
+      // リバースプロキシの背後では全クライアントが同じホスト (127.0.0.1) から来るように見える。
+      // 既定の「同一ホストから 1 秒に 5 接続まで」だと、入室が重なっただけで拒否されてしまう
+      connectionManager: { inboundConnectionThreshold: 100 },
       services: {
         identify: identify(),
         relay: circuitRelayServer({
@@ -101,7 +114,7 @@ export async function startIpfs(
   }
 
   return {
-    info: { peerId: helia.libp2p.peerId.toString(), wsPort },
+    info: { peerId: helia.libp2p.peerId.toString(), wsPort: publicPort },
     fetchAndPin,
     stop: async () => {
       await helia.stop();

@@ -7,6 +7,15 @@
 
 ### Added
 
+- VPS へのデプロイ構成 (`deploy/`, `docs/deploy.md`)。Caddy が TLS を終端し、`https://HOST/` (静的ファイル)、`wss://HOST/ws` (ワールド同期)、
+  `wss://HOST:8443` (IPFS / libp2p) を公開する。アプリ本体は非 root の systemd サービスとして 127.0.0.1 でのみ待ち受ける。
+  - `deploy/setup-vps.sh`: Node.js (公式 tarball を SHA256 検証) / pnpm / Caddy / ufw の導入、ユーザー・サービス・Caddyfile・ファイアウォールの設定 (冪等)。
+  - `deploy/deploy.sh`: ビルド → rsync → VPS で依存導入 → 再起動。
+  - サーバー: 環境変数 `HOST` (待ち受けアドレス)、`IPFS_PUBLIC_PORT` (ブラウザから見た libp2p のポート) を追加。
+    リバースプロキシの背後では全クライアントが同一ホストに見えるため、libp2p の同一ホストからの受信接続の上限 (既定 1 秒 5 件) を 100 に引き上げた。
+  - クライアント: HTTPS で開かれたときは、ワールド同期を `wss://<オリジン>/ws`、libp2p を `/tls/ws` で接続する (HTTP の挙動は従来どおり)。
+  - 開発時のみ `window.__net` (ストア) を公開 (E2E 用)。
+
 - 画像の同期・共有に IPFS (Helia 7 + libp2p) を使用 (M3)。
   - サーバー: Helia ノードを同じプロセスで起動 (libp2p WebSocket :8081、既定。`IPFS_PORT` で変更)。
     ブラウザの接続先、circuit relay、pin 済み画像の提供元を兼ねる。
@@ -69,6 +78,11 @@
 
 ### Notes
 
+- VPS (`https://172-104-89-28.ip.linodeusercontent.com/`) へのインターネット公開を確認済み: Let's Encrypt の証明書が自動取得され (HTTP/2、http → https へ 308)、
+  `wss://HOST/ws` と `wss://HOST:8443` (libp2p) が通る。公開 URL に対してヘッドレス Firefox で、入室・IPFS 接続・画像の配置・退室後に入室した人への表示を確認した
+  (WebRTC が通る場合は P2P 1、通らない場合はサーバー経由で画像が表示される)。
+  公開には VPS の手前のネットワーク (Linode の Cloud Firewall 等) で受信 TCP 80 / 443 / 8443 の許可が必要だった (ufw だけでは届かない)。
+  実機のブラウザ (別マシン・Chrome 系) からの確認は未実施。
 - マイルストーン M0 / M1 に相当。ヘッドレス Firefox (puppeteer-core) で、2 ブラウザの入室・移動の同期・退室を確認済み。
 - 画像配置機能はヘッドレス Firefox で、複数クライアントへの同期・後から入室した人への表示・複数ファイル配置・拒否ケースを確認済み。
 - IPFS: WebRTC が通る環境では、サーバーが持たない画像をブラウザ間で直接取得できること (サーバーを介さないと取得に失敗することも比較して確認)、

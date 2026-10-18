@@ -22,7 +22,9 @@ export const INTERPOLATION_DELAY_MS = 100;
 
 const WS_URL =
   (import.meta.env.VITE_WS_URL as string | undefined) ??
-  `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8080`;
+  (location.protocol === "https:"
+    ? `wss://${location.host}/ws` // HTTPS 配信時は、リバースプロキシが /ws をサーバーへ転送する前提
+    : `ws://${location.hostname}:8080`);
 
 interface NetState {
   status: "idle" | "connecting" | "connected";
@@ -216,4 +218,9 @@ export function connect(name: string): void {
 
 export function disconnect(): void {
   socket?.close();
+}
+
+// 開発時のみ、E2E テストやコンソールから状態を確認できるようにする
+if (import.meta.env.DEV) {
+  (window as unknown as { __net: unknown }).__net = useNet;
 }

@@ -6,12 +6,16 @@ import { parseClientMessage } from "./validate.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const IPFS_PORT = Number(process.env.IPFS_PORT ?? 8081);
+// リバースプロキシ (TLS 終端) の背後で動かすときは HOST=127.0.0.1、
+// ブラウザから見た libp2p のポートが IPFS_PORT と違う場合は IPFS_PUBLIC_PORT で指定する
+const HOST = process.env.HOST ?? "0.0.0.0";
+const IPFS_PUBLIC_PORT = Number(process.env.IPFS_PUBLIC_PORT ?? IPFS_PORT);
 const PING_INTERVAL_MS = 30_000;
 const MAX_CONCURRENT_VERIFY = 4; // 同時に検証 (IPFS から取得) する画像の数
 
-const ipfs = await startIpfs(IPFS_PORT);
+const ipfs = await startIpfs(IPFS_PORT, { host: HOST, publicPort: IPFS_PUBLIC_PORT });
 const room = new Room(ipfs.info);
-const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_MESSAGE_BYTES });
+const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: MAX_MESSAGE_BYTES });
 const alive = new WeakSet<WebSocket>();
 let verifying = 0;
 
@@ -93,8 +97,8 @@ const pingTimer = setInterval(() => {
 }, PING_INTERVAL_MS);
 
 wss.on("listening", () => {
-  console.log(`WebSocket server listening on :${PORT}`);
-  console.log(`IPFS (libp2p ws) listening on :${IPFS_PORT} as ${ipfs.info.peerId}`);
+  console.log(`WebSocket server listening on ${HOST}:${PORT}`);
+  console.log(`IPFS (libp2p ws) listening on ${HOST}:${IPFS_PORT} (public port ${IPFS_PUBLIC_PORT}) as ${ipfs.info.peerId}`);
 });
 
 function shutdown(): void {
