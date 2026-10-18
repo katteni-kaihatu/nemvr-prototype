@@ -1,6 +1,5 @@
-import type { RefObject } from "react";
-import type { Group } from "three";
-import { Html } from "@react-three/drei";
+import { useEffect, useMemo, type RefObject } from "react";
+import { CanvasTexture, SRGBColorSpace, type Group } from "three";
 
 export const EYE_HEIGHT = 1.6;
 
@@ -36,22 +35,47 @@ export function Avatar({ color, name, rootRef, headRef }: AvatarProps) {
           <meshBasicMaterial color="#ffffff" />
         </mesh>
       </group>
-      <Html position={[0, EYE_HEIGHT + 0.4, 0]} center distanceFactor={8} zIndexRange={[10, 0]}>
-        <div
-          style={{
-            background: "rgba(0,0,0,0.6)",
-            color: "#fff",
-            padding: "2px 8px",
-            borderRadius: 4,
-            fontSize: 14,
-            whiteSpace: "nowrap",
-            userSelect: "none",
-            pointerEvents: "none",
-          }}
-        >
-          {name}
-        </div>
-      </Html>
+      <NameTag name={name} />
     </group>
+  );
+}
+
+const TAG_HEIGHT = 0.3; // ワールド上の高さ (m)
+
+/**
+ * 名前タグ。2D canvas に描いたテクスチャを Sprite (常にカメラを向く) で表示する。
+ * drei の Html は Canvas の初回レンダーと同時にマウントされると
+ * タグが消えることがあったため使わない。
+ */
+function NameTag({ name }: { name: string }) {
+  const { texture, aspect } = useMemo(() => {
+    const font = "bold 48px system-ui, sans-serif";
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d")!;
+    ctx.font = font;
+    const h = 72;
+    const w = Math.ceil(ctx.measureText(name).width) + 40;
+    canvas.width = w; // リサイズで描画状態がリセットされる
+    canvas.height = h;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.beginPath();
+    ctx.roundRect(0, 0, w, h, 16);
+    ctx.fill();
+    ctx.font = font;
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(name, w / 2, h / 2 + 3);
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    return { texture, aspect: w / h };
+  }, [name]);
+
+  useEffect(() => () => texture.dispose(), [texture]);
+
+  return (
+    <sprite position={[0, EYE_HEIGHT + 0.35, 0]} scale={[TAG_HEIGHT * aspect, TAG_HEIGHT, 1]}>
+      <spriteMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
+    </sprite>
   );
 }
