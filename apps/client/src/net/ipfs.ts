@@ -209,6 +209,20 @@ export function holdUpload(cid: string): void {
   heldUploads.set(cid, setTimeout(() => releaseUpload(cid), UPLOAD_HOLD_IDLE_MS));
 }
 
+/**
+ * 配り続ける (進捗が来なくても、時間で諦めない)。大きなファイルは、ダウンロードされるまでサーバーが取得しないので、
+ * 置いた人が、取られるまで (または削除されるまで) 配り続ける。やめるときは releaseUpload。
+ */
+export function keepServing(cid: string): void {
+  clearTimeout(heldUploads.get(cid));
+  heldUploads.delete(cid);
+}
+
+/** このブラウザが、いまこの CID を配っているか (自分が置いたファイルは、サーバーを通さずに自分から取れる)。 */
+export function isServing(cid: string): boolean {
+  return servingStore?.isServing(cid) ?? false;
+}
+
 /** サーバーが取り終えた (または、もう取らない) ので、配るのをやめて、索引を捨てる。 */
 export function releaseUpload(cid: string): void {
   clearTimeout(heldUploads.get(cid));

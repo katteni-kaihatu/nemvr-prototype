@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   formatBytes,
   type ClientMessage,
+  type FileObject,
   type PeerInfo,
   type PlaceFile,
   type PlaceImage,
@@ -10,12 +11,14 @@ import {
   type WorldObject,
 } from "@proto/protocol";
 import { resetInteraction, useInteraction } from "../world/interaction";
+import { needsLocalFile } from "./lazyUploads";
 import { PoseBuffer } from "./interpolation";
 import {
   describeError,
   dialPeer,
   holdUpload,
   IpfsUnavailableError,
+  keepServing,
   releaseUpload,
   startIpfs,
   stopIpfs,
@@ -96,6 +99,48 @@ export function expectUpload(cid: string, name: string): void {
   pendingUploads.set(cid, name);
 }
 
+// ---- 大きなファイルの遅延転送: ダウンロードのために、サーバーに取得させて待つ ----
+
+interface PrepareWait {
+  object: FileObject;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** サーバーが保持するのを待っているダウンロード (オブジェクト ID → 待ち)。 */
+const prepareWaits = new Map<string, PrepareWait>();
+/** サーバーから、進捗も完了も失敗も届かない状態がこの時間続いたら、諦める。 */
+const PREPARE_IDLE_MS = 60_000;
+
+function settlePrepare(id: string, error?: Error): void {
+  const wait = prepareWaits.get(id);
+  if (!wait) return;
+  clearTimeout(wait.timer);
+  prepareWaits.delete(id);
+  if (error) wait.reject(error);
+  else wait.resolve();
+}
+
+function armPrepareTimer(wait: PrepareWait): void {
+  clearTimeout(wait.timer);
+  wait.timer = setTimeout(() => settlePrepare(wait.object.id, new Error("サーバーから応答がありません")), PREPARE_IDLE_MS);
+}
+
+/**
+ * まだサーバーが保持していないファイル (大きなファイル) を、サーバーに取得させて、保持されるまで待つ。
+ * ダウンロードされたときに初めて、サーバーが置いた人から取得する。進捗は HUD に表示される。
+ * 失敗 (置いた人が退室した・容量が足りない・削除された・応答がない) は例外で知らせる。
+ */
+export function requestStored(object: FileObject): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const wait: PrepareWait = { object, resolve, reject, timer: undefined as never };
+    armPrepareTimer(wait);
+    prepareWaits.set(object.id, wait);
+    send({ type: "request_file", id: object.id });
+  });
+}
+
 export function sendPlaceFile(place: PlaceFile): void {
   send({ type: "place_file", ...place });
 }
@@ -120,6 +165,7 @@ export function applyLocalObjectPose(id: string, position: [number, number, numb
 }
 
 function reset(): void {
+  for (const id of [...prepareWaits.keys()]) settlePrepare(id, new Error("サーバーとの接続が切れました"));
   pendingUploads.clear();
   resetInteraction();
   void stopIpfs();
@@ -195,6 +241,13 @@ export function connect(name: string): void {
       case "object_updated": {
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
+        if (object.kind === "file") {
+          // ダウンロードのために待っていたファイルを、サーバーが保持した (または、取得できなくなった)
+          if (object.stored) settlePrepare(object.id);
+          else if (object.offline) settlePrepare(object.id, new Error("アップロードした人が退室しているため、取得できません"));
+          // サーバーが保持したので、自分が配り続ける必要はなくなった
+          if (!needsLocalFile(useNet.getState().objects, object.cid, useNet.getState().self?.id)) releaseUpload(object.cid);
+        }
         // 自分がつかもうとしたが、先に他の人がつかんでいた (サーバーに拒否された)
         const interaction = useInteraction.getState();
         const selfId = useNet.getState().self?.id;
@@ -204,10 +257,16 @@ export function connect(name: string): void {
         break;
       }
       case "object_removed": {
+        const removed = useNet.getState().objects[msg.id];
         useNet.setState((s) => {
           const { [msg.id]: _removed, ...rest } = s.objects;
           return { objects: rest };
         });
+        settlePrepare(msg.id, new Error("削除されました"));
+        // 自分が配っていたファイルが、すべて削除された
+        if (removed?.kind === "file" && !needsLocalFile(useNet.getState().objects, removed.cid, useNet.getState().self?.id)) {
+          releaseUpload(removed.cid);
+        }
         const interaction = useInteraction.getState();
         useInteraction.setState({
           hoverId: interaction.hoverId === msg.id ? null : interaction.hoverId,
@@ -224,9 +283,39 @@ export function connect(name: string): void {
       case "object_added": {
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
-        // 自分が置いたものをサーバーが取り終えた。ブラウザ側のブロックは、もう保持しなくてよい
+        const name = pendingUploads.get(object.cid);
         pendingUploads.delete(object.cid);
-        releaseUpload(object.cid);
+        if (object.kind === "file" && !object.stored && object.owner === useNet.getState().self?.id) {
+          // 大きなファイル: サーバーは、ダウンロードされるまで取得しない。それまで、このタブが配り続ける
+          keepServing(object.cid);
+          showNotice(
+            `${name ?? object.name}: 置きました。ダウンロードされるまでデータは送りません (このタブを開いたままにしてください)`,
+            12_000,
+          );
+        } else {
+          // 自分が置いたものをサーバーが取り終えた。ブラウザ側のブロックは、もう配らなくてよい
+          releaseUpload(object.cid);
+        }
+        break;
+      }
+      case "prepare_progress": {
+        // ダウンロードのために、サーバーが、置いた人からファイルを取得している途中 (または順番待ち)
+        for (const wait of prepareWaits.values()) if (wait.object.cid === msg.cid) armPrepareTimer(wait);
+        const name = [...prepareWaits.values()].find((w) => w.object.cid === msg.cid)?.object.name ?? "ファイル";
+        if (msg.queued) {
+          showNotice(`${name}: ダウンロードの準備 (順番待ち)`, 15_000);
+          break;
+        }
+        const amount = msg.total
+          ? `${Math.min(100, Math.floor((msg.loaded / msg.total) * 100))}% (${formatBytes(msg.loaded)} / ${formatBytes(msg.total)})`
+          : formatBytes(msg.loaded);
+        showNotice(`${name}: ダウンロードの準備中 (サーバーが、置いた人から取得しています) ${amount}`, 8000);
+        break;
+      }
+      case "prepare_failed": {
+        for (const wait of [...prepareWaits.values()]) {
+          if (wait.object.cid === msg.cid) settlePrepare(wait.object.id, new Error(msg.message));
+        }
         break;
       }
       case "place_progress": {

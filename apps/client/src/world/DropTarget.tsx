@@ -134,7 +134,7 @@ async function placeFiles(files: File[], point: Vector3, from: Vector3): Promise
         // ファイルのアイコンは床から少し浮かせる。種類 (アイコン) とサイズは、サーバーが中身から決める
         sendPlaceFile({ cid, name: p.file.name, position: [center.x, FILE_FLOAT_HEIGHT, center.z], yaw });
       }
-      showNotice(`${p.file.name}: サーバーへ転送中...`, 6000);
+      // (ここで通知は出さない。サーバーからの進捗や、置けたときの案内が、後から出るので、上書きしてしまう)
     } catch (e) {
       showNotice(e instanceof Error ? e.message : "IPFS に追加できませんでした");
       return;

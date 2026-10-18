@@ -12,6 +12,11 @@ export const MAX_ABS_POSITION = 1000;
 // 画像オブジェクト (画像本体は IPFS で共有し、ワールドには CID だけを載せる)
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりの上限
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // ファイル 1 個あたりの上限 (2 GiB)
+/**
+ * これ以下のファイルは、置いた時点でサーバーが全部取得して保持する (置いた人が退室しても使える)。
+ * これより大きいファイルは、ダウンロードされるまで取得しない (遅延転送)。置いた人が、その間は配り続ける。
+ */
+export const EAGER_FILE_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_OBJECTS = 100; // ワールドに置けるオブジェクトの最大数
 export const MIN_OBJECT_SIZE = 0.1; // m
 export const MAX_OBJECT_SIZE = 20; // m
@@ -69,8 +74,20 @@ export interface FileObject extends ObjectBase {
   cid: string; // ファイル (UnixFS ファイル) の CID
   /** ファイル名。サーバーが sanitizeFileName で整えたもの。 */
   name: string;
-  /** バイト数。サーバーが実際に取得して測った値 (クライアントの申告ではない)。 */
+  /**
+   * バイト数。`stored` なら、サーバーが実際に取得して測った値。
+   * まだなら、ファイルのメタデータから読んだ宣言のサイズ (置いた人の申告。実際の取得のときに、上限を守らせる)。
+   */
   size: number;
+  /**
+   * サーバーが中身を保持しているか。保持していれば、置いた人が退室しても取得できる。
+   * 大きなファイルは、ダウンロードされるまで保持しない (false)。その間は、置いた人 (`owner`) が配る。
+   */
+  stored: boolean;
+  /** まだ保持していないファイルを配っている人 (PeerInfo.id)。`stored` になると無くなる。 */
+  owner?: string;
+  /** 保持しておらず、配っている人も退室した。取得できない。 */
+  offline?: boolean;
   /** アイコンの種類。サーバーが名前と中身から判定する。 */
   category: FileCategory;
 }
@@ -108,6 +125,8 @@ export type ClientMessage =
   | { type: "pose"; pose: Pose }
   | ({ type: "place_image" } & PlaceImage)
   | ({ type: "place_file" } & PlaceFile)
+  // まだサーバーが保持していないファイル (大きなファイル) を、ダウンロードするために、サーバーに取得させる
+  | { type: "request_file"; id: string }
   // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
   | { type: "ipfs_peer"; peerId: string }
   // オブジェクトの操作。つかんでいる間は、つかんだ本人だけが move できる (排他)
@@ -137,6 +156,10 @@ export type ServerMessage =
   // 大きなファイルは数分かかるので、その間も状況が分かるようにする。total はサーバーが分かっていれば (宣言サイズ)
   // queued: 他の転送の順番待ちをしている (まだ取得を始めていない)
   | { type: "place_progress"; cid: string; loaded: number; total?: number; queued?: boolean }
+  // request_file の進捗 (サーバーが、置いた人から取得している途中)。要求した人にだけ送る
+  | { type: "prepare_progress"; cid: string; loaded: number; total?: number; queued?: boolean }
+  // request_file が失敗した (置いた人が退室した、容量が足りない、など)
+  | { type: "prepare_failed"; cid: string; message: string }
   // 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ接続しに行く
   | { type: "peer_ipfs"; id: string; ipfsPeerId: string }
   | { type: "peer_joined"; peer: PeerState }

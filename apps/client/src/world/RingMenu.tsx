@@ -44,7 +44,11 @@ const ringStyle: CSSProperties = {
 
 /** 中心に出す、対象の説明 (ファイル名とサイズ)。画像は名前があれば名前を出す。 */
 function describe(object: WorldObject): { title: string; detail: string } {
-  if (object.kind === "file") return { title: object.name, detail: formatBytes(object.size) };
+  if (object.kind === "file") {
+    // 大きなファイルは、ダウンロードされるまでサーバーに無い (置いた人が配っている)
+    const state = object.stored ? "" : object.offline ? " / オフライン" : " / 未転送";
+    return { title: object.name, detail: `${formatBytes(object.size)}${state}` };
+  }
   return { title: object.name ?? "画像", detail: "" };
 }
 

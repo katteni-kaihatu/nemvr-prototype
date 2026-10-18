@@ -189,10 +189,12 @@ export interface FileIconInfo {
   name: string;
   size: number;
   category: FileCategory;
+  /** 配っていた人が退室し、サーバーも保持していない (取得できない)。暗くして「オフライン」と表示する。 */
+  offline?: boolean;
 }
 
 /** canvas にファイルアイコンを描く (背景は透明)。 */
-export function drawFileIcon(canvas: HTMLCanvasElement, { name, size, category }: FileIconInfo): void {
+export function drawFileIcon(canvas: HTMLCanvasElement, { name, size, category, offline }: FileIconInfo): void {
   canvas.width = ICON_CANVAS_WIDTH;
   canvas.height = ICON_CANVAS_HEIGHT;
   const ctx = canvas.getContext("2d");
@@ -210,6 +212,12 @@ export function drawFileIcon(canvas: HTMLCanvasElement, { name, size, category }
     drawBadge(ctx, iconLabel(name), cx, PAGE.y + PAGE.h - 52, "rgba(0, 0, 0, 0.32)", "#ffffff", 40);
   } else {
     drawFileGlyph(ctx, iconLabel(name));
+  }
+  if (offline) {
+    pagePath(ctx);
+    ctx.fillStyle = "rgba(20, 24, 32, 0.62)";
+    ctx.fill();
+    drawBadge(ctx, "オフライン", cx, PAGE.y + PAGE.h / 2, "rgba(0, 0, 0, 0.82)", "#ffd180", 46);
   }
   drawLabel(ctx, name, size);
 }

@@ -9,16 +9,16 @@ import { ObjectFrame } from "./ObjectFrame";
  * 名前とサイズを表示する。ファイルの中身は、ダウンロードするときに初めて取得する。
  */
 export function FilePlane({ object }: { object: FileObject }) {
-  const { name, size, category } = object;
+  const { name, size, category, offline } = object;
 
   const texture = useMemo(() => {
     const canvas = document.createElement("canvas");
-    drawFileIcon(canvas, { name, size, category });
+    drawFileIcon(canvas, { name, size, category, offline });
     const t = new CanvasTexture(canvas);
     t.colorSpace = SRGBColorSpace;
     t.anisotropy = 8;
     return t;
-  }, [name, size, category]);
+  }, [name, size, category, offline]);
   useEffect(() => () => texture.dispose(), [texture]);
 
   return (

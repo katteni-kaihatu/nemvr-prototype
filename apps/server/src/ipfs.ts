@@ -37,6 +37,13 @@ export interface FetchLimits {
   onDeclaredSize?: (bytes: number) => void;
   /** 取得したバイト数の途中経過 (チャンクごとに呼ばれる)。declared は宣言されたサイズ。 */
   onProgress?: (loadedBytes: number, declaredBytes: number) => void;
+  /**
+   * 先頭の数バイト (種類の判定用) だけを取得して返す。中身の全部は取得しないので、大きなファイルでも一瞬で終わる。
+   * 返す `size` は、実測ではなく宣言されたサイズ (ルートのブロックのメタデータ)。
+   */
+  headOnly?: boolean;
+  /** 最初のデータがこの時間 (ミリ秒) 届かなければ、取り消して要求し直す。既定 4000。 */
+  retryAfterMs?: number;
 }
 
 export interface Fetched {
@@ -145,46 +152,83 @@ export async function startIpfs(
       return new ContentRejected("IPFS から取得できませんでした");
     };
 
+    /**
+     * 1 回の取得。最初のデータが `retryAfterMs` 届かなければ、取り消して `"retry"` を返す。
+     * bitswap の送信側は、直前 (約 5 秒以内) に送ったブロックを同じ相手に再送しない。先頭だけを調べた直後に全部を取りに来ると
+     * (遅延転送) 要求が無視されて止まるので、取り消して要求し直す (取り消すと、相手の要求の記録が消える)。
+     */
+    const attempt = async (): Promise<Fetched | "retry"> => {
+      const stall = new AbortController();
+      const attemptSignal = AbortSignal.any([signal, stall.signal]);
+      let stalled = false;
+      let stallTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+        stalled = true;
+        stall.abort();
+      }, limits.retryAfterMs ?? 4_000);
+      const gotData = () => {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+        touch();
+      };
+      try {
+        // 中身を取得する前に、ルートのブロックだけで種別とサイズを確かめる
+        let declared: number;
+        try {
+          const stat = await fs.stat(cid, { signal: attemptSignal });
+          gotData();
+          if (stat.type === "directory") throw new ContentRejected("ディレクトリは置けません");
+          if (stat.size > BigInt(limits.maxBytes)) throw new ContentRejected(limits.tooLargeMessage);
+          declared = Number(stat.size);
+          limits.onDeclaredSize?.(declared);
+        } catch (err) {
+          if (err instanceof ContentRejected) throw err;
+          if (stalled && !signal.aborted) return "retry";
+          throw failed(err);
+        }
+
+        // サイズは申告 (DAG のメタデータ) ではなく、実際に取得したバイト数で測る
+        let size = 0;
+        const head = new Uint8Array(SNIFF_BYTES);
+        let headLength = 0;
+        // ルートのブロックが手元にあっても、中身 (先頭のブロック) が届かないことがある。そのときも、取り消して要求し直す
+        stallTimer ??= setTimeout(() => {
+          stalled = true;
+          stall.abort();
+        }, limits.retryAfterMs ?? 4_000);
+        try {
+          for await (const chunk of fs.cat(cid, { signal: attemptSignal, ...(limits.headOnly ? { length: SNIFF_BYTES } : {}) })) {
+            gotData();
+            if (headLength < SNIFF_BYTES) {
+              const part = chunk.subarray(0, SNIFF_BYTES - headLength);
+              head.set(part, headLength);
+              headLength += part.length;
+            }
+            size += chunk.length;
+            if (size > limits.maxBytes) {
+              tooLarge = true;
+              abort.abort();
+              break;
+            }
+            if (!limits.headOnly) limits.onProgress?.(size, declared); // 先頭だけのときは、進捗ではない
+          }
+        } catch (err) {
+          if (stalled && size === 0 && !signal.aborted) return "retry";
+          throw failed(err);
+        }
+        if (tooLarge) throw new ContentRejected(limits.tooLargeMessage);
+        // 先頭だけを取得したときは、実測のサイズは分からない。宣言されたサイズを返す
+        return { size: limits.headOnly ? declared : size, head: head.slice(0, headLength) };
+      } finally {
+        clearTimeout(stallTimer);
+      }
+    };
+
     touch();
     try {
-      // 中身を取得する前に、ルートのブロックだけで種別とサイズを確かめる
-      let declared: number;
-      try {
-        const stat = await fs.stat(cid, { signal });
-        if (stat.type === "directory") throw new ContentRejected("ディレクトリは置けません");
-        if (stat.size > BigInt(limits.maxBytes)) throw new ContentRejected(limits.tooLargeMessage);
-        declared = Number(stat.size);
-        limits.onDeclaredSize?.(declared);
-      } catch (err) {
-        if (err instanceof ContentRejected) throw err;
-        throw failed(err);
+      for (;;) {
+        const result = await attempt();
+        if (result !== "retry") return result;
       }
-
-      // サイズは申告 (DAG のメタデータ) ではなく、実際に取得したバイト数で測る
-      let size = 0;
-      const head = new Uint8Array(SNIFF_BYTES);
-      let headLength = 0;
-      try {
-        for await (const chunk of fs.cat(cid, { signal })) {
-          touch();
-          if (headLength < SNIFF_BYTES) {
-            const part = chunk.subarray(0, SNIFF_BYTES - headLength);
-            head.set(part, headLength);
-            headLength += part.length;
-          }
-          size += chunk.length;
-          if (size > limits.maxBytes) {
-            tooLarge = true;
-            abort.abort();
-            break;
-          }
-          limits.onProgress?.(size, declared);
-        }
-      } catch (err) {
-        throw failed(err);
-      }
-      if (tooLarge) throw new ContentRejected(limits.tooLargeMessage);
-      return { size, head: head.slice(0, headLength) };
     } finally {
       clearTimeout(idleTimer);
     }

@@ -113,6 +113,10 @@ export class ServingBlockstore extends BaseBlockstore {
     this.uploads.delete(rootCid);
   }
 
+  isServing(rootCid: string): boolean {
+    return this.uploads.has(rootCid);
+  }
+
   get servingCount(): number {
     return this.uploads.size;
   }

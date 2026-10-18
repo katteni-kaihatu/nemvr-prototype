@@ -124,7 +124,8 @@ export function parseClientMessage(text: string): ClientMessage | null {
     case "grab_object":
     case "release_object":
     case "delete_object":
-    case "duplicate_object": {
+    case "duplicate_object":
+    case "request_file": {
       const id = parseObjectId(msg.id);
       return id ? { type: msg.type, id } : null;
     }

@@ -176,12 +176,54 @@ export class Room {
    * ファイルオブジェクトを追加して全員に通知する。上限に達していたら false。
    * size と category は、サーバーが中身を取得して決めた値を渡す (クライアントの申告は使わない)。
    */
-  addFile(place: PlaceFile & { size: number; category: FileCategory }): boolean {
+  addFile(place: PlaceFile & { size: number; category: FileCategory; stored: boolean; owner?: string }): boolean {
     if (this.objects.size >= MAX_OBJECTS) return false;
     const object: WorldObject = { id: randomUUID(), kind: "file", ...place };
     this.objects.set(object.id, object);
     this.broadcast({ type: "object_added", object });
     return true;
+  }
+
+  getObject(id: string): WorldObject | undefined {
+    return this.objects.get(id);
+  }
+
+  /**
+   * サーバーが、その内容 (CID) を保持した。同じ CID を指す、まだ保持していなかったファイルすべてを「保持済み」にして、
+   * 全員に知らせる (実測のサイズに直し、配っていた人・オフラインの印は外す)。更新したものを返す。
+   */
+  markStored(cid: string, size: number): WorldObject[] {
+    const updated: WorldObject[] = [];
+    for (const object of this.objects.values()) {
+      if (object.kind !== "file" || object.cid !== cid || object.stored) continue;
+      object.stored = true;
+      object.size = size;
+      delete object.owner;
+      delete object.offline;
+      updated.push(object);
+      this.broadcast({ type: "object_updated", object });
+    }
+    return updated;
+  }
+
+  /** 中身を配っていた人が退室した。まだ保持していないファイルは、取得できないので「オフライン」にして知らせる。 */
+  private markOffline(ownerId: string): void {
+    for (const object of this.objects.values()) {
+      if (object.kind !== "file" || object.stored || object.owner !== ownerId || object.offline) continue;
+      object.offline = true;
+      this.broadcast({ type: "object_updated", object });
+    }
+  }
+
+  /** ダウンロードのための取得 (request_file) の進捗を、要求した本人にだけ知らせる。 */
+  sendPrepareProgress(id: string, cid: string, loaded: number, total?: number, queued?: boolean): void {
+    const peer = this.peers.get(id);
+    if (peer) this.send(peer.socket, { type: "prepare_progress", cid, loaded, total, ...(queued ? { queued } : {}) });
+  }
+
+  sendPrepareFailed(id: string, cid: string, message: string): void {
+    const peer = this.peers.get(id);
+    if (peer) this.send(peer.socket, { type: "prepare_failed", cid, message });
   }
 
   /** ピアの libp2p ID を本人以外に知らせる (受け取った側が直接接続しに行く)。 */
@@ -205,6 +247,7 @@ export class Room {
     if (!this.peers.delete(id)) return;
     this.broadcast({ type: "peer_left", id });
     this.releaseHeldBy(id); // つかんだまま切断しても、オブジェクトが固まらないようにする
+    this.markOffline(id); // 配っていたファイルは、取得できなくなる
     if (this.peers.size === 0) this.stopTimer();
   }
 

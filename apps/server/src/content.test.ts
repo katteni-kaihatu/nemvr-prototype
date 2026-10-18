@@ -21,8 +21,15 @@ class FakeBackend implements ContentBackend {
   failAfterDeclared = false;
 
   async fetchVerified(cid: string, limits: FetchLimits): Promise<Fetched> {
-    this.events.push(`fetch:start:${cid}`);
     const content = this.contents.get(cid);
+    if (limits.headOnly) {
+      // 先頭だけ取得する。宣言されたサイズと先頭を返し、中身の全部は取得しない
+      this.events.push(`head:${cid}`);
+      if (!content) throw new ContentRejected("IPFS から取得できませんでした");
+      if (content.size > limits.maxBytes) throw new ContentRejected(limits.tooLargeMessage);
+      return content;
+    }
+    this.events.push(`fetch:start:${cid}`);
     if (!content) throw new ContentRejected("IPFS から取得できませんでした");
     if (content.size > limits.maxBytes) throw new ContentRejected(limits.tooLargeMessage);
     // 本物と同じく、ルートのブロックが読めた時点 (中身の取得の前) に、宣言されたサイズを知らせる
@@ -129,6 +136,53 @@ describe("add", () => {
     await expect(store.add("a", "file")).rejects.toThrow(/pin failed/);
     expect(store.count).toBe(0);
     expect(store.totalBytes).toBe(0);
+  });
+});
+
+describe("probe (head only: nothing is stored)", () => {
+  it("returns the declared size and head without fetching the content, pinning it or using capacity", async () => {
+    const { backend, store } = make(100);
+    backend.put("big", 1_000_000_000, PNG_HEAD); // 容量 (100) より大きい宣言サイズ
+    const info = await store.probe("big", "file");
+    expect(info).toEqual({ size: 1_000_000_000, head: PNG_HEAD });
+    expect(backend.pinned.size).toBe(0);
+    expect(store.totalBytes).toBe(0);
+    expect(store.count).toBe(0);
+    expect(store.known("big")).toBeUndefined();
+    expect(backend.events).toEqual(["head:big"]); // fetch:start / fetch:end / pin は無い
+  });
+
+  it("answers from what is already held, without going to the network", async () => {
+    const { backend, store } = make();
+    backend.put("a", 300);
+    await store.add("a", "file");
+    backend.events.length = 0;
+    expect(await store.probe("a", "file")).toEqual({ size: 300, head: TEXT_HEAD });
+    expect(store.known("a")).toEqual({ size: 300, head: TEXT_HEAD });
+    expect(backend.events).toEqual([]);
+  });
+
+  it("applies the same policy as a real add (size limits, image format)", async () => {
+    const { backend, store } = make();
+    backend.put("huge", MAX_FILE_BYTES + 1);
+    backend.put("text", 10, TEXT_HEAD);
+    await expect(store.probe("huge", "file")).rejects.toThrow(/ファイルが大きすぎます/);
+    await expect(store.probe("text", "image")).rejects.toThrow(/対応していない画像形式/);
+    await expect(store.probe("text", "file")).resolves.toBeDefined();
+  });
+
+  it("propagates failures (the owner cannot be reached) and does not register anything", async () => {
+    const { store } = make();
+    await expect(store.probe("missing", "file")).rejects.toThrow(/取得できませんでした/);
+    expect(store.count).toBe(0);
+  });
+
+  it("schedules a gc for the blocks fetched while probing", async () => {
+    const { backend, store } = make();
+    backend.put("a", 10);
+    await store.probe("a", "file");
+    await store.settle();
+    expect(backend.count("gc:end")).toBe(1);
   });
 });
 

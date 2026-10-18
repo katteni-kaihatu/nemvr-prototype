@@ -157,6 +157,50 @@ describe("server IPFS node", () => {
     expect(after - before).toBeLessThan(size / 10); // ディスクが空く
   }, 30_000);
 
+  it("headOnly: returns the declared size and the head without transferring the whole file", async () => {
+    const data = unique(6 * 1024 * 1024); // 6 ブロック
+    const cid = (await client.fs.addBytes(data)).toString();
+    const before = await dirSize(blockDir);
+    let progressCalls = 0;
+    const fetched = await server.fetchVerified(cid, {
+      ...LIMITS,
+      maxBytes: 10 * 1024 * 1024,
+      headOnly: true,
+      onProgress: () => progressCalls++,
+    });
+    expect(fetched.size).toBe(data.length); // 宣言されたサイズ (実測ではない)
+    expect(Buffer.compare(Buffer.from(fetched.head), Buffer.from(data.subarray(0, 16)))).toBe(0);
+    expect(progressCalls).toBe(0);
+    // 全部は取得していない (ルートのブロックと、先頭の 1〜2 ブロック程度)
+    expect((await dirSize(blockDir)) - before).toBeLessThan(3 * 1024 * 1024);
+  }, 30_000);
+
+  it("headOnly: the whole file can be fetched right afterwards (the probed blocks were dropped by gc)", async () => {
+    const data = unique(6 * 1024 * 1024);
+    const cid = (await client.fs.addBytes(data)).toString();
+    await server.fetchVerified(cid, { ...LIMITS, maxBytes: 10 * 1024 * 1024, headOnly: true });
+    await server.gc();
+    const fetched = await server.fetchVerified(cid, { ...LIMITS, maxBytes: 10 * 1024 * 1024, idleTimeoutMs: 15_000, retryAfterMs: 1_000 });
+    expect(fetched.size).toBe(data.length);
+  }, 30_000);
+
+  it("fetching the same content again right after gc still works (bitswap does not resend a block for a few seconds, so the fetch retries)", async () => {
+    const data = unique(300_000);
+    const cid = (await client.fs.addBytes(data)).toString();
+    await server.fetchVerified(cid, { ...LIMITS, maxBytes: 10 * 1024 * 1024 });
+    await server.gc();
+    const fetched = await server.fetchVerified(cid, { ...LIMITS, maxBytes: 10 * 1024 * 1024, idleTimeoutMs: 15_000, retryAfterMs: 1_000 });
+    expect(fetched.size).toBe(data.length);
+  }, 30_000);
+
+  it("headOnly still rejects directories and over-limit declared sizes", async () => {
+    const big = (await client.fs.addBytes(unique(2_000))).toString();
+    await expect(server.fetchVerified(big, { ...LIMITS, maxBytes: 1_000, headOnly: true })).rejects.toThrow("too large");
+    const file = await client.fs.addBytes(unique(100));
+    const dir = await client.fs.cp(file, await client.fs.addDirectory(), "a.txt");
+    await expect(server.fetchVerified(dir.toString(), { ...LIMITS, headOnly: true })).rejects.toThrow(/ディレクトリ/);
+  }, 15_000);
+
   it("pin is idempotent", async () => {
     const cid = (await client.fs.addBytes(unique(300))).toString();
     await server.fetchVerified(cid, LIMITS);

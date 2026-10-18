@@ -127,6 +127,32 @@ export class ContentStore {
     }
   }
 
+  /** 保持している内容の情報 (取得せず、参照も増やさない)。保持していなければ undefined。 */
+  known(cid: string): { size: number; head: Uint8Array } | undefined {
+    const entry = this.entries.get(cid);
+    return entry && { size: entry.size, head: entry.head };
+  }
+
+  /**
+   * 内容の全部は取得せずに、宣言されたサイズと、先頭の数バイトだけを調べる (大きなファイルを、遅延転送で置くため)。
+   * 何も保持せず、容量も使わない。保持している内容なら、取得せずにその情報を返す。
+   * 種類ごとの方針 (宣言サイズの上限・画像の形式) は、取得するときと同じように検査する。
+   */
+  async probe(cid: string, kind: ContentKind): Promise<{ size: number; head: Uint8Array }> {
+    const known = this.known(cid);
+    if (known) {
+      this.check(kind, known.size, known.head);
+      return known;
+    }
+    try {
+      const fetched = await this.backend.fetchVerified(cid, { ...this.limitsFor(kind), headOnly: true });
+      this.check(kind, fetched.size, fetched.head);
+      return fetched;
+    } finally {
+      this.scheduleGc(); // 調べるために取得した (pin していない) ブロックを片付ける
+    }
+  }
+
   /** 複製など、保持している内容を指すオブジェクトが増えた。 */
   retain(cid: string): void {
     const entry = this.entries.get(cid);

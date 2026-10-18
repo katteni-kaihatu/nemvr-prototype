@@ -6,8 +6,8 @@ import {
   sanitizeFileName,
   type WorldObject,
 } from "@proto/protocol";
-import { showNotice } from "./connection";
-import { fetchBlob } from "./ipfs";
+import { requestStored, showNotice, useNet } from "./connection";
+import { fetchBlob, isServing } from "./ipfs";
 
 const PROGRESS_INTERVAL_MS = 300;
 
@@ -46,10 +46,19 @@ export async function downloadObject(object: WorldObject): Promise<void> {
   downloading.add(object.id);
 
   const label = downloadName(object);
-  const total = object.kind === "file" ? object.size : undefined;
   let lastNoticeAt = 0;
-  showNotice(`ダウンロード中: ${label}`, 60_000);
   try {
+    // 大きなファイルは、ダウンロードされるまでサーバーが取得していない (遅延転送)。まず、サーバーに取得させて待つ。
+    // 自分が置いたファイルで、まだ自分が配っているなら、サーバーを通さずに自分から取れる
+    if (object.kind === "file" && !object.stored && !isServing(object.cid)) {
+      if (object.offline) throw new Error("アップロードした人が退室しているため、取得できません");
+      showNotice(`${label}: ダウンロードの準備 (サーバーが、置いた人から取得します)`, 60_000);
+      await requestStored(object);
+    }
+    // 取得したあとは、サーバーが測ったサイズに変わっているので、最新の状態を読み直す
+    const latest = useNet.getState().objects[object.id];
+    const total = latest?.kind === "file" ? latest.size : undefined;
+    showNotice(`ダウンロード中: ${label}`, 60_000);
     const blob = await fetchBlob(object.cid, {
       maxBytes: object.kind === "file" ? MAX_FILE_BYTES : MAX_IMAGE_BYTES,
       onProgress: (loaded) => {

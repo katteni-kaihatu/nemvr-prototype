@@ -214,7 +214,7 @@ describe("duplicate", () => {
 });
 
 describe("files", () => {
-  const file = { cid: CID, name: "report.pdf", position: [1, 0.4, 2] as [number, number, number], yaw: 0, size: 1234, category: "file" as const };
+  const file = { cid: CID, name: "report.pdf", position: [1, 0.4, 2] as [number, number, number], yaw: 0, size: 1234, category: "file" as const, stored: true };
 
   it("adds a file object and broadcasts it (size and category as decided by the server)", () => {
     const { room, a, b } = setup();
@@ -277,5 +277,104 @@ describe("files", () => {
     const { room, aId, objectId } = setup();
     expect(room.duplicateObject(aId, objectId)?.cid).toBe(CID);
     expect(room.duplicateObject(aId, "00000000-0000-4000-8000-000000000000")).toBeNull();
+  });
+});
+
+describe("lazy files (not transferred until downloaded)", () => {
+  const FILE_CID = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+  const lazy = (owner: string, over: Partial<{ cid: string; name: string }> = {}) => ({
+    cid: over.cid ?? FILE_CID,
+    name: over.name ?? "big.bin",
+    position: [0, 0.6, 0] as [number, number, number],
+    yaw: 0,
+    size: 1_500_000_000,
+    category: "file" as const,
+    stored: false,
+    owner,
+  });
+  const files = (s: FakeSocket) => s.sent.filter((m) => m.type === "object_added").map((m) => (m as { object: WorldObject }).object);
+
+  it("adds an unstored file that records who is serving it", () => {
+    const { room, a, b, aId } = setup();
+    expect(room.addFile(lazy(aId))).toBe(true);
+    for (const s of [a, b]) {
+      expect(files(s).at(-1)).toMatchObject({ kind: "file", stored: false, owner: aId, size: 1_500_000_000 });
+    }
+  });
+
+  it("markStored turns every unstored file with that CID into a stored one, with the measured size", () => {
+    const { room, a, b, aId } = setup();
+    room.addFile(lazy(aId));
+    const first = files(a).at(-1)!;
+    const copy = room.duplicateObject(aId, first.id)!; // 複製も、同じ中身を指す (保持していない)
+    room.addFile(lazy(aId, { cid: "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku", name: "other.bin" }));
+    a.clear();
+    b.clear();
+
+    const updated = room.markStored(FILE_CID, 1_400_000_000);
+    expect(updated.map((o) => o.id).sort()).toEqual([first.id, copy.id].sort());
+    for (const s of [a, b]) {
+      const sent = s.of("object_updated").map((m) => m.object);
+      expect(sent).toHaveLength(2); // 別の CID のものには触れない
+      for (const o of sent) {
+        expect(o).toMatchObject({ kind: "file", stored: true, size: 1_400_000_000 });
+        expect(o).not.toHaveProperty("owner");
+        expect(o).not.toHaveProperty("offline");
+      }
+    }
+    expect(room.markStored(FILE_CID, 1)).toEqual([]); // 保持済みのものは、もう更新しない
+  });
+
+  it("marks unstored files offline when their owner leaves (stored files and other owners are unaffected)", () => {
+    const { room, a, b, aId, bId } = setup();
+    room.addFile(lazy(aId));
+    room.addFile({ ...lazy(bId, { cid: "bafybeif3ycql2wqz2txluxtfvb7ppui3r7aqzddjnayai6qgxv72vmklyy", name: "bobs.bin" }) });
+    room.addFile({ ...lazy(aId), cid: "bafkreiepuym22t7h35oztjjcleody23xnogolspik46jayzu7k3cblk32i", name: "stored.bin", stored: true, owner: undefined });
+    b.clear();
+
+    room.leave(aId);
+    const offline = b.of("object_updated").map((m) => m.object);
+    expect(offline).toHaveLength(1); // alice が配っていた、保持していない 1 つだけ
+    expect(offline[0]).toMatchObject({ name: "big.bin", offline: true, stored: false });
+    void a;
+  });
+
+  it("clears the offline mark when the content is later stored", () => {
+    const { room, b, aId } = setup();
+    room.addFile(lazy(aId));
+    room.leave(aId);
+    b.clear();
+    const [updated] = room.markStored(FILE_CID, 1);
+    expect(updated).not.toHaveProperty("offline");
+  });
+
+  it("a copy of an unstored file is unstored too, and is served by the same owner", () => {
+    const { room, a, aId } = setup();
+    room.addFile(lazy(aId));
+    const original = files(a).at(-1)!;
+    const copy = room.duplicateObject(aId, original.id)!;
+    expect(copy).toMatchObject({ kind: "file", stored: false, owner: aId, cid: FILE_CID });
+  });
+
+  it("getObject returns the object, or undefined", () => {
+    const { room, aId, objectId } = setup();
+    expect(room.getObject(objectId)?.id).toBe(objectId);
+    expect(room.getObject("00000000-0000-4000-8000-000000000000")).toBeUndefined();
+    void aId;
+  });
+
+  it("sends prepare progress / failure only to the requester", () => {
+    const { room, a, b, aId } = setup();
+    a.clear();
+    b.clear();
+    room.sendPrepareProgress(aId, FILE_CID, 100, 1000);
+    room.sendPrepareProgress(aId, FILE_CID, 0, undefined, true);
+    room.sendPrepareFailed(aId, FILE_CID, "no");
+    expect(a.of("prepare_progress")).toEqual([
+      { type: "prepare_progress", cid: FILE_CID, loaded: 100, total: 1000 },
+      { type: "prepare_progress", cid: FILE_CID, loaded: 0, queued: true },
+    ]);
+    expect(a.of("prepare_failed")[0]).toMatchObject({ cid: FILE_CID, message: "no" });
+    expect(b.sent).toEqual([]);
   });
 });

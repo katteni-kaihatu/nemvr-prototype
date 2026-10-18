@@ -53,8 +53,11 @@ interface FileObject extends ObjectBase {
   kind: "file";
   cid: string;
   name: string;    // サーバーが sanitizeFileName で整えたもの
-  size: number;    // サーバーが実際に取得して測ったバイト数
+  size: number;    // stored ならサーバーが実際に取得して測ったバイト数。まだなら、ファイルのメタデータの宣言サイズ
   category: "audio" | "video" | "file"; // アイコンの種類。サーバーが名前と中身から判定する
+  stored: boolean; // サーバーが中身を保持しているか。16MiB 超のファイルは、ダウンロードされるまで false (遅延転送)
+  owner?: string;  // stored になるまで配っている人 (PeerInfo.id)
+  offline?: boolean; // 保持しておらず、配っている人も退室した (取得できない)
 }
 
 type WorldObject = ImageObject | FileObject;
@@ -72,6 +75,7 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 | `pose` | `pose: Pose` | 自分の姿勢。20Hz で送信 |
 | `place_image` | `cid`, `position`, `yaw`, `width`, `height`, `name?` | IPFS に追加済みの画像を置く。サーバーが中身を検証してから配置する |
 | `place_file` | `cid`, `name`, `position`, `yaw` | IPFS に追加済みの任意のファイルを置く。`size` と `category` はサーバーが中身から決める (送っても無視される) |
+| `request_file` | `id` | まだサーバーが保持していないファイル (遅延転送) を、ダウンロードするために取得させる。要求した人にだけ `prepare_progress` / `prepare_failed` が返り、終わると `object_updated` (`stored`) が全員に配られる |
 | `ipfs_peer` | `peerId: string` | 自分の libp2p ピア ID を知らせる。他のブラウザから WebRTC で接続してもらえる状態になってから送る |
 | `grab_object` | `id` | オブジェクトをつかむ。他の人がつかんでいると拒否される |
 | `move_object` | `id`, `position`, `yaw` | つかんでいる間の移動 (つかんでいる本人だけが送れる)。20Hz |
@@ -87,6 +91,9 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 | `object_added` | `object: ImageObject` | オブジェクトが置かれた (置いた本人を含む全員へ) |
 | `object_updated` | `object: ImageObject` | 位置・向き・つかまれている状態が変わった (オブジェクト全体を送る) |
 | `object_removed` | `id: string` | オブジェクトが削除された |
+| `place_progress` | `cid`, `loaded`, `total?`, `queued?` | 置こうとしている中身を、サーバーが取得している途中 (置いた本人にだけ)。`queued` は順番待ち |
+| `prepare_progress` | `cid`, `loaded`, `total?`, `queued?` | `request_file` の進捗。サーバーが、置いた人から取得している途中 (要求した人にだけ) |
+| `prepare_failed` | `cid`, `message` | `request_file` が失敗した (置いた人が退室した、容量が足りない、など) |
 | `peer_ipfs` | `id: string`, `ipfsPeerId: string` | 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ WebRTC で接続しに行く |
 | `peer_joined` | `peer: PeerState` | 他ユーザーの入室 |
 | `peer_left` | `id: string` | 他ユーザーの退室 |
@@ -196,11 +203,28 @@ sequenceDiagram
 > **IndexedDB は使わない**: 当初は、ブラウザ内のブロックストアを IndexedDB にしたが、Firefox では 1MiB あたり 0.2〜0.3 秒かかり、サーバーが数十ブロックを一度に要求すると応答が間に合わず、転送が止まった。
 > メモリ上のブロックストアは速いが、ファイルのサイズ分のメモリを使う。そのため、上の「元のファイルから直接配る」設計にした。
 
+**遅延転送 (16MiB を超えるファイル)**
+
+大きなファイルは、置いた時点ではサーバーに送らず、**誰かがダウンロードしたときに初めて**サーバーが取りに行く。見ているだけの人には、元からファイル本体は届かない (画像と違い、アイコンの情報だけ)。
+無駄だったのは、置いた時点でのサーバーによる取得だった。
+
+- **置くとき (`place_file`)**: `ContentStore.probe` が、先頭 16 バイトと宣言サイズだけを取得する (`fetchVerified` の `headOnly`)。16MiB (`EAGER_FILE_MAX_BYTES`) 以下、またはサーバーが既に保持している内容は、従来どおり全部取得して pin する。
+  16MiB を超えていれば、pin も容量の消費もせず、`stored: false`・`owner: <置いた人>` で `object_added` を配る。`size` は宣言サイズ (申告。実際に取得するときに上限を守らせる)。
+- **置いた人のブラウザ**: `keepServing` で、元のファイルから配り続ける (このタブを開いたままにする必要がある。HUD に案内を出す)。サーバーが保持したら (`object_updated` で `stored`) 配るのをやめる。
+- **ダウンロード (`request_file`)**: クライアントは、`stored` でない・自分が配っていないファイルに対して `request_file` を送り、`prepare_progress` を HUD に表示して待つ。
+  サーバー (`stageFile`) は、置いた人から全部取得して pin し、`markStored` で `stored: true` にして `object_updated` を配る。クライアントはそれを見て、通常のダウンロードに進む。
+  同じ内容を複数人が要求しても取得は 1 回 (`staging`)。順番待ちは、配っている人 (`owner`) ごとに 1 件ずつ (`PlacementQueue`)。
+  自分が配っているファイルは、サーバーを経由せず、そのままダウンロードする。
+- **置いた人が退室したら**: 保持していないファイルは `offline` になる (削除はしない)。ダウンロードは「アップロードした人が退室しているため、取得できません」で失敗する。保持済みのものは影響を受けない。
+- **削除・複製**: 保持していないファイルは、サーバーの参照を数えない (`holdsContent`)。削除してもディスクは変わらない。
+- **bitswap の再送の窓**: 送信側 (ブラウザ) は、直前 (約 5 秒以内) に送ったブロックを同じ相手に再送しない。先頭だけを調べた直後に全部を取りに来ると要求が無視されて止まるので、
+  `fetchVerified` は、最初のデータが 4 秒届かなければ取り消して要求し直す (`retryAfterMs`)。置いた直後にダウンロードすると、準備に約 5〜8 秒余分にかかる。
+
 **ダウンロード (`net/download.ts`)**
 - リングメニューの「ダウンロード」。オブジェクトの `cid` を IPFS から取得し (上限は種類ごと。データが 30 秒届かなければ中止)、Blob にして、`<a download>` で保存する (ページは開かない)。
 - ファイル名は `name` を、念のためクライアントでも `sanitizeFileName` にかけたもの。名前の無い画像は、`image-<CID の末尾>.<形式の拡張子>`。
 - 進捗 (割合と取得済みのバイト数) と結果は HUD に表示する。同じオブジェクトの二重のダウンロードは始めない。
-- 取得は、サーバーの Helia ノードか、直接つながったブラウザから行われる。置いた人が退室していても、サーバーが pin しているので取得できる。
+- 取得は、サーバーの Helia ノードか、直接つながったブラウザから行われる。置いた人が退室していても、サーバーが pin していれば取得できる (遅延転送のファイルは、上記のとおり)。
 
 ### 検証ルール (server)
 

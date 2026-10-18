@@ -116,12 +116,12 @@ describe("parseClientMessage", () => {
   describe("object operations", () => {
     const id = "123e4567-e89b-42d3-a456-426614174000";
     it("parses grab / release / delete / duplicate", () => {
-      for (const type of ["grab_object", "release_object", "delete_object", "duplicate_object"]) {
+      for (const type of ["grab_object", "release_object", "delete_object", "duplicate_object", "request_file"]) {
         expect(parseClientMessage(JSON.stringify({ type, id }))).toEqual({ type, id });
       }
     });
     it("rejects bad ids", () => {
-      for (const type of ["grab_object", "release_object", "delete_object", "duplicate_object", "move_object"]) {
+      for (const type of ["grab_object", "release_object", "delete_object", "duplicate_object", "request_file", "move_object"]) {
         expect(parseClientMessage(JSON.stringify({ type, id: "nope" }))).toBeNull();
         expect(parseClientMessage(JSON.stringify({ type }))).toBeNull();
         expect(parseClientMessage(JSON.stringify({ type, id: 5 }))).toBeNull();

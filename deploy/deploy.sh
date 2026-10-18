@@ -21,7 +21,7 @@ echo "==> upload"
 RSYNC=(rsync -az --delete --chown=proto:proto -e "${SSH[*]}")
 # サーバーの実行に必要なもの (client のソースも lockfile の整合のため含める)。node_modules は VPS 側で入れる
 "${RSYNC[@]}" \
-  --exclude node_modules --exclude .git --exclude dist --exclude '*.log' \
+  --exclude node_modules --exclude .git --exclude .kilo --exclude dist --exclude '*.log' \
   ./ "$DEPLOY_HOST:/opt/proto/app/"
 # ビルド済みクライアントは Caddy が配信する
 "${RSYNC[@]}" apps/client/dist/ "$DEPLOY_HOST:/srv/proto-client/"
