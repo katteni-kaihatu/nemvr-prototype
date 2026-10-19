@@ -1,25 +1,33 @@
 import { useEffect, useMemo, type RefObject } from "react";
 import { CanvasTexture, SRGBColorSpace, type Group } from "three";
 
-export const EYE_HEIGHT = 1.6;
+import { EYE_HEIGHT } from "./movement";
+
+export { EYE_HEIGHT };
 
 interface AvatarProps {
   color: string;
   name: string;
   /** 足元のワールド位置を受け持つグループ */
   rootRef: RefObject<Group | null>;
-  /** 頭の向きを受け持つグループ (前方は -Z) */
+  /** 頭の向きを受け持つグループ (前方は -Z)。しゃがむと、位置 (高さ) が下がる。 */
   headRef: RefObject<Group | null>;
+  /** 胴体のグループ。しゃがむと、縦に縮む。 */
+  bodyRef: RefObject<Group | null>;
+  /** 名前タグのグループ。しゃがむと、頭に合わせて下がる。 */
+  tagRef: RefObject<Group | null>;
 }
 
 /** 簡易アバター。将来 glTF / VRM に差し替える際はこのコンポーネントに閉じ込める。 */
-export function Avatar({ color, name, rootRef, headRef }: AvatarProps) {
+export function Avatar({ color, name, rootRef, headRef, bodyRef, tagRef }: AvatarProps) {
   return (
     <group ref={rootRef}>
-      <mesh position={[0, 0.7, 0]}>
-        <capsuleGeometry args={[0.25, 0.9, 4, 12]} />
-        <meshStandardMaterial color={color} />
-      </mesh>
+      <group ref={bodyRef}>
+        <mesh position={[0, 0.7, 0]}>
+          <capsuleGeometry args={[0.25, 0.9, 4, 12]} />
+          <meshStandardMaterial color={color} />
+        </mesh>
+      </group>
       <group ref={headRef} position={[0, EYE_HEIGHT, 0]}>
         <mesh>
           <sphereGeometry args={[0.16, 24, 16]} />
@@ -35,7 +43,9 @@ export function Avatar({ color, name, rootRef, headRef }: AvatarProps) {
           <meshBasicMaterial color="#ffffff" />
         </mesh>
       </group>
-      <NameTag name={name} />
+      <group ref={tagRef} position={[0, EYE_HEIGHT + 0.35, 0]}>
+        <NameTag name={name} />
+      </group>
     </group>
   );
 }
@@ -74,7 +84,7 @@ function NameTag({ name }: { name: string }) {
   useEffect(() => () => texture.dispose(), [texture]);
 
   return (
-    <sprite position={[0, EYE_HEIGHT + 0.35, 0]} scale={[TAG_HEIGHT * aspect, TAG_HEIGHT, 1]}>
+    <sprite scale={[TAG_HEIGHT * aspect, TAG_HEIGHT, 1]}>
       <spriteMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
     </sprite>
   );

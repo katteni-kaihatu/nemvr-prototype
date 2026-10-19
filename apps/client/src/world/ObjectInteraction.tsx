@@ -11,7 +11,6 @@ import {
   useNet,
 } from "../net/connection";
 import { attach, liftedHeight, pulled, resolve, wrapAngle, type Attachment } from "./carry";
-import { EYE_HEIGHT } from "./Avatar";
 import { CURSOR_VISIBLE_MS, carry, useInteraction } from "./interaction";
 import { objectMeshes } from "./registry";
 
@@ -30,6 +29,8 @@ interface Grab {
   pitch: number;
   /** 前のフレームのカメラの上下の向き (rad)。視点を上下させた量から、高さの変化を求める。 */
   lastCameraPitch: number;
+  /** 前のフレームのカメラの高さ (m)。ジャンプ・しゃがみで目の高さが変わった分だけ、つかんだものも上下させる。 */
+  lastCameraY: number;
   lastSentAt: number;
 }
 
@@ -85,6 +86,7 @@ export function ObjectInteraction() {
       lastSentAt: 0,
       pitch: object.pitch ?? 0,
       lastCameraPitch: camera.rotation.x,
+      lastCameraY: camera.position.y,
       attachment: attach(
         { x: camera.position.x, z: camera.position.z, yaw: camera.rotation.y },
         { x: object.position[0], y: object.position[1], z: object.position[2], yaw: object.yaw },
@@ -153,7 +155,7 @@ export function ObjectInteraction() {
       if (useInteraction.getState().menuTargetId || e.deltaY === 0) return;
       const notches = Math.min(3, Math.max(1, Math.round(Math.abs(e.deltaY) / 100)));
       const factor = WHEEL_PULL_FACTOR ** (notches * Math.sign(-e.deltaY));
-      Object.assign(g.attachment, pulled(g.attachment, factor, EYE_HEIGHT, MAX_HEIGHT));
+      Object.assign(g.attachment, pulled(g.attachment, factor, camera.position.y, MAX_HEIGHT));
     };
     // 回転モード: マウスの動きで回す。視点は固定されている (LocalPlayer は回転モードの間、視点を動かさない)
     const onMouseMove = (e: MouseEvent) => {
@@ -207,7 +209,11 @@ export function ObjectInteraction() {
       const a = grab.current.attachment;
       const dPitch = camera.rotation.x - grab.current.lastCameraPitch;
       grab.current.lastCameraPitch = camera.rotation.x;
-      if (dPitch !== 0) a.y = liftedHeight(a.y, Math.hypot(a.dx, a.dz), dPitch, EYE_HEIGHT, MAX_HEIGHT);
+      // ジャンプ・しゃがみで目の高さが変わったら、つかんだものも同じだけ上下する (目から見た位置を保つ)
+      const dEye = camera.position.y - grab.current.lastCameraY;
+      grab.current.lastCameraY = camera.position.y;
+      if (dEye !== 0) a.y = Math.max(0, Math.min(MAX_HEIGHT, a.y + dEye));
+      if (dPitch !== 0) a.y = liftedHeight(a.y, Math.hypot(a.dx, a.dz), dPitch, camera.position.y, MAX_HEIGHT);
       const o = resolve(grab.current.attachment, {
         x: camera.position.x,
         z: camera.position.z,

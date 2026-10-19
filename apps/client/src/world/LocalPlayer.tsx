@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { TICK_RATE } from "@proto/protocol";
 import { sendPose } from "../net/connection";
-import { EYE_HEIGHT } from "./Avatar";
 import { useInteraction } from "./interaction";
+import { eyeHeightFor, initialVertical, speedFactorFor, stepVertical, type Vertical } from "./movement";
 
 const SPEED = 3; // m/s
 const MOUSE_SENSITIVITY = 0.0022;
@@ -21,6 +21,10 @@ export function LocalPlayer() {
     z: 4 + Math.random() * 2,
     yaw: 0,
     pitch: 0,
+    /** 縦方向の状態 (足元の高さ・上向きの速さ・しゃがみの深さ)。開発時の確認用に、中身は公開している。 */
+    ...initialVertical(),
+    /** 目の高さ (足元の高さ + しゃがみで変わる目の高さ)。毎フレーム更新する。 */
+    eyeY: eyeHeightFor(0),
   });
   const keys = useRef(new Set<string>());
 
@@ -34,7 +38,11 @@ export function LocalPlayer() {
   }, [camera]);
 
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => keys.current.add(e.code);
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Space でページがスクロールしないようにする (ポインターロック中だけ)
+      if (e.code === "Space" && document.pointerLockElement === canvas) e.preventDefault();
+      keys.current.add(e.code);
+    };
     const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
     const onBlur = () => keys.current.clear();
     const onMouseMove = (e: MouseEvent) => {
@@ -70,7 +78,7 @@ export function LocalPlayer() {
     const id = setInterval(() => {
       const p = player.current;
       const q = camera.quaternion;
-      sendPose({ position: [p.x, 0, p.z], head: [q.x, q.y, q.z, q.w] });
+      sendPose({ position: [p.x, p.y, p.z], head: [q.x, q.y, q.z, q.w], crouch: Math.round(p.crouch * 100) / 100 });
     }, 1000 / TICK_RATE);
     return () => clearInterval(id);
   }, [camera]);
@@ -81,9 +89,20 @@ export function LocalPlayer() {
     const forward = (k.has("KeyW") || k.has("ArrowUp") ? 1 : 0) - (k.has("KeyS") || k.has("ArrowDown") ? 1 : 0);
     const right = (k.has("KeyD") || k.has("ArrowRight") ? 1 : 0) - (k.has("KeyA") || k.has("ArrowLeft") ? 1 : 0);
     const menuOpen = useInteraction.getState().menuTargetId !== null; // メニューを選んでいる間は動かない
+
+    // ジャンプ (Space) としゃがみ (C)。メニューを選んでいる間は、入力を受け付けない
+    const vertical: Vertical = stepVertical(
+      { y: p.y, vy: p.vy, crouch: p.crouch },
+      { jump: !menuOpen && k.has("Space"), crouch: !menuOpen && k.has("KeyC") },
+      Math.min(delta, 0.05), // フレームが飛んだときに、ジャンプが突き抜けたり跳ね上がりすぎたりしないように
+    );
+    p.y = vertical.y;
+    p.vy = vertical.vy;
+    p.crouch = vertical.crouch;
+
     if (!menuOpen && (forward !== 0 || right !== 0)) {
       const len = Math.hypot(forward, right);
-      const step = (SPEED * delta) / len;
+      const step = (SPEED * speedFactorFor(p.crouch) * delta) / len;
       const sin = Math.sin(p.yaw);
       const cos = Math.cos(p.yaw);
       // yaw=0 のとき前方は -Z、右は +X
@@ -92,7 +111,8 @@ export function LocalPlayer() {
       p.x = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, p.x));
       p.z = Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE, p.z));
     }
-    camera.position.set(p.x, EYE_HEIGHT, p.z);
+    p.eyeY = p.y + eyeHeightFor(p.crouch);
+    camera.position.set(p.x, p.eyeY, p.z);
     camera.rotation.set(p.pitch, p.yaw, 0);
   });
 

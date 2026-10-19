@@ -26,10 +26,12 @@ export const GRAB_REACH = 8; // m。画面中央のレイがこの距離まで�
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 
-/** ユーザーの姿勢。position は足元のワールド座標、head は頭の向き。 */
+/** ユーザーの姿勢。position は足元のワールド座標 (ジャンプ中は地面より上)、head は頭の向き。 */
 export interface Pose {
   position: Vec3;
   head: Quat;
+  /** しゃがみの深さ (0 = 立っている、1 = しゃがみきっている)。無ければ 0。 */
+  crouch?: number;
 }
 
 export interface PeerInfo {

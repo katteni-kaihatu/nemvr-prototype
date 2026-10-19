@@ -26,6 +26,14 @@ describe("parsePose", () => {
     const pose = parsePose({ position: [1, 2, 3], head: [0, 0, 0, 2] });
     expect(pose).toEqual({ position: [1, 2, 3], head: [0, 0, 0, 1] });
   });
+  it("accepts an optional crouch, clamped to 0..1, and rejects a non-number crouch", () => {
+    expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: 0.5 })?.crouch).toBe(0.5);
+    expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: 7 })?.crouch).toBe(1);
+    expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: -3 })?.crouch).toBe(0);
+    expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1] })).not.toHaveProperty("crouch");
+    expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: "1" })).toBeNull();
+    expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: NaN })).toBeNull();
+  });
   it("rejects invalid values", () => {
     expect(parsePose(null)).toBeNull();
     expect(parsePose({ position: [0, 0], head: [0, 0, 0, 1] })).toBeNull();

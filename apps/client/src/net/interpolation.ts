@@ -43,7 +43,13 @@ export function slerpQuat(a: Quat, b: Quat, t: number): Quat {
 }
 
 export function lerpPose(a: Pose, b: Pose, t: number): Pose {
-  return { position: lerpVec3(a.position, b.position, t), head: slerpQuat(a.head, b.head, t) };
+  const crouchA = a.crouch ?? 0;
+  const crouchB = b.crouch ?? 0;
+  return {
+    position: lerpVec3(a.position, b.position, t),
+    head: slerpQuat(a.head, b.head, t),
+    crouch: crouchA + (crouchB - crouchA) * t,
+  };
 }
 
 /** サーバー時刻付きの姿勢履歴。renderTime における姿勢を補間して返す。 */

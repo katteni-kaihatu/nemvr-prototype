@@ -27,6 +27,18 @@ describe("PoseBuffer", () => {
     expect(b.sample(2000)?.position[0]).toBe(10);
   });
 
+  it("interpolates the height (jumping) and the crouch", () => {
+    const b = new PoseBuffer();
+    b.push(1000, { position: [0, 0, 0], head: [0, 0, 0, 1], crouch: 0 });
+    b.push(1050, { position: [0, 1, 0], head: [0, 0, 0, 1], crouch: 1 });
+    const mid = b.sample(1025)!;
+    expect(mid.position[1]).toBeCloseTo(0.5);
+    expect(mid.crouch).toBeCloseTo(0.5);
+    // しゃがみを送ってこない相手 (古いクライアント) は、立っているとみなす
+    b.push(1100, { position: [0, 0, 0], head: [0, 0, 0, 1] });
+    expect(b.sample(1075)?.crouch).toBeCloseTo(0.5);
+  });
+
   it("ignores out-of-order samples", () => {
     const b = new PoseBuffer();
     b.push(1000, pose(0));

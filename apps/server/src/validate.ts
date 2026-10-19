@@ -31,12 +31,18 @@ function normalizeQuat(q: number[]): Quat | null {
 
 export function parsePose(v: unknown): Pose | null {
   if (typeof v !== "object" || v === null) return null;
-  const { position, head } = v as Record<string, unknown>;
+  const { position, head, crouch } = v as Record<string, unknown>;
   if (!isFiniteArray(position, 3) || !isFiniteArray(head, 4)) return null;
   if (position.some((n) => Math.abs(n) > MAX_ABS_POSITION)) return null;
   const q = normalizeQuat(head);
   if (!q) return null;
-  return { position: position as Vec3, head: q };
+  // しゃがみは任意。あれば有限の数に限り、0〜1 に丸める
+  if (crouch !== undefined && (typeof crouch !== "number" || !Number.isFinite(crouch))) return null;
+  return {
+    position: position as Vec3,
+    head: q,
+    ...(crouch === undefined ? {} : { crouch: Math.max(0, Math.min(1, crouch)) }),
+  };
 }
 
 const MAX_CID_LENGTH = 128;
