@@ -100,7 +100,7 @@ importers:
         specifier: ^6.1.2
         version: 6.1.2(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(terser@5.51.2)(tsx@4.23.15))
       ipfs-unixfs-exporter:
-        specifier: ^16.2.3
+        specifier: 16.2.3
         version: 16.2.3
       typescript:
         specifier: ^7.0.2

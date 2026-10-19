@@ -41,6 +41,18 @@ describe("needsLocalFile", () => {
     expect(needsLocalFile(objects, "cid-a", "me")).toBe(false);
   });
 
+  it("keeps serving a stored video that I placed, while the tab is open (for browser-to-browser P2P)", () => {
+    const video = file("1", { category: "video", name: "clip.webm", stored: true, owner: undefined });
+    expect(needsLocalFile(world(video), "cid-a", "me", true)).toBe(true);
+    // 配っていなければ (他の人が置いた映像なら)、配る必要はない
+    expect(needsLocalFile(world(video), "cid-a", "me", false)).toBe(false);
+    // 映像以外は、保持されたら配るのをやめる
+    const bin = file("2", { stored: true, owner: undefined });
+    expect(needsLocalFile(world(bin), "cid-a", "me", true)).toBe(false);
+    // すべて削除されたら、配るのをやめる
+    expect(needsLocalFile({}, "cid-a", "me", true)).toBe(false);
+  });
+
   it("is false when I am not known yet", () => {
     expect(needsLocalFile(world(file("1")), "cid-a", undefined)).toBe(false);
   });

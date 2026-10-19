@@ -1,3 +1,4 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -13,6 +14,7 @@ import {
 } from "@proto/protocol";
 import { ContentStore } from "./content.js";
 import { ContentRejected, startIpfs } from "./ipfs.js";
+import { mediaType, parseRange } from "./media.js";
 import { PlacementQueue } from "./queue.js";
 import { Room } from "./room.js";
 import { iceServersFor, turnConfigFromEnv } from "./turn.js";
@@ -47,7 +49,81 @@ const content = new ContentStore(ipfs, {
   maxTotalBytes: MAX_TOTAL_MB * 1024 * 1024,
   log: (message) => console.log(`[content] ${message}`),
 });
-const wss = new WebSocketServer({ host: HOST, port: PORT, maxPayload: MAX_MESSAGE_BYTES });
+/**
+ * 動画のストリーミング配信。`GET /media/<cid>` に、ブラウザの `<video>` が送る Range 要求で応える。
+ * 指定された範囲だけを IPFS から流すので、全体を取得しなくても再生が始まり、シークもできる。
+ * サーバーが保持している (stored) ファイルだけを配る (CID を知っていれば誰でも取得できる。ワールドの状態から見える情報と同じ)。
+ */
+async function handleMedia(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (!url.pathname.startsWith("/media/")) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found");
+    return;
+  }
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { Allow: "GET, HEAD" }).end();
+    return;
+  }
+  const cid = decodeURIComponent(url.pathname.slice("/media/".length));
+  const object = room.findStoredFile(cid);
+  if (!object || object.size <= 0) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found");
+    return;
+  }
+
+  const range = parseRange(req.headers.range, object.size);
+  if (range === "invalid") {
+    res.writeHead(416, { "Content-Range": `bytes */${object.size}` }).end();
+    return;
+  }
+  const start = range?.start ?? 0;
+  const end = range?.end ?? object.size - 1;
+  res.writeHead(range ? 206 : 200, {
+    "Content-Type": mediaType(object.name),
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(end - start + 1),
+    // 中身は CID ごとに不変。ただしサーバーが再起動すると消えることがあるので、長くは持たせない
+    "Cache-Control": "private, max-age=0",
+    ...(range ? { "Content-Range": `bytes ${start}-${end}/${object.size}` } : {}),
+  });
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+
+  // 配信の間は、参照を 1 つ増やして、削除されても途中でブロックが消えないようにする
+  content.retain(cid);
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  try {
+    for await (const chunk of ipfs.cat(cid, { offset: start, length: end - start + 1, signal: abort.signal })) {
+      if (res.destroyed) break;
+      if (!res.write(chunk)) await new Promise<void>((resolve) => res.once("drain", resolve));
+    }
+  } catch (err) {
+    if (!abort.signal.aborted) {
+      console.warn(`[media] streaming failed for ${cid}:`, err instanceof Error ? err.message : err);
+      if (!res.headersSent) res.writeHead(500);
+      else res.destroy();
+    }
+  } finally {
+    content.release(cid);
+    res.end();
+  }
+}
+
+const httpServer = createServer((req, res) => {
+  handleMedia(req, res).catch((err: unknown) => {
+    console.warn("[media] request failed:", err instanceof Error ? err.message : err);
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  });
+});
+const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+httpServer.on("upgrade", (req, socket, head) => {
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+});
+httpServer.listen(PORT, HOST);
 const alive = new WeakSet<WebSocket>();
 const placements = new PlacementQueue(MAX_CONCURRENT_VERIFY, MAX_PENDING_PER_PEER);
 
@@ -336,7 +412,7 @@ const pingTimer = setInterval(() => {
   }
 }, PING_INTERVAL_MS);
 
-wss.on("listening", () => {
+httpServer.on("listening", () => {
   console.log(turn ? `TURN: ${turn.host}:${turn.port} (credentials valid ${turn.ttlSeconds}s)` : "TURN: disabled");
   console.log(`WebSocket server listening on ${HOST}:${PORT}`);
   console.log(`IPFS (libp2p ws) listening on ${HOST}:${IPFS_PORT} (public port ${IPFS_PUBLIC_PORT}) as ${ipfs.info.peerId}`);
@@ -347,6 +423,7 @@ function shutdown(): void {
   clearInterval(pingTimer);
   room.close();
   wss.close();
+  httpServer.close();
   void ipfs.stop().finally(() => process.exit(0));
 }
 process.on("SIGINT", shutdown);

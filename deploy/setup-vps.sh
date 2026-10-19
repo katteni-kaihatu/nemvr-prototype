@@ -125,6 +125,10 @@ ${PROTO_HOST} {
 	handle /ws {
 		reverse_proxy 127.0.0.1:8080
 	}
+	# 動画のストリーミング配信 (Range 要求をそのまま流す)
+	handle /media/* {
+		reverse_proxy 127.0.0.1:8080
+	}
 	handle {
 		root * /srv/proto-client
 		try_files {path} /index.html

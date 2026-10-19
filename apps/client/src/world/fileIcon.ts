@@ -118,6 +118,33 @@ function drawAudioGlyph(ctx: CanvasRenderingContext2D, cx: number, cy: number): 
   ctx.restore();
 }
 
+/** 映像: サムネイル (動画の 1 コマ)。暗い背景に、全体が入るように縮小して中央に置く。 */
+function drawVideoThumbnail(ctx: CanvasRenderingContext2D, thumbnail: { image: CanvasImageSource; width: number; height: number }): void {
+  const area = { x: PAGE.x + 18, y: PAGE.y + 22, w: PAGE.w - 36, h: PAGE.h - 44 };
+  ctx.save();
+  roundRect(ctx, area.x, area.y, area.w, area.h, 18);
+  ctx.clip();
+  ctx.fillStyle = "#0b0e12";
+  ctx.fillRect(area.x, area.y, area.w, area.h);
+  if (thumbnail.width > 0 && thumbnail.height > 0) {
+    const scale = Math.min(area.w / thumbnail.width, area.h / thumbnail.height);
+    const w = thumbnail.width * scale;
+    const h = thumbnail.height * scale;
+    ctx.drawImage(thumbnail.image, area.x + (area.w - w) / 2, area.y + (area.h - h) / 2, w, h);
+  }
+  // 上端に、映像であることが分かる小さな帯を置く
+  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+  ctx.fillRect(area.x, area.y, area.w, 40);
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.moveTo(area.x + 18, area.y + 10);
+  ctx.lineTo(area.x + 18, area.y + 30);
+  ctx.lineTo(area.x + 34, area.y + 20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 /** 映像: 再生マークと、フィルムの穴。 */
 function drawVideoGlyph(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
   const { x, y, w, h, fold } = PAGE;
@@ -191,10 +218,12 @@ export interface FileIconInfo {
   category: FileCategory;
   /** 配っていた人が退室し、サーバーも保持していない (取得できない)。暗くして「オフライン」と表示する。 */
   offline?: boolean;
+  /** 映像のサムネイル (動画の 1 コマ)。あれば、映像のアイコンの絵柄の代わりに描く。 */
+  thumbnail?: { image: CanvasImageSource; width: number; height: number };
 }
 
 /** canvas にファイルアイコンを描く (背景は透明)。 */
-export function drawFileIcon(canvas: HTMLCanvasElement, { name, size, category, offline }: FileIconInfo): void {
+export function drawFileIcon(canvas: HTMLCanvasElement, { name, size, category, offline, thumbnail }: FileIconInfo): void {
   canvas.width = ICON_CANVAS_WIDTH;
   canvas.height = ICON_CANVAS_HEIGHT;
   const ctx = canvas.getContext("2d");
@@ -208,7 +237,8 @@ export function drawFileIcon(canvas: HTMLCanvasElement, { name, size, category, 
     drawAudioGlyph(ctx, cx, cy);
     drawBadge(ctx, iconLabel(name), cx, PAGE.y + PAGE.h - 52, "rgba(0, 0, 0, 0.28)", "#ffffff", 40);
   } else if (category === "video") {
-    drawVideoGlyph(ctx, cx, cy);
+    if (thumbnail) drawVideoThumbnail(ctx, thumbnail);
+    else drawVideoGlyph(ctx, cx, cy);
     drawBadge(ctx, iconLabel(name), cx, PAGE.y + PAGE.h - 52, "rgba(0, 0, 0, 0.32)", "#ffffff", 40);
   } else {
     drawFileGlyph(ctx, iconLabel(name));

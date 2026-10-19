@@ -68,6 +68,8 @@ export interface IpfsNode {
   gc(): Promise<void>;
   /** このノードがそのブロックを持っているか。 */
   has(cid: string): Promise<boolean>;
+  /** 中身を、指定した範囲 (offset から length バイト) だけ流す (動画のストリーミング配信)。 */
+  cat(cid: string, options?: { offset?: number; length?: number; signal?: AbortSignal }): AsyncIterable<Uint8Array>;
   stop(): Promise<void>;
 }
 
@@ -279,6 +281,7 @@ export async function startIpfs(
     unpin,
     gc: () => helia.gc(),
     has: async (cid) => helia.blockstore.has(CID.parse(cid)),
+    cat: (cidString, options = {}) => fs.cat(CID.parse(cidString), options),
     stop: async () => {
       await helia.stop();
     },

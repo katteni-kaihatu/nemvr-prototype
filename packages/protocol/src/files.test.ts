@@ -6,6 +6,7 @@ import {
   formatBytes,
   iconLabel,
   imageExtension,
+  mediaType,
   sanitizeFileName,
   sniffMediaKind,
 } from "./files.js";
@@ -139,5 +140,17 @@ describe("imageExtension", () => {
     expect(imageExtension(bytes("%PDF-1.7"))).toBe("");
     expect(imageExtension(bytes("RIFF", 0, 0, 0, 0, "WAVEfmt "))).toBe("");
     expect(imageExtension(new Uint8Array())).toBe("");
+  });
+});
+
+describe("mediaType", () => {
+  it("returns the Content-Type from the extension", () => {
+    expect(mediaType("clip.webm")).toBe("video/webm");
+    expect(mediaType("MOVIE.MP4")).toBe("video/mp4");
+    expect(mediaType("song.mp3")).toBe("audio/mpeg");
+  });
+  it("falls back to application/octet-stream", () => {
+    expect(mediaType("no-extension")).toBe("application/octet-stream");
+    expect(mediaType("weird.xyz")).toBe("application/octet-stream");
   });
 });

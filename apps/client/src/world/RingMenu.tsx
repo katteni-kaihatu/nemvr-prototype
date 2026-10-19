@@ -3,10 +3,12 @@ import { formatBytes, type WorldObject } from "@proto/protocol";
 import { sendDeleteObject, sendDuplicateObject, useNet } from "../net/connection";
 import { downloadObject } from "../net/download";
 import { useInteraction } from "./interaction";
+import { isPlaying, pauseVideo, playVideo } from "./videoPlayback";
 
 interface MenuItem {
   id: string;
-  label: string;
+  /** ボタンの文字 (状態によって変えるときは関数にする) */
+  label: string | ((object: WorldObject) => string);
   /** 対象のオブジェクトに対して実行する */
   run: (object: WorldObject) => void;
   /** このオブジェクトに出すか (省略すると常に出す) */
@@ -15,6 +17,13 @@ interface MenuItem {
 
 /** リングに並べるボタン。増やすときはここに足す (等間隔に配置される)。 */
 const ITEMS: MenuItem[] = [
+  {
+    id: "play",
+    // 空間に置いたまま再生する。もう一度押すと一時停止
+    label: (o) => (isPlaying(o.id) ? "一時停止" : "再生"),
+    run: (o) => (isPlaying(o.id) ? pauseVideo(o.id) : playVideo(o.id)),
+    applies: (o) => o.kind === "file" && o.category === "video",
+  },
   { id: "delete", label: "削除", run: (o) => sendDeleteObject(o.id) },
   { id: "duplicate", label: "複製", run: (o) => sendDuplicateObject(o.id) },
   { id: "download", label: "ダウンロード", run: (o) => void downloadObject(o), applies: (o) => o.kind !== "box" },
@@ -139,7 +148,7 @@ export function RingMenu() {
                 cursor: "pointer",
               }}
             >
-              {item.label}
+              {typeof item.label === "function" ? item.label(object) : item.label}
             </button>
           );
         })}

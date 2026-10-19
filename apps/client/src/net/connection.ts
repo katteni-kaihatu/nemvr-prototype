@@ -19,6 +19,7 @@ import {
   rememberPeerName,
   holdUpload,
   IpfsUnavailableError,
+  isServing,
   keepServing,
   releaseUpload,
   startIpfs,
@@ -249,7 +250,7 @@ export function connect(name: string): void {
           if (object.stored) settlePrepare(object.id);
           else if (object.offline) settlePrepare(object.id, new Error("アップロードした人が退室しているため、取得できません"));
           // サーバーが保持したので、自分が配り続ける必要はなくなった
-          if (!needsLocalFile(useNet.getState().objects, object.cid, useNet.getState().self?.id)) releaseUpload(object.cid);
+          if (!needsLocalFile(useNet.getState().objects, object.cid, useNet.getState().self?.id, isServing(object.cid))) releaseUpload(object.cid);
         }
         // 自分がつかもうとしたが、先に他の人がつかんでいた (サーバーに拒否された)
         const interaction = useInteraction.getState();
@@ -267,7 +268,7 @@ export function connect(name: string): void {
         });
         settlePrepare(msg.id, new Error("削除されました"));
         // 自分が配っていたファイルが、すべて削除された
-        if (removed?.kind === "file" && !needsLocalFile(useNet.getState().objects, removed.cid, useNet.getState().self?.id)) {
+        if (removed?.kind === "file" && !needsLocalFile(useNet.getState().objects, removed.cid, useNet.getState().self?.id, isServing(removed.cid))) {
           releaseUpload(removed.cid);
         }
         const interaction = useInteraction.getState();
@@ -298,6 +299,9 @@ export function connect(name: string): void {
             `${name ?? object.name}: 置きました。サーバーが取得しています。終わるまで、このタブを開いたままにしてください`,
             12_000,
           );
+        } else if (object.kind === "file" && object.category === "video" && isServing(object.cid)) {
+          // 映像は、他のブラウザに P2P で配れるように、このタブが開いている間は配り続ける
+          keepServing(object.cid);
         } else {
           // 自分が置いたものをサーバーが取り終えた。ブラウザ側のブロックは、もう配らなくてよい
           releaseUpload(object.cid);

@@ -10,6 +10,7 @@ import { yamux } from "@libp2p/yamux";
 import { multiaddr } from "@multiformats/multiaddr";
 import { createHeliaLight } from "helia";
 import { CID } from "multiformats/cid";
+import { exporter } from "ipfs-unixfs-exporter";
 import { MAX_IMAGE_BYTES, type IceServer, type IpfsInfo } from "@proto/protocol";
 import { assembleBlob } from "./blobAssembly";
 import { ServingBlockstore, importFileBacked } from "./fileBackedBlockstore";
@@ -313,6 +314,82 @@ export interface FetchBlobOptions {
   onProgress?: (loadedBytes: number) => void;
   /** ブロックを 1 つ受け取るたびに、送ってきたピアの libp2p ID で呼ばれる (取得元の内訳を知るため)。 */
   onSource?: (peerId: string) => void;
+  /** 呼び出し側からの中断 (動画の画面を閉じたときなど)。 */
+  signal?: AbortSignal;
+}
+
+/**
+ * CID の中身を、指定した範囲だけ流す (ブラウザ同士の P2P。Service Worker 経由の動画再生で使う)。
+ * 1 チャンクずつ `fs.cat` から受け取る (ブロックは保存しない)。
+ */
+export async function catContent(
+  cid: string,
+  options: {
+    offset?: number;
+    length?: number;
+    signal?: AbortSignal;
+    /** ブロックを受け取るたびに、送ってきたピアの libp2p ID で呼ばれる */
+    onSource?: (peerId: string) => void;
+    /**
+     * サーバー以外の、直接つながっているブラウザを優先して取得する (動画の P2P 配信)。
+     * ブラウザが持っていない場合は、通常の取得 (サーバーなども含む) に切り替える。
+     */
+    preferBrowserPeers?: boolean;
+  } = {},
+): Promise<AsyncIterable<Uint8Array>> {
+  const { helia, fs } = await requireNode();
+  const { onSource, preferBrowserPeers, ...catOptions } = options;
+  const progress = onSource
+    ? {
+        onProgress: (evt: { type: string; detail?: unknown }) => {
+          if (evt.type === "bitswap:block") onSource(String((evt.detail as { sender: unknown }).sender));
+        },
+      }
+    : {};
+  const root = CID.parse(cid);
+
+  if (preferBrowserPeers) {
+    // サーバー (中継・保持役) を除いた、直接つながっているブラウザ
+    const peers = [
+      ...new Map(
+        helia.libp2p
+          .getConnections()
+          .filter((c) => c.remotePeer.toString() !== serverPeerId)
+          .map((c) => [c.remotePeer.toString(), c.remotePeer.toCID()] as const),
+      ).values(),
+    ];
+    if (peers.length > 0) {
+      console.info(`[p2p-media] trying ${peers.length} browser peer(s) first`);
+      const session = helia.blockstore.createSession(root, { providers: peers, maxProviders: peers.length });
+      try {
+        const entry = await exporter(root, session, { ...catOptions, ...progress });
+        if ((entry.type === "file" || entry.type === "raw") && entry.content != null) {
+          console.info("[p2p-media] browser-first fetch succeeded");
+          const content = entry.content({ ...catOptions, ...progress });
+          return closeWithSession(content, session);
+        }
+      } catch (err) {
+        console.warn("[p2p-media] browser peers could not supply the video; using any peer:", err);
+      }
+      session.close();
+    } else {
+      console.info("[p2p-media] no browser peers connected; using any peer");
+    }
+  }
+
+  return fs.cat(root, { ...catOptions, ...progress });
+}
+
+/** 読み終わったら、セッション (ブラウザ優先の取得) を閉じる。 */
+async function* closeWithSession(
+  content: AsyncIterable<Uint8Array>,
+  session: { close: () => void },
+): AsyncGenerator<Uint8Array> {
+  try {
+    yield* content;
+  } finally {
+    session.close();
+  }
 }
 
 /**
@@ -322,11 +399,11 @@ export interface FetchBlobOptions {
  */
 export async function fetchBlob(
   cid: string,
-  { maxBytes, idleTimeoutMs = IDLE_TIMEOUT_MS, maxTotalMs = MAX_TOTAL_MS, onProgress, onSource }: FetchBlobOptions,
+  { maxBytes, idleTimeoutMs = IDLE_TIMEOUT_MS, maxTotalMs = MAX_TOTAL_MS, onProgress, onSource, signal: outer }: FetchBlobOptions,
 ): Promise<Blob> {
   const { fs } = await requireNode();
   const abort = new AbortController();
-  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(maxTotalMs)]);
+  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(maxTotalMs), ...(outer ? [outer] : [])]);
   let idle = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const touch = () => {
@@ -384,5 +461,21 @@ if (import.meta.env.DEV) {
     fetchBlob,
     /** 内部状態 (いま配っているアップロードの数) */
     state: () => ({ serving: servingStore?.servingCount ?? 0, heldUploads: heldUploads.size }),
+    get serverPeerId() { return serverPeerId; },
+    /** 開発時のみ: 指定したピアとの libp2p 接続を切る (P2P の確認用) */
+    hangUp: async (peerId: string) => {
+      try {
+        const { helia } = await requireNode();
+        const peers = helia.libp2p.getConnections().filter((c) => c.remotePeer.toString() === peerId).map((c) => c.remotePeer);
+        await Promise.all(peers.map((p) => helia.libp2p.hangUp(p)));
+      } catch (err) {
+        console.warn(`[ipfs] hangUp failed: ${String(err)}`);
+      }
+    },
+    /** 開発時のみ: いま libp2p でつながっているピアの ID */
+    connections: async () => {
+      const { helia } = await requireNode();
+      return helia.libp2p.getConnections().map((c) => c.remotePeer.toString());
+    },
   };
 }

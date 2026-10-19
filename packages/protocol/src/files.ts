@@ -128,3 +128,23 @@ export function formatBytes(bytes: number): string {
   }
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
 }
+
+/** ブラウザの `<video>` / `<audio>` に渡す Content-Type。拡張子から決める (判定できなければ application/octet-stream)。 */
+const MEDIA_TYPES: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  ogv: "video/ogg",
+  mov: "video/quicktime",
+  mkv: "video/x-matroska",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  wav: "audio/wav",
+  flac: "audio/flac",
+};
+
+export function mediaType(name: string): string {
+  return MEDIA_TYPES[extensionOf(name)] ?? "application/octet-stream";
+}

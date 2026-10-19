@@ -214,6 +214,14 @@ export class Room {
     return true;
   }
 
+  /** サーバーが保持している、その内容 (CID) のファイルを 1 つ返す。無ければ undefined。 */
+  findStoredFile(cid: string): Extract<WorldObject, { kind: "file" }> | undefined {
+    for (const object of this.objects.values()) {
+      if (object.kind === "file" && object.cid === cid && object.stored) return object;
+    }
+    return undefined;
+  }
+
   /** まだサーバーが保持していない、その内容 (CID) のファイルを 1 つ返す。無ければ undefined。 */
   findUnstoredFile(cid: string): Extract<WorldObject, { kind: "file" }> | undefined {
     for (const object of this.objects.values()) {

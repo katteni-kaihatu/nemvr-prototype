@@ -60,13 +60,85 @@ if (import.meta.env.DEV) {
   (window as unknown as { __downloadReports: DownloadReport[] }).__downloadReports = [];
 }
 
+export interface ObjectBlobOptions {
+  /** 取得したバイト数 (と、全体のバイト数。分からなければ undefined) */
+  onProgress?: (loaded: number, total?: number) => void;
+  /** 「準備中」などの状態 (HUD に出す) */
+  onStatus?: (message: string) => void;
+  /** 中断 (動画の画面を閉じたときなど) */
+  signal?: AbortSignal;
+}
+
+export interface ObjectBlob {
+  blob: Blob;
+  /** ブロックの取得元の内訳 */
+  sources: FetchSource[];
+  /** 先に直接取得を試して、だめだったので、サーバーに取得させて待った */
+  usedFallback: boolean;
+}
+
 /**
- * オブジェクトの中身を IPFS から取得して、ファイルとして保存する (ブラウザのダウンロード)。
- * 進捗と結果、ブロックの取得元の内訳は HUD に表示する。
+ * オブジェクトの中身を IPFS から取得して Blob にする (ダウンロードと、動画の再生で共通)。
  *
  * サーバーがまだ保持していない大きなファイル (置いた直後で、サーバーが取得している途中) は、
  * 先に、繋がっている相手から直接の取得を試す。データが届かない・失敗したときは、
  * サーバーに取得の完了を待たせて (request_file)、そのあとで取得し直す。
+ */
+export async function fetchObjectBlob(
+  object: Exclude<WorldObject, { kind: "box" }>,
+  { onProgress, onStatus, signal }: ObjectBlobOptions = {},
+): Promise<ObjectBlob> {
+  const counts = new Map<string, number>();
+  let usedFallback = false;
+  const maxBytes = object.kind === "file" ? MAX_FILE_BYTES : MAX_IMAGE_BYTES;
+  const total = object.kind === "file" ? object.size : undefined;
+  const label = object.kind === "file" ? object.name : "画像";
+  const fetchOnce = (idleTimeoutMs?: number) => {
+    counts.clear();
+    return fetchBlob(object.cid, {
+      maxBytes,
+      idleTimeoutMs,
+      signal,
+      onSource: (peer) => counts.set(peer, (counts.get(peer) ?? 0) + 1),
+      onProgress: (loaded) => onProgress?.(loaded, total),
+    });
+  };
+  /** サーバーがまだ保持していない (置いた直後などで、取得している途中の) ファイルか。自分が配っているなら、そのまま取れる。 */
+  const notStoredYet = () => {
+    const latest = useNet.getState().objects[object.id];
+    return object.kind === "file" && !!latest && latest.kind === "file" && !latest.stored && !isServing(object.cid);
+  };
+
+  let blob: Blob;
+  if (!notStoredYet()) {
+    blob = await fetchOnce();
+  } else {
+    try {
+      // 開発時のみ: E2E テストから、直接の取得が失敗した場合 (サーバーに取得させて待つ方) を試せるようにする
+      if (import.meta.env.DEV && (window as unknown as { __forceDownloadFallback?: boolean }).__forceDownloadFallback) {
+        throw new Error("直接の取得を失敗させた (テスト)");
+      }
+      blob = await fetchOnce(DIRECT_TRY_IDLE_MS); // 先に、繋がっている相手から直接
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      console.warn("[download] direct fetch failed; asking the server to fetch it first:", err);
+      usedFallback = true;
+      const latest = useNet.getState().objects[object.id];
+      if (!latest) throw new Error("ファイルは削除されました");
+      if (latest.kind === "file" && !latest.stored) {
+        if (latest.offline) throw new Error("アップロードした人が退室しているため、取得できません");
+        onStatus?.(`${label}: ダウンロードの準備 (サーバーが、置いた人から取得しています)`);
+        await requestStored(latest);
+      }
+      blob = await fetchOnce();
+    }
+  }
+  return { blob, sources: summarizeSources(counts), usedFallback };
+}
+
+/**
+ * オブジェクトの中身を IPFS から取得して、ファイルとして保存する (ブラウザのダウンロード)。
+ * 進捗と結果、ブロックの取得元の内訳は HUD に表示する。
  */
 export async function downloadObject(object: WorldObject): Promise<void> {
   if (object.kind === "box") return; // ボックスはダウンロードできない
@@ -75,65 +147,22 @@ export async function downloadObject(object: WorldObject): Promise<void> {
 
   const label = downloadName(object);
   let lastNoticeAt = 0;
-  const counts = new Map<string, number>();
-  let usedFallback = false;
   try {
-    const maxBytes = object.kind === "file" ? MAX_FILE_BYTES : MAX_IMAGE_BYTES;
-    const currentSize = () => {
-      const latest = useNet.getState().objects[object.id];
-      return latest?.kind === "file" ? latest.size : undefined;
-    };
-    const fetchOnce = (idleTimeoutMs?: number): Promise<Blob> => {
-      counts.clear();
-      const total = currentSize();
-      showNotice(`ダウンロード中: ${label}`, 60_000);
-      return fetchBlob(object.cid, {
-        maxBytes,
-        idleTimeoutMs,
-        onSource: (peer) => counts.set(peer, (counts.get(peer) ?? 0) + 1),
-        onProgress: (loaded) => {
-          const now = performance.now();
-          if (now - lastNoticeAt < PROGRESS_INTERVAL_MS) return;
-          lastNoticeAt = now;
-          const progress = total ? `${Math.min(100, Math.floor((loaded / total) * 100))}% (${formatBytes(loaded)} / ${formatBytes(total)})` : formatBytes(loaded);
-          showNotice(`ダウンロード中: ${label} ${progress}`, 60_000);
-        },
-      });
-    };
-    /** サーバーがまだ保持していない (置いた直後などで、取得している途中の) ファイルか。自分が配っているなら、そのまま取れる。 */
-    const notStoredYet = () => {
-      const latest = useNet.getState().objects[object.id];
-      return object.kind === "file" && !!latest && latest.kind === "file" && !latest.stored && !isServing(object.cid);
-    };
-
-    let blob: Blob;
-    if (!notStoredYet()) {
-      blob = await fetchOnce();
-    } else {
-      try {
-        // 開発時のみ: E2E テストから、直接の取得が失敗した場合 (サーバーに取得させて待つ方) を試せるようにする
-        if (import.meta.env.DEV && (window as unknown as { __forceDownloadFallback?: boolean }).__forceDownloadFallback) {
-          throw new Error("直接の取得を失敗させた (テスト)");
-        }
-        blob = await fetchOnce(DIRECT_TRY_IDLE_MS); // 先に、繋がっている相手から直接
-      } catch (err) {
-        console.warn("[download] direct fetch failed; asking the server to fetch it first:", err);
-        usedFallback = true;
-        const latest = useNet.getState().objects[object.id];
-        if (!latest) throw new Error("ファイルは削除されました");
-        if (latest.kind === "file" && !latest.stored) {
-          if (latest.offline) throw new Error("アップロードした人が退室しているため、取得できません");
-          showNotice(`${label}: ダウンロードの準備 (サーバーが、置いた人から取得しています)`, 60_000);
-          await requestStored(latest);
-        }
-        blob = await fetchOnce();
-      }
-    }
+    showNotice(`ダウンロード中: ${label}`, 60_000);
+    const { blob, sources, usedFallback } = await fetchObjectBlob(object, {
+      onStatus: (message) => showNotice(message, 60_000),
+      onProgress: (loaded, total) => {
+        const now = performance.now();
+        if (now - lastNoticeAt < PROGRESS_INTERVAL_MS) return;
+        lastNoticeAt = now;
+        const progress = total ? `${Math.min(100, Math.floor((loaded / total) * 100))}% (${formatBytes(loaded)} / ${formatBytes(total)})` : formatBytes(loaded);
+        showNotice(`ダウンロード中: ${label} ${progress}`, 60_000);
+      },
+    });
 
     const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
     const name = downloadName(object, head);
     saveBlob(blob, name);
-    const sources = summarizeSources(counts);
     console.info(`[download] ${name} (${formatBytes(blob.size)}) from: ${describeSources(sources)}${usedFallback ? " (after fallback to request_file)" : ""}`);
     showNotice(`ダウンロードしました: ${name} (${formatBytes(blob.size)}) / 取得元: ${describeSources(sources)}`, 10_000);
     if (import.meta.env.DEV) {

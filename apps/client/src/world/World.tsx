@@ -90,7 +90,7 @@ function HUD({ count }: { count: number }) {
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Space でジャンプ / C・Ctrl (押している間) でしゃがみ / Q・E (押している間) でリーン / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>ファイルや画像をドロップして配置 (視点操作中は Esc で解除してから)</div>
-      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ (つかんだままマウスを上下: 持ち上げ、ホイール: 遠く・近く、E: 移動 / 回転モード) / 中ボタンでメニュー (削除・複製・ダウンロード)</div>
+      <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ (つかんだままマウスを上下: 持ち上げ、ホイール: 遠く・近く、E: 移動 / 回転モード) / 中ボタンでメニュー (削除・複製・ダウンロード・動画はその場で再生)</div>
       {grabbedId && (
         <div style={{ color: "#a5d6a7" }}>
           {grabMode === "rotate"
