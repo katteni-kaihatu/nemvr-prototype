@@ -10,6 +10,9 @@ import { markEnded, registerVideoElement, useVideoPlayback } from "./videoPlayba
 const SCREEN_MAX_WIDTH = 1.8;
 const SCREEN_MAX_HEIGHT = 1.2;
 
+/** 画面に描画されていない要素からは、VideoTexture がフレームを取れないことがある。見えない位置に置く。 */
+const OFFSCREEN = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1";
+
 /**
  * ワールドに置かれたファイル。
  *
@@ -17,7 +20,7 @@ const SCREEN_MAX_HEIGHT = 1.2;
  * - 映像: サムネイル (動画の 1 コマ) をアイコンに描く。リングメニューの「再生」で、その場 (板の位置) に
  *   映像の画面を広げて再生する (全画面にはしない)。もう一度押すと一時停止する。
  *
- * 映像の中身は、サーバーの `/media/<cid>` から取得する (サムネイルも再生も、必要な範囲だけ)。
+ * 映像の中身は、再生のときはブラウザ同士の P2P (Service Worker 経由)、サムネイルはサーバーの `/media` から取得する。
  */
 export function FilePlane({ object }: { object: FileObject }) {
   const { name, size, category, offline, stored } = object;
@@ -27,6 +30,7 @@ export function FilePlane({ object }: { object: FileObject }) {
   const [thumbnail, setThumbnail] = useState<{ image: HTMLCanvasElement; width: number; height: number } | null>(null);
   const [aspect, setAspect] = useState(16 / 9);
   const [videoTexture, setVideoTexture] = useState<VideoTexture | null>(null);
+  /** 再生用の video 要素 (P2P の URL を最初から持つ。preload=none で、再生するまで読まない) */
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // アイコンのテクスチャ (2D canvas)。サムネイルが用意できたら、描き直す
@@ -40,23 +44,60 @@ export function FilePlane({ object }: { object: FileObject }) {
   }, [name, size, category, offline, thumbnail]);
   useEffect(() => () => iconTexture.dispose(), [iconTexture]);
 
-  // 映像の要素を作る (サーバーが保持しているときだけ)。サムネイルの作成と再生の両方に使う
   useEffect(() => {
     if (!isVideo || !stored) return;
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.muted = true; // サムネイル用 (再生のときに音を出す)
-    video.playsInline = true;
-    // VideoTexture は、画面に描画されていない要素からはフレームを取れないことがある。見えない位置に置く
-    video.style.cssText =
-      "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;z-index:-1";
-    document.body.append(video);
-    videoRef.current = video;
-    registerVideoElement(object.id, video);
 
-    // 動画は、ブラウザ内の IPFS (bitswap) から P2P で流す (Service Worker 経由)。
-    // 使えない環境では、サーバーの /media に切り替える。登録が終わるまで src は設定しない
-    // (先に <video> が URL を要求すると、SW が 404 を返してしまう)
+    // 再生用の要素。最初から P2P の URL を持たせる (再生のときに src を変えると、
+    // Firefox で再生が中断されることがあるため)。preload=none なので、再生するまで取得しない
+    const player = document.createElement("video");
+    player.preload = "none";
+    player.muted = true; // 再生のときに音を出す
+    player.playsInline = true;
+    player.style.cssText = OFFSCREEN;
+    document.body.append(player);
+    videoRef.current = player;
+    registerVideoElement(object.id, player);
+    const onEnded = () => markEnded(object.id);
+    player.addEventListener("ended", onEnded);
+
+    // サムネイル用の要素。サーバーの /media からメタデータと 1 コマだけ読む。
+    // 読み終わったら要素を外して、要求を閉じる (ダウンロードと同じ CID を同時に取りに行かないように)
+    const thumb = document.createElement("video");
+    thumb.preload = "metadata";
+    thumb.muted = true;
+    thumb.playsInline = true;
+    thumb.src = `/media/${encodeURIComponent(object.cid)}`;
+    thumb.style.cssText = OFFSCREEN;
+    document.body.append(thumb);
+
+    let captured = false;
+    const capture = () => {
+      if (captured || thumb.videoWidth <= 0 || thumb.videoHeight <= 0) return;
+      captured = true;
+      const canvas = document.createElement("canvas");
+      canvas.width = thumb.videoWidth;
+      canvas.height = thumb.videoHeight;
+      canvas.getContext("2d")?.drawImage(thumb, 0, 0);
+      setThumbnail({ image: canvas, width: canvas.width, height: canvas.height });
+      // サムネイルが撮れたら、再生はしない (要素は残す。取得はサーバーの /media なので、P2P の要求とは競合しない)
+      thumb.pause();
+    };
+    const onMetadata = () => {
+      if (thumb.videoWidth > 0 && thumb.videoHeight > 0) setAspect(thumb.videoWidth / thumb.videoHeight);
+      // 10% の位置 (長すぎる場合は 2 秒) のコマをサムネイルにする
+      if (!captured) {
+        thumb.currentTime = Number.isFinite(thumb.duration) ? Math.min(Math.max(0.05, thumb.duration * 0.1), 2) : 0.1;
+      }
+    };
+    const onError = () => thumb.remove();
+    thumb.addEventListener("loadedmetadata", onMetadata);
+    thumb.addEventListener("seeked", capture);
+    thumb.addEventListener("error", onError);
+    // 自動で先頭のコマが来た場合 (シークが起きない形式) にも撮る
+    thumb.addEventListener("loadeddata", () => {
+      if (!captured && thumb.currentTime === 0) capture();
+    });
+
     let cancelled = false;
     let source: P2pMediaSource | null = null;
     void (async () => {
@@ -65,57 +106,21 @@ export function FilePlane({ object }: { object: FileObject }) {
         source?.stop();
         return;
       }
-      video.src = source?.url ?? `/media/${encodeURIComponent(object.cid)}`;
-      video.load();
+      // Service Worker が使えない環境では、サーバーの /media から再生する
+      player.src = source?.url ?? `/media/${encodeURIComponent(object.cid)}`;
     })();
-
-    // サムネイルは 1 回だけ描く (描いたあとに先頭へ戻すと、seeked がまた走って、
-    // 再生中に毎回シークし直す無限ループになるため)
-    let captured = false;
-    const capture = () => {
-      if (captured || video.videoWidth <= 0 || video.videoHeight <= 0) return;
-      captured = true;
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext("2d")?.drawImage(video, 0, 0);
-      setThumbnail({ image: canvas, width: canvas.width, height: canvas.height });
-    };
-    const onMetadata = () => {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-      if (w > 0 && h > 0) setAspect(w / h);
-      // 再生中でなければ、10% の位置 (長すぎる場合は 2 秒) のコマをサムネイルにする
-      if (video.paused) {
-        video.currentTime = Number.isFinite(video.duration) ? Math.min(Math.max(0.05, video.duration * 0.1), 2) : 0.1;
-      }
-    };
-    const onSeeked = () => {
-      if (captured) return;
-      capture();
-      // サムネイル用のシークが終わったら、先頭に戻しておく (まだ再生していないときだけ)
-      if (video.paused) video.currentTime = 0;
-    };
-    const onLoadedData = () => {
-      // 再生が先に始まっていた場合は、最初のコマをそのままサムネイルにする
-      if (!video.paused) capture();
-    };
-    const onEnded = () => markEnded(object.id);
-    video.addEventListener("loadedmetadata", onMetadata);
-    video.addEventListener("seeked", onSeeked);
-    video.addEventListener("loadeddata", onLoadedData);
-    video.addEventListener("ended", onEnded);
 
     return () => {
       cancelled = true;
       // 先に要素を外して、読み込み中の要求を止める (そのあとで配信の口を閉じる)
-      video.removeEventListener("loadedmetadata", onMetadata);
-      video.removeEventListener("seeked", onSeeked);
-      video.removeEventListener("loadeddata", onLoadedData);
-      video.removeEventListener("ended", onEnded);
+      thumb.removeEventListener("loadedmetadata", onMetadata);
+      thumb.removeEventListener("seeked", capture);
+      thumb.removeEventListener("error", onError);
+      thumb.remove();
+      player.removeEventListener("ended", onEnded);
       registerVideoElement(object.id, null);
-      video.pause();
-      video.remove();
+      player.pause();
+      player.remove();
       videoRef.current = null;
       source?.stop();
     };

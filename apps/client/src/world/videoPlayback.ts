@@ -14,6 +14,18 @@ export const useVideoPlayback = create<VideoPlaybackState>(() => ({ playing: {} 
 
 /** オブジェクト ID ごとの、動画の要素 (サムネイルの作成と再生に使う)。 */
 const elements = new Map<string, HTMLVideoElement>();
+/** オブジェクト ID ごとの、再生に使う P2P の URL (/p2p-media/<id>)。 */
+const playbackUrls = new Map<string, string>();
+
+/** 再生に使う P2P の URL を登録する (Service Worker が使えないときは null)。 */
+if (import.meta.env.DEV) {
+  (window as unknown as { __videoPlayback: unknown }).__videoPlayback = { playbackUrls, elements };
+}
+
+export function registerPlaybackUrl(id: string, url: string | null): void {
+  if (url) playbackUrls.set(id, url);
+  else playbackUrls.delete(id);
+}
 
 export function registerVideoElement(id: string, element: HTMLVideoElement | null): void {
   if (element) elements.set(id, element);
@@ -34,8 +46,8 @@ export function isPlaying(id: string): boolean {
  */
 export function playVideo(id: string): void {
   const video = elements.get(id);
-  if (!video) {
-    showNotice("動画の準備ができていません (サーバーが取得中です)。少し待ってから、もう一度お試しください", 5000);
+  if (!video || !video.src) {
+    showNotice("動画の準備ができていません。少し待ってから、もう一度お試しください", 5000);
     return;
   }
   video.muted = false;

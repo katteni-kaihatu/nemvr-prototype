@@ -9,6 +9,8 @@ import {
   initialVertical,
   isGrounded,
   LEAN_ANGLE,
+  moveSpeedFactor,
+  SPRINT_SPEED_FACTOR,
   leanPose,
   speedFactorFor,
   stepLean,
@@ -262,5 +264,25 @@ describe("二段ジャンプ", () => {
   it("物の上でしゃがんでいても、ジャンプはできない", () => {
     const v: Vertical = { y: 1, vy: 0, crouch: 0.9, grounded: true, airJumps: 1 };
     expect(stepVertical(v, PRESS, DT).vy).toBeLessThanOrEqual(0);
+  });
+});
+
+describe("走る (Shift)", () => {
+  it("立っているときは、走ると歩く速さの 2 倍", () => {
+    expect(moveSpeedFactor(0, false)).toBe(1);
+    expect(moveSpeedFactor(0, true)).toBe(SPRINT_SPEED_FACTOR);
+    expect(SPRINT_SPEED_FACTOR).toBe(2);
+  });
+
+  it("しゃがんでいるときは、Shift を押しても走れない (しゃがみの速さのまま)", () => {
+    expect(moveSpeedFactor(1, true)).toBe(CROUCH_SPEED_FACTOR);
+    expect(moveSpeedFactor(0.6, true)).toBeCloseTo(speedFactorFor(0.6)); // 0.5 より深い
+    expect(moveSpeedFactor(0.5, true)).toBeCloseTo(speedFactorFor(0.5)); // 境界も走れない
+    expect(moveSpeedFactor(0.4, true)).toBeCloseTo(speedFactorFor(0.4) * SPRINT_SPEED_FACTOR); // 浅ければ走れる
+  });
+
+  it("範囲外のしゃがみは丸める", () => {
+    expect(moveSpeedFactor(-1, true)).toBe(SPRINT_SPEED_FACTOR);
+    expect(moveSpeedFactor(9, true)).toBe(CROUCH_SPEED_FACTOR);
   });
 });

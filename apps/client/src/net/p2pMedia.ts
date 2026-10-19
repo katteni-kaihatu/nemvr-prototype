@@ -6,7 +6,11 @@ let available: Promise<boolean> | null = null;
 /** 取得元の内訳 (開発時のみ、E2E から確認できるようにする)。 */
 const stats = { blocks: {} as Record<string, number> };
 if (import.meta.env.DEV) {
-  (window as unknown as { __p2pMedia: typeof stats }).__p2pMedia = stats;
+  (window as unknown as { __p2pMedia: unknown }).__p2pMedia = {
+    ...stats,
+    available: () => p2pMediaAvailable(),
+    controller: () => !!navigator.serviceWorker.controller,
+  };
 }
 
 function recordSource(peer: string): void {
@@ -19,6 +23,7 @@ function recordSource(peer: string): void {
  */
 export function p2pMediaAvailable(): Promise<boolean> {
   if (available) return available;
+  // 失敗 (まだ制御されていない) は覚えない。次の機会にやり直す
   available = (async () => {
     if (!("serviceWorker" in navigator)) return false;
     try {
@@ -42,6 +47,9 @@ export function p2pMediaAvailable(): Promise<boolean> {
       return false;
     }
   })();
+  void available.then((ok) => {
+    if (!ok) available = null;
+  });
   return available;
 }
 
@@ -65,9 +73,15 @@ interface StreamEntry {
  * Service Worker が使えない環境では null (呼び出し側は、サーバーの `/media` などに切り替える)。
  */
 export async function registerP2pMedia(cid: string, size: number, name: string): Promise<P2pMediaSource | null> {
-  if (!(await p2pMediaAvailable())) return null;
+  if (!(await p2pMediaAvailable())) {
+    console.warn("[p2p-media] service worker is not available");
+    return null;
+  }
   const controller = navigator.serviceWorker.controller;
-  if (!controller) return null;
+  if (!controller) {
+    console.warn("[p2p-media] no service worker controller");
+    return null;
+  }
 
   const id = crypto.randomUUID();
   const channel = new MessageChannel();

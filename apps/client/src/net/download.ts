@@ -142,7 +142,10 @@ export async function fetchObjectBlob(
  */
 export async function downloadObject(object: WorldObject): Promise<void> {
   if (object.kind === "box") return; // ボックスはダウンロードできない
-  if (downloading.has(object.id)) return;
+  if (downloading.has(object.id)) {
+    console.warn(`[download] already downloading ${object.id}`);
+    return;
+  }
   downloading.add(object.id);
 
   const label = downloadName(object);
@@ -169,7 +172,7 @@ export async function downloadObject(object: WorldObject): Promise<void> {
       (window as unknown as { __downloadReports: DownloadReport[] }).__downloadReports.push({ name, size: blob.size, sources, usedFallback });
     }
   } catch (err) {
-    console.warn("[download] failed:", err);
+    console.warn(`[download] failed: ${err instanceof Error ? err.message : String(err)}`, err);
     showNotice(`ダウンロードに失敗しました: ${label}${err instanceof Error ? ` (${err.message})` : ""}`, 8000);
   } finally {
     downloading.delete(object.id);

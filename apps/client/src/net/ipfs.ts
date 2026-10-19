@@ -22,6 +22,10 @@ const IDLE_TIMEOUT_MS = 30_000;
 const MAX_TOTAL_MS = 60 * 60_000;
 /** Blob は、このバイト数ごとにまとめて作る (全チャンクを配列に溜めて、メモリを使い切らないように)。 */
 const BLOB_BATCH_BYTES = 32 * 1024 * 1024;
+/** 最初のブロックが届かないときに、取り消して要求し直すまでの時間。 */
+const START_STALL_MS = 5_000;
+/** 開始時の停滞で、要求し直す回数の上限 (全体のアイドルタイムアウトで打ち切られる)。 */
+const START_STALL_ATTEMPTS = 8;
 /** アップロードしたファイルは、サーバーが取り終える (object_added が届く) まで配る。進捗が止まってからこの時間で諦める。 */
 const UPLOAD_HOLD_IDLE_MS = 2 * 60_000;
 
@@ -48,6 +52,8 @@ let serverPeerId = "";
 const peerNames = new Map<string, string>();
 /** 起動したノードの libp2p (取得元の接続の種類を調べるため)。 */
 let libp2pRef: { getConnections: () => { remotePeer: { toString: () => string }; remoteAddr: { toString: () => string } }[] } | null = null;
+/** 開発時のみ: このピアへは (再) 接続しない (P2P のテスト用)。 */
+const blockedPeers = new Set<string>();
 
 /** 他のユーザーの libp2p ピア ID に、表示名を結び付ける (ダウンロードの取得元に名前を出すため)。 */
 export function rememberPeerName(ipfsPeerId: string, name: string): void {
@@ -118,7 +124,10 @@ async function createNode(
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       // ローカル / 私設ネットワークのアドレスへの接続を許可する (プロトタイプ)
-      connectionGater: { denyDialMultiaddr: () => false },
+      connectionGater: {
+        denyDialMultiaddr: () => false,
+        denyDialPeer: (peerId: { toString: () => string }) => blockedPeers.has(peerId.toString()),
+      },
       services: { identify: identify() },
     }),
     // 直前に送ったブロックは、同じ相手から 5 秒間は再送しない (bitswap の既定)。
@@ -402,41 +411,63 @@ export async function fetchBlob(
   { maxBytes, idleTimeoutMs = IDLE_TIMEOUT_MS, maxTotalMs = MAX_TOTAL_MS, onProgress, onSource, signal: outer }: FetchBlobOptions,
 ): Promise<Blob> {
   const { fs } = await requireNode();
-  const abort = new AbortController();
-  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(maxTotalMs), ...(outer ? [outer] : [])]);
+  const overall = new AbortController();
+  const totalSignal = AbortSignal.any([overall.signal, AbortSignal.timeout(maxTotalMs), ...(outer ? [outer] : [])]);
   let idle = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
   const touch = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
       idle = true;
-      abort.abort();
+      overall.abort();
     }, idleTimeoutMs);
   };
 
+  const catOptions = onSource
+    ? {
+        onProgress: (evt: { type: string; detail?: unknown }) => {
+          if (evt.type === "bitswap:block") onSource(String((evt.detail as { sender: unknown }).sender));
+        },
+      }
+    : {};
+
   touch();
   try {
-    const catOptions = {
-      signal,
-      ...(onSource
-        ? {
-            onProgress: (evt: { type: string; detail?: unknown }) => {
-              if (evt.type === "bitswap:block") onSource(String((evt.detail as { sender: unknown }).sender));
-            },
-          }
-        : {}),
-    };
-    return await assembleBlob(fs.cat(CID.parse(cid), catOptions), {
-      maxBytes,
-      batchBytes: BLOB_BATCH_BYTES,
-      onChunk: touch,
-      onProgress,
-    });
-  } catch (err) {
-    if (idle) throw new Error("一定時間データが届かず、タイムアウトしました");
-    throw err;
+    // 最初のブロックが届かないまま止まることがある (直前に同じブロックを送った相手は、want を無視することがある)。
+    // 1 バイトも届いていないときは、取り消して要求し直す (届き始めたら、通常のアイドルタイムアウトに任せる)
+    for (let attempt = 0; attempt < START_STALL_ATTEMPTS; attempt++) {
+      const attemptAbort = new AbortController();
+      const signal = AbortSignal.any([totalSignal, attemptAbort.signal]);
+      let received = 0;
+      let stallTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => attemptAbort.abort(), START_STALL_MS);
+      try {
+        return await assembleBlob(fs.cat(CID.parse(cid), { ...catOptions, signal }), {
+          maxBytes,
+          batchBytes: BLOB_BATCH_BYTES,
+          onChunk: () => {
+            received++;
+            if (stallTimer) {
+              clearTimeout(stallTimer);
+              stallTimer = undefined;
+            }
+            touch();
+          },
+          onProgress,
+        });
+      } catch (err) {
+        if (totalSignal.aborted) {
+          if (idle) throw new Error("一定時間データが届かず、タイムアウトしました");
+          throw err;
+        }
+        if (received === 0) continue; // 開始時の停滞。要求し直す
+        throw err;
+      } finally {
+        if (stallTimer) clearTimeout(stallTimer);
+      }
+    }
+    throw new Error("一定時間データが届かず、タイムアウトしました");
   } finally {
-    clearTimeout(timer);
+    clearTimeout(idleTimer);
   }
 }
 
@@ -462,6 +493,9 @@ if (import.meta.env.DEV) {
     /** 内部状態 (いま配っているアップロードの数) */
     state: () => ({ serving: servingStore?.servingCount ?? 0, heldUploads: heldUploads.size }),
     get serverPeerId() { return serverPeerId; },
+    /** 開発時のみ: 指定したピアへの再接続を禁止する (P2P の確認用) */
+    blockPeer: (peerId: string) => blockedPeers.add(peerId),
+    unblockPeer: (peerId: string) => blockedPeers.delete(peerId),
     /** 開発時のみ: 指定したピアとの libp2p 接続を切る (P2P の確認用) */
     hangUp: async (peerId: string) => {
       try {
@@ -475,7 +509,7 @@ if (import.meta.env.DEV) {
     /** 開発時のみ: いま libp2p でつながっているピアの ID */
     connections: async () => {
       const { helia } = await requireNode();
-      return helia.libp2p.getConnections().map((c) => c.remotePeer.toString());
+      return helia.libp2p.getConnections().map((c) => ({ peer: c.remotePeer.toString(), addr: c.remoteAddr.toString() }));
     },
   };
 }

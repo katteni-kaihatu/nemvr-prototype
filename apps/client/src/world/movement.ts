@@ -9,6 +9,10 @@ export const EYE_HEIGHT = 1.6;
 export const CROUCH_EYE_HEIGHT = 0.9;
 /** しゃがんでいるときの、歩く速さの倍率 (しゃがみきったとき)。 */
 export const CROUCH_SPEED_FACTOR = 0.5;
+/** 走っている (Shift を押している) ときの、歩く速さの倍率。 */
+export const SPRINT_SPEED_FACTOR = 2;
+/** この深さ以上しゃがんでいると、走れない。 */
+const SPRINT_BLOCKED_CROUCH = 0.5;
 /** 重力加速度 (m/s^2)。現実より強めにして、ジャンプを軽快にする。 */
 export const GRAVITY = 20;
 /** ジャンプの初速 (m/s)。頂点の高さは v^2 / (2g) = 0.9m、滞空は約 0.6 秒。 */
@@ -60,6 +64,16 @@ export function eyeHeightFor(crouch: number): number {
 export function speedFactorFor(crouch: number): number {
   const c = Math.max(0, Math.min(1, crouch));
   return 1 - (1 - CROUCH_SPEED_FACTOR) * c;
+}
+
+/**
+ * 歩く速さの倍率。走っている (Shift) ときは倍にし、しゃがんでいるときは走れない
+ * (しゃがみながら Shift を押しても、しゃがみの速さのまま)。
+ */
+export function moveSpeedFactor(crouch: number, sprinting: boolean): number {
+  const c = Math.max(0, Math.min(1, crouch));
+  const canSprint = sprinting && c < SPRINT_BLOCKED_CROUCH;
+  return speedFactorFor(c) * (canSprint ? SPRINT_SPEED_FACTOR : 1);
 }
 
 /**

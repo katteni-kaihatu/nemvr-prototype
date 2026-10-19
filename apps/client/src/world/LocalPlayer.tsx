@@ -4,7 +4,7 @@ import { TICK_RATE } from "@proto/protocol";
 import { sendPose, useNet } from "../net/connection";
 import { bodyHeightFor, colliderFor, overlapsAny, resolvePlayer, type Collider } from "./collision";
 import { carry, useInteraction } from "./interaction";
-import { eyeHeightFor, initialVertical, leanPose, speedFactorFor, stepLean, stepVertical, type Vertical } from "./movement";
+import { eyeHeightFor, initialVertical, leanPose, moveSpeedFactor, stepLean, stepVertical, type Vertical } from "./movement";
 
 const SPEED = 3; // m/s
 const MOUSE_SENSITIVITY = 0.0022;
@@ -132,7 +132,9 @@ export function LocalPlayer() {
 
     if (!menuOpen && (forward !== 0 || right !== 0)) {
       const len = Math.hypot(forward, right);
-      const step = (SPEED * speedFactorFor(p.crouch) * delta) / len;
+      // Shift を押している間は走る (しゃがんでいるときは走れない)
+      const sprinting = k.has("ShiftLeft") || k.has("ShiftRight");
+      const step = (SPEED * moveSpeedFactor(p.crouch, sprinting) * delta) / len;
       const sin = Math.sin(p.yaw);
       const cos = Math.cos(p.yaw);
       // yaw=0 のとき前方は -Z、右は +X
