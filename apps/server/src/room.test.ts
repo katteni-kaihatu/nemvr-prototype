@@ -409,6 +409,53 @@ describe("lazy files (not transferred until downloaded)", () => {
     void aId;
   });
 
+  it("findUnstoredFile finds an unstored file by its content, and not a stored one", () => {
+    const { room, aId } = setup();
+    room.addFile(lazy(aId));
+    expect(room.findUnstoredFile(FILE_CID)).toMatchObject({ kind: "file", cid: FILE_CID, owner: aId });
+    room.markStored(FILE_CID, 1_500_000_000);
+    expect(room.findUnstoredFile(FILE_CID)).toBeUndefined();
+  });
+
+  it("removeUnstored removes the unstored files of a content and tells everyone, but keeps offline and stored ones", () => {
+    const { room, a, b, aId, bId } = setup();
+    const OTHER = "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku";
+    room.addFile(lazy(aId));
+    room.addFile({ ...lazy(bId), name: "also.bin" }); // 同じ内容、別の人
+    room.addFile(lazy(aId, { cid: OTHER, name: "other.bin" }));
+    a.clear();
+    b.clear();
+    expect(room.removeUnstored(FILE_CID)).toBe(2);
+    expect(a.of("object_removed").length).toBe(2);
+    expect(b.of("object_removed").length).toBe(2);
+    expect(room.findUnstoredFile(OTHER)).toBeDefined(); // 別の内容は残る
+    // オフラインのものは、取り除かない
+    room.leave(aId);
+    expect(room.findUnstoredFile(OTHER)).toMatchObject({ offline: true });
+    expect(room.removeUnstored(OTHER)).toBe(0);
+    expect(room.findUnstoredFile(OTHER)).toBeDefined();
+  });
+
+  it("remembers each user's libp2p peer id (to tell where blocks came from)", () => {
+    const { room, aId, bId } = setup();
+    expect(room.ipfsPeerIdOf(aId)).toBeUndefined();
+    room.announceIpfs(aId, "12D3KooWAliceAliceAlice");
+    expect(room.ipfsPeerIdOf(aId)).toBe("12D3KooWAliceAliceAlice");
+    expect(room.ipfsPeerIdOf(bId)).toBeUndefined();
+    room.leave(aId);
+    expect(room.ipfsPeerIdOf(aId)).toBeUndefined();
+  });
+
+  it("tells a later joiner the libp2p peer id of users who are already ready (to name the source of blocks)", () => {
+    const { room, aId } = setup();
+    room.announceIpfs(aId, "12D3KooWAliceAliceAlice");
+    const c = new FakeSocket();
+    room.join(c as unknown as WebSocket, "carol");
+    const welcome = c.of("welcome")[0]!;
+    expect(welcome.peers.find((p) => p.id === aId)?.ipfsPeerId).toBe("12D3KooWAliceAliceAlice");
+    expect(welcome.peers.find((p) => p.id !== aId)?.ipfsPeerId).toBeUndefined();
+  });
+
   it("sends prepare progress / failure only to the requester", () => {
     const { room, a, b, aId } = setup();
     a.clear();

@@ -214,6 +214,30 @@ export class Room {
     return true;
   }
 
+  /** まだサーバーが保持していない、その内容 (CID) のファイルを 1 つ返す。無ければ undefined。 */
+  findUnstoredFile(cid: string): Extract<WorldObject, { kind: "file" }> | undefined {
+    for (const object of this.objects.values()) {
+      if (object.kind === "file" && object.cid === cid && !object.stored) return object;
+    }
+    return undefined;
+  }
+
+  /**
+   * まだ保持していない、その内容 (CID) のファイルをすべて取り除いて、全員に知らせる。
+   * 取得に失敗した (容量が足りない・取得できない) ときに使う。取り除いた数を返す。
+   * 置いた人が退室して「オフライン」になっているものは、取り除かない (オフラインのまま残す)。
+   */
+  removeUnstored(cid: string): number {
+    let removed = 0;
+    for (const object of [...this.objects.values()]) {
+      if (object.kind !== "file" || object.cid !== cid || object.stored || object.offline) continue;
+      this.objects.delete(object.id);
+      this.broadcast({ type: "object_removed", id: object.id });
+      removed++;
+    }
+    return removed;
+  }
+
   getObject(id: string): WorldObject | undefined {
     return this.objects.get(id);
   }
@@ -258,7 +282,15 @@ export class Room {
 
   /** ピアの libp2p ID を本人以外に知らせる (受け取った側が直接接続しに行く)。 */
   announceIpfs(id: string, ipfsPeerId: string): void {
-    if (this.peers.has(id)) this.broadcast({ type: "peer_ipfs", id, ipfsPeerId }, id);
+    const peer = this.peers.get(id);
+    if (!peer) return;
+    peer.state.ipfsPeerId = ipfsPeerId;
+    this.broadcast({ type: "peer_ipfs", id, ipfsPeerId }, id);
+  }
+
+  /** そのユーザーの libp2p ピア ID (まだ知らせてきていなければ undefined)。ログで、取得元が誰か分かるようにするため。 */
+  ipfsPeerIdOf(id: string): string | undefined {
+    return this.peers.get(id)?.state.ipfsPeerId;
   }
 
   /** 置こうとしている中身の取得の進捗を、置いている本人にだけ知らせる。 */

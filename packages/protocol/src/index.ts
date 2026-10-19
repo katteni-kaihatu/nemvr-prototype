@@ -13,8 +13,9 @@ export const MAX_ABS_POSITION = 1000;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりの上限
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // ファイル 1 個あたりの上限 (2 GiB)
 /**
- * これ以下のファイルは、置いた時点でサーバーが全部取得して保持する (置いた人が退室しても使える)。
- * これより大きいファイルは、ダウンロードされるまで取得しない (遅延転送)。置いた人が、その間は配り続ける。
+ * これ以下のファイルは、サーバーが全部取得して保持してから置く (置いた人が退室しても使える)。
+ * これより大きいファイルは、取得に時間がかかるので、先に置き (`stored: false`)、サーバーがバックグラウンドで取得する。
+ * 置いた人は、取り終えるまで配り続ける。
  */
 export const EAGER_FILE_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_OBJECTS = 100; // ワールドに置けるオブジェクトの最大数
@@ -39,6 +40,11 @@ export interface PeerInfo {
 
 export interface PeerState extends PeerInfo {
   pose: Pose;
+  /**
+   * このユーザーのブラウザ内 IPFS ノードの libp2p ピア ID (`ipfs_peer` で知らせてきたあとだけ)。
+   * ダウンロードの取得元 (どのピアからブロックが届いたか) に、ユーザー名を出すために使う。
+   */
+  ipfsPeerId?: string;
 }
 
 /** ワールドに置かれたオブジェクトに共通の項目。 */
@@ -83,7 +89,7 @@ export interface FileObject extends ObjectBase {
   size: number;
   /**
    * サーバーが中身を保持しているか。保持していれば、置いた人が退室しても取得できる。
-   * 大きなファイルは、ダウンロードされるまで保持しない (false)。その間は、置いた人 (`owner`) が配る。
+   * 大きなファイルは、置いた直後は保持していない (false) で、サーバーが取り終えると true になる。その間は、置いた人 (`owner`) が配る。
    */
   stored: boolean;
   /** まだ保持していないファイルを配っている人 (PeerInfo.id)。`stored` になると無くなる。 */
@@ -141,7 +147,7 @@ export type ClientMessage =
   | ({ type: "place_image" } & PlaceImage)
   | ({ type: "place_file" } & PlaceFile)
   | ({ type: "place_box" } & PlaceBox)
-  // まだサーバーが保持していないファイル (大きなファイル) を、ダウンロードするために、サーバーに取得させる
+  // まだサーバーが保持していないファイル (取得中の大きなファイル) の、取得の完了を待つ。ダウンロードで、直接の取得がだめだったときの切り替え先
   | { type: "request_file"; id: string }
   // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
   | { type: "ipfs_peer"; peerId: string }
@@ -172,7 +178,7 @@ export type ServerMessage =
   // 大きなファイルは数分かかるので、その間も状況が分かるようにする。total はサーバーが分かっていれば (宣言サイズ)
   // queued: 他の転送の順番待ちをしている (まだ取得を始めていない)
   | { type: "place_progress"; cid: string; loaded: number; total?: number; queued?: boolean }
-  // request_file の進捗 (サーバーが、置いた人から取得している途中)。要求した人にだけ送る
+  // request_file の進捗 (サーバーが、置いた人から取得している途中)。待っている人にだけ送る
   | { type: "prepare_progress"; cid: string; loaded: number; total?: number; queued?: boolean }
   // request_file が失敗した (置いた人が退室した、容量が足りない、など)
   | { type: "prepare_failed"; cid: string; message: string }

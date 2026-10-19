@@ -41,6 +41,47 @@ function serverMultiaddr(info: IpfsInfo): string {
 export type DirectPeersListener = (count: number) => void;
 
 let serverAddr = "";
+/** サーバーの libp2p ピア ID (ブロックの取得元が、サーバーかどうかを見分けるため)。 */
+let serverPeerId = "";
+/** 他のユーザーの libp2p ピア ID → 表示名 (取得元の表示用)。 */
+const peerNames = new Map<string, string>();
+/** 起動したノードの libp2p (取得元の接続の種類を調べるため)。 */
+let libp2pRef: { getConnections: () => { remotePeer: { toString: () => string }; remoteAddr: { toString: () => string } }[] } | null = null;
+
+/** 他のユーザーの libp2p ピア ID に、表示名を結び付ける (ダウンロードの取得元に名前を出すため)。 */
+export function rememberPeerName(ipfsPeerId: string, name: string): void {
+  peerNames.set(ipfsPeerId, name);
+}
+
+export type SourceKind = "server" | "direct" | "relay" | "unknown";
+
+export interface FetchSource {
+  /** 送ってきたピアの libp2p ID */
+  peer: string;
+  /** 表示用の名前 (サーバー / ユーザー名 / ID の末尾) */
+  label: string;
+  /** サーバー / ブラウザ同士の直接 (WebRTC) / 中継 (circuit relay) 経由 */
+  kind: SourceKind;
+  /** 受け取ったブロックの数 */
+  blocks: number;
+}
+
+/** 送ってきたピアが、サーバーか、他のブラウザか (直接か中継か) を調べる。 */
+function classifySource(peer: string): { label: string; kind: SourceKind } {
+  if (peer === serverPeerId) return { label: "サーバー", kind: "server" };
+  const name = peerNames.get(peer) ?? peer.slice(-8);
+  const addrs = (libp2pRef?.getConnections() ?? []).filter((c) => c.remotePeer.toString() === peer).map((c) => c.remoteAddr.toString());
+  if (addrs.some((a) => a.includes("/webrtc"))) return { label: `${name} (直接 WebRTC)`, kind: "direct" };
+  if (addrs.length > 0) return { label: `${name} (中継)`, kind: "relay" };
+  return { label: name, kind: "unknown" };
+}
+
+/** ブロックを送ってきたピアごとの数 (取得中に数えたもの) を、表示用にまとめる。多い順。 */
+export function summarizeSources(counts: Map<string, number>): FetchSource[] {
+  return [...counts]
+    .map(([peer, blocks]) => ({ peer, blocks, ...classifySource(peer) }))
+    .sort((a, b) => b.blocks - a.blocks);
+}
 
 /**
  * WebRTC の設定。サーバーが TURN を配っていればそれを使う (NAT 越えできないときは TURN で中継される)。
@@ -62,6 +103,7 @@ async function createNode(
   onDirectPeers: DirectPeersListener,
 ) {
   serverAddr = serverMultiaddr(info);
+  serverPeerId = info.peerId;
   // ブロックは保存しない。アップロード中のファイルは元のファイルから直接配り、取得したブロックは流して捨てる。
   // (IndexedDB に保存すると、Firefox で 1MiB あたり 0.2〜0.3 秒かかり、サーバーが数十ブロックを一度に要求すると
   //  応答が間に合わず止まった。メモリに保存すると、ファイルのサイズ分のメモリを使う)
@@ -92,6 +134,7 @@ async function createNode(
   helia.libp2p.addEventListener("connection:open", notify);
   helia.libp2p.addEventListener("connection:close", notify);
 
+  libp2pRef = helia.libp2p;
   return { helia, fs: unixfs(helia), serving };
 }
 
@@ -199,21 +242,25 @@ function requireNode(): Promise<Node> {
 // ---- アップロードしたファイルを、サーバーが取り終えるまで配る ----
 
 const heldUploads = new Map<string, ReturnType<typeof setTimeout>>();
+/** 時間で諦めずに配り続けているもの (keepServing)。進捗の通知 (holdUpload) が来ても、期限付きに戻さない。 */
+const pinnedUploads = new Set<string>();
 
 /**
  * アップロードしたファイルを、サーバーが取り終えるまで配り続ける。
  * 進捗の通知が来るたびに呼んで、延ばす。通知が途絶えたら (サーバーが断った・失敗した) 諦める。
  */
 export function holdUpload(cid: string): void {
+  if (pinnedUploads.has(cid)) return;
   clearTimeout(heldUploads.get(cid));
   heldUploads.set(cid, setTimeout(() => releaseUpload(cid), UPLOAD_HOLD_IDLE_MS));
 }
 
 /**
- * 配り続ける (進捗が来なくても、時間で諦めない)。大きなファイルは、ダウンロードされるまでサーバーが取得しないので、
- * 置いた人が、取られるまで (または削除されるまで) 配り続ける。やめるときは releaseUpload。
+ * 配り続ける (進捗が来なくても、時間で諦めない)。大きなファイルは、サーバーが取り終えるまで時間がかかるので、
+ * 置いた人が、サーバーが保持するまで (または削除されるまで) 配り続ける。やめるときは releaseUpload。
  */
 export function keepServing(cid: string): void {
+  pinnedUploads.add(cid);
   clearTimeout(heldUploads.get(cid));
   heldUploads.delete(cid);
 }
@@ -225,6 +272,7 @@ export function isServing(cid: string): boolean {
 
 /** サーバーが取り終えた (または、もう取らない) ので、配るのをやめて、索引を捨てる。 */
 export function releaseUpload(cid: string): void {
+  pinnedUploads.delete(cid);
   clearTimeout(heldUploads.get(cid));
   heldUploads.delete(cid);
   servingStore?.stop(cid);
@@ -259,6 +307,8 @@ export interface FetchBlobOptions {
   maxTotalMs?: number;
   /** 取得したバイト数の途中経過 */
   onProgress?: (loadedBytes: number) => void;
+  /** ブロックを 1 つ受け取るたびに、送ってきたピアの libp2p ID で呼ばれる (取得元の内訳を知るため)。 */
+  onSource?: (peerId: string) => void;
 }
 
 /**
@@ -268,7 +318,7 @@ export interface FetchBlobOptions {
  */
 export async function fetchBlob(
   cid: string,
-  { maxBytes, idleTimeoutMs = IDLE_TIMEOUT_MS, maxTotalMs = MAX_TOTAL_MS, onProgress }: FetchBlobOptions,
+  { maxBytes, idleTimeoutMs = IDLE_TIMEOUT_MS, maxTotalMs = MAX_TOTAL_MS, onProgress, onSource }: FetchBlobOptions,
 ): Promise<Blob> {
   const { fs } = await requireNode();
   const abort = new AbortController();
@@ -285,7 +335,17 @@ export async function fetchBlob(
 
   touch();
   try {
-    return await assembleBlob(fs.cat(CID.parse(cid), { signal }), {
+    const catOptions = {
+      signal,
+      ...(onSource
+        ? {
+            onProgress: (evt: { type: string; detail?: unknown }) => {
+              if (evt.type === "bitswap:block") onSource(String((evt.detail as { sender: unknown }).sender));
+            },
+          }
+        : {}),
+    };
+    return await assembleBlob(fs.cat(CID.parse(cid), catOptions), {
       maxBytes,
       batchBytes: BLOB_BATCH_BYTES,
       onChunk: touch,

@@ -193,6 +193,20 @@ describe("server IPFS node", () => {
     expect(fetched.size).toBe(data.length);
   }, 30_000);
 
+  it("reports which peer sent each block (onSender)", async () => {
+    const data = unique(3 * 1024 * 1024 + 100); // 4 ブロック + ルート
+    const cid = (await client.fs.addBytes(data)).toString();
+    const senders = new Map<string, number>();
+    await server.fetchVerified(cid, {
+      ...LIMITS,
+      maxBytes: 10 * 1024 * 1024,
+      idleTimeoutMs: 5_000,
+      onSender: (peer) => senders.set(peer, (senders.get(peer) ?? 0) + 1),
+    });
+    expect([...senders.keys()]).toEqual([client.helia.libp2p.peerId.toString()]); // 送ってきたのは、クライアントのノードだけ
+    expect([...senders.values()][0]).toBeGreaterThanOrEqual(4); // 葉のブロック (4 つ) を受け取った
+  }, 30_000);
+
   it("headOnly still rejects directories and over-limit declared sizes", async () => {
     const big = (await client.fs.addBytes(unique(2_000))).toString();
     await expect(server.fetchVerified(big, { ...LIMITS, maxBytes: 1_000, headOnly: true })).rejects.toThrow("too large");

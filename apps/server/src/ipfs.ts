@@ -44,6 +44,8 @@ export interface FetchLimits {
   headOnly?: boolean;
   /** 最初のデータがこの時間 (ミリ秒) 届かなければ、取り消して要求し直す。既定 4000。 */
   retryAfterMs?: number;
+  /** ブロックを 1 つ受け取るたびに、送ってきたピアの ID (libp2p) で呼ばれる。取得元の内訳を知るため。 */
+  onSender?: (peerId: string) => void;
 }
 
 export interface Fetched {
@@ -196,7 +198,19 @@ export async function startIpfs(
           stall.abort();
         }, limits.retryAfterMs ?? 4_000);
         try {
-          for await (const chunk of fs.cat(cid, { signal: attemptSignal, ...(limits.headOnly ? { length: SNIFF_BYTES } : {}) })) {
+          const onSender = limits.onSender;
+          const catOptions = {
+            signal: attemptSignal,
+            ...(limits.headOnly ? { length: SNIFF_BYTES } : {}),
+            ...(onSender
+              ? {
+                  onProgress: (evt: { type: string; detail?: unknown }) => {
+                    if (evt.type === "bitswap:block") onSender(String((evt.detail as { sender: unknown }).sender));
+                  },
+                }
+              : {}),
+          };
+          for await (const chunk of fs.cat(cid, catOptions)) {
             gotData();
             if (headLength < SNIFF_BYTES) {
               const part = chunk.subarray(0, SNIFF_BYTES - headLength);

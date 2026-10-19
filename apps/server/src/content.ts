@@ -70,7 +70,14 @@ export class ContentStore {
   async add(
     cid: string,
     kind: ContentKind,
-    { onProgress }: { onProgress?: (loadedBytes: number, declaredBytes: number) => void } = {},
+    {
+      onProgress,
+      onSender,
+    }: {
+      onProgress?: (loadedBytes: number, declaredBytes: number) => void;
+      /** ブロックを受け取るたびに、送ってきたピアの ID で呼ばれる (取得元の内訳を知るため)。 */
+      onSender?: (peerId: string) => void;
+    } = {},
   ): Promise<{ size: number; head: Uint8Array }> {
     const known = this.entries.get(cid);
     if (known) {
@@ -94,6 +101,7 @@ export class ContentStore {
           reservedBytes = declared;
         },
         onProgress,
+        onSender,
       });
       this.check(kind, fetched.size, fetched.head);
 

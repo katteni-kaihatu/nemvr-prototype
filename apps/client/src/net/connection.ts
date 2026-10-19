@@ -16,6 +16,7 @@ import { PoseBuffer } from "./interpolation";
 import {
   describeError,
   dialPeer,
+  rememberPeerName,
   holdUpload,
   IpfsUnavailableError,
   keepServing,
@@ -215,6 +216,8 @@ export function connect(name: string): void {
         const objects: Record<string, WorldObject> = {};
         for (const o of msg.objects) objects[o.id] = o;
         useNet.setState({ status: "connected", self: msg.self, peers, objects, ipfs: "starting" });
+        // 先に入室していた人の libp2p ID に名前を結び付ける (ダウンロードの取得元の表示用)
+        for (const peer of msg.peers) if (peer.ipfsPeerId) rememberPeerName(peer.ipfsPeerId, peer.name);
         // 画像の取得・共有に使うブラウザ内 IPFS ノードを起動してサーバーに接続する
         startIpfs(msg.ipfs, msg.iceServers, (directPeers) => useNet.setState({ directPeers })).then(
           () => {
@@ -277,6 +280,8 @@ export function connect(name: string): void {
       }
       case "peer_ipfs": {
         // 後から準備ができた人へ、既にいる側から直接接続しに行く
+        const peerName = useNet.getState().peers[msg.id]?.name;
+        if (peerName) rememberPeerName(msg.ipfsPeerId, peerName); // ダウンロードの取得元の表示に使う
         void dialPeer(msg.ipfsPeerId);
         break;
       }
@@ -287,10 +292,10 @@ export function connect(name: string): void {
         const name = pendingUploads.get(object.cid);
         pendingUploads.delete(object.cid);
         if (object.kind === "file" && !object.stored && object.owner === useNet.getState().self?.id) {
-          // 大きなファイル: サーバーは、ダウンロードされるまで取得しない。それまで、このタブが配り続ける
+          // 大きなファイル: 置いたあと、サーバーが全部を取得する。取り終えるまで、このタブが配り続ける
           keepServing(object.cid);
           showNotice(
-            `${name ?? object.name}: 置きました。ダウンロードされるまでデータは送りません (このタブを開いたままにしてください)`,
+            `${name ?? object.name}: 置きました。サーバーが取得しています。終わるまで、このタブを開いたままにしてください`,
             12_000,
           );
         } else {
@@ -322,7 +327,10 @@ export function connect(name: string): void {
       case "place_progress": {
         // サーバーが、置こうとしている中身を取得している途中。大きなファイルは数分かかるので、状況を表示する
         holdUpload(msg.cid); // 動いている間は、ブラウザ側のブロックを消さない
-        const name = pendingUploads.get(msg.cid) ?? "ファイル";
+        const name =
+          pendingUploads.get(msg.cid) ??
+          Object.values(useNet.getState().objects).find((o): o is FileObject => o.kind === "file" && o.cid === msg.cid)?.name ??
+          "ファイル";
         if (msg.queued) {
           // サーバーが、先に送った分の取り込みを終えるまで待っている (同じ人の分は、1 件ずつ順に取り込む)
           showNotice(`${name}: 順番待ち (前の転送が終わるまで待っています)`, 15_000);

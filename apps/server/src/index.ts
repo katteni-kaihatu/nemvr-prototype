@@ -128,9 +128,11 @@ function placeImage(peerId: string, place: PlaceImage): void {
 }
 
 /**
- * ファイル: 小さければ (EAGER_FILE_MAX_BYTES 以下) 置いた時点で全部取得して保持する (置いた人が退室しても使える)。
- * 大きければ、ダウンロードされるまで取得しない (遅延転送)。宣言されたサイズと、先頭の数バイト (アイコンの種類の判定用)
- * だけを調べて、置いた人が配り続ける前提でワールドに置く。中身は保持せず、容量も使わない。
+ * ファイル: 置いた時点で、サーバーが取得して保持する (置いた人が、いつ退室するか分からないため)。
+ * 小さければ (EAGER_FILE_MAX_BYTES 以下)、全部取得してから置く。
+ * 大きければ、宣言サイズと先頭の数バイト (アイコンの種類の判定用) だけを調べて、すぐに置き (`stored: false`)、
+ * 続けて、サーバーが全部をバックグラウンドで取得する (stageFile)。取り終えるまで、置いた人のブラウザが配り続ける。
+ * ダウンロードする人は、先に直接取得を試し、だめなら `request_file` でこの取得の完了を待つ。
  */
 function placeFile(peerId: string, place: PlaceFile): void {
   if (room.isFull) {
@@ -148,11 +150,13 @@ function placeFile(peerId: string, place: PlaceFile): void {
         const probe = await content.probe(cid, "file");
         const category = classifyFile(place.name, probe.head);
         if (probe.size > EAGER_FILE_MAX_BYTES && !content.known(cid)) {
-          if (room.addFile({ ...place, size: probe.size, category, stored: false, owner: peerId })) {
-            console.log(`[place_file] ${cid} (${formatBytes(probe.size)}, lazy: not transferred until downloaded) by ${peerId}`);
-          } else {
+          if (!room.addFile({ ...place, size: probe.size, category, stored: false, owner: peerId })) {
             room.sendError(peerId, "これ以上オブジェクトを置けません");
+            return;
           }
+          console.log(`[place_file] ${cid} (${formatBytes(probe.size)}, placed; fetching in the background) by ${peerId}`);
+          const object = room.findUnstoredFile(cid);
+          if (object) stageFile(null, object);
           return;
         }
         const fetched = await content.add(cid, "file", {
@@ -172,49 +176,62 @@ function placeFile(peerId: string, place: PlaceFile): void {
   });
 }
 
-/** ダウンロードのために、まだ保持していないファイルを要求した人 (CID ごと)。同じ内容は 1 回だけ取得して、みんなで待つ。 */
+/** まだ保持していないファイルを取得している最中の内容 (CID ごと)。ダウンロードを要求して待っている人もここに入る。 */
 const staging = new Map<string, Set<string>>();
 
 /**
- * まだ保持していない (遅延転送の) ファイルを、置いた人から取得して保持する。ダウンロードされたときに呼ばれる。
- * 終わると `object_updated` (stored) が全員に配られるので、要求した人はそれを見て進む。
- * 同じ内容を複数人が要求したら、取得は 1 回で、進捗・失敗はみんなに知らせる。
+ * まだ保持していない大きなファイルを、置いた人から全部取得して保持する。置かれた直後に始まり (requesterId = null)、
+ * ダウンロードの要求 (`request_file`) があれば、その人も一緒に待つ。
+ * 終わると `object_updated` (stored) が全員に配られる。同じ内容の取得は 1 回で、進捗・失敗は待っている人みんなに知らせる。
+ * 置いた人にも、進捗を `place_progress` で知らせる。失敗したら、そのファイルは取り除く (置いた人が退室して
+ * 「オフライン」になっているものは除く)。
  */
-function stageFile(requesterId: string, object: FileObject): void {
+function stageFile(requesterId: string | null, object: FileObject): void {
   const { cid } = object;
-  console.log(`[request_file] ${cid} by ${requesterId} (stored: ${object.stored}, offline: ${!!object.offline}, owner: ${object.owner ?? "-"})`);
+  console.log(
+    `[stage_file] ${cid} ${requesterId ? `requested by ${requesterId}` : "started at placement"} (stored: ${object.stored}, offline: ${!!object.offline}, owner: ${object.owner ?? "-"})`,
+  );
   if (object.stored) return; // もう保持している。要求した人は、object_updated で進む
   if (object.offline || !object.owner) {
-    room.sendPrepareFailed(requesterId, cid, "アップロードした人が退室しているため、取得できません");
+    if (requesterId) room.sendPrepareFailed(requesterId, cid, "アップロードした人が退室しているため、取得できません");
     return;
   }
   const waiting = staging.get(cid);
   if (waiting) {
-    waiting.add(requesterId); // 取得中。一緒に待つ
+    if (requesterId) waiting.add(requesterId); // 取得中。一緒に待つ
     return;
   }
-  const waiters = new Set([requesterId]);
+  const owner = object.owner;
+  const waiters = new Set<string>(requesterId ? [requesterId] : []);
   staging.set(cid, waiters);
   const failAll = (message: string) => {
     for (const id of waiters) room.sendPrepareFailed(id, cid, message);
     staging.delete(cid);
+    // 保持できなかったファイルは、取得できないまま残さない (ただし、置いた人が退室したものは、オフラインとして残る)
+    if (room.removeUnstored(cid) > 0) room.sendError(owner, `${object.name}: ${message}`);
   };
-  const toAll = (send: (id: string) => void) => waiters.forEach(send);
+  // 置いた人 (owner) には place_progress、ダウンロードを待っている人には prepare_progress を送る
+  const progressTo = (loaded: number, total?: number, queued?: boolean) => {
+    room.sendPlaceProgress(owner, cid, loaded, total, queued);
+    for (const id of waiters) if (id !== owner) room.sendPrepareProgress(id, cid, loaded, total, queued);
+  };
 
   schedule({
-    peerKey: object.owner, // 取りに行く相手 (置いた人) の接続ごとに、1 件ずつ
-    notifyQueued: () => toAll((id) => room.sendPrepareProgress(id, cid, 0, undefined, true)),
+    peerKey: owner, // 取りに行く相手 (置いた人) の接続ごとに、1 件ずつ
+    notifyQueued: () => progressTo(0, undefined, true),
     onFull: () => failAll("順番待ちが多すぎます。しばらくしてからやり直してください"),
     onCancel: () => failAll("アップロードした人が退室したため、取得できません"),
     run: async () => {
+      const senders = new Map<string, number>();
       try {
         const { size } = await content.add(cid, "file", {
-          onProgress: throttled((loaded, declared) => toAll((id) => room.sendPrepareProgress(id, cid, loaded, declared))),
+          onProgress: throttled((loaded, declared) => progressTo(loaded, declared)),
+          onSender: (peer) => senders.set(peer, (senders.get(peer) ?? 0) + 1),
         });
         const updated = room.markStored(cid, size);
         if (updated.length === 0) content.release(cid); // 取得している間に、すべて削除された
         else for (let i = 1; i < updated.length; i++) content.retain(cid); // 保持する内容への参照は、オブジェクトごとに 1 つ
-        console.log(`[stage_file] ${cid} (${formatBytes(size)}) now stored; ${updated.length} object(s)`);
+        console.log(`[stage_file] ${cid} (${formatBytes(size)}) now stored; ${updated.length} object(s); blocks from: ${describeSenders(senders, owner)}`);
       } catch (err) {
         console.warn(`[stage_file] failed for ${cid}:`, err instanceof Error ? err.message : err);
         failAll(err instanceof ContentRejected ? err.message : "取得できませんでした");
@@ -223,6 +240,15 @@ function stageFile(requesterId: string, object: FileObject): void {
       }
     },
   });
+}
+
+/** 取得元の内訳をログ用の文字列にする (置いた人のブラウザは "owner" と表す)。 */
+function describeSenders(senders: Map<string, number>, ownerId: string): string {
+  if (senders.size === 0) return "(none)";
+  const ownerPeer = room.ipfsPeerIdOf(ownerId);
+  return [...senders]
+    .map(([peer, blocks]) => `${peer === ownerPeer ? "owner" : peer.slice(-8)}=${blocks}`)
+    .join(", ");
 }
 
 /** サーバーが中身を保持しているオブジェクトか (保持していれば、削除・複製で参照を数える)。 */
