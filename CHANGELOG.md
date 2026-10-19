@@ -195,7 +195,7 @@
   Caddy が新しい名前の証明書を自動で取得する。移行前のホスト名 (`172-104-89-28.ip.linodeusercontent.com`) は配信されなくなった。
 - ファイルのアップロード上限を 20MB から 2 GiB に、サーバーが保持する合計の既定を 256MB (メモリ) から 20 GiB (ディスク) にした。
   サーバーは `BLOCKSTORE_DIR` に書き込める必要がある。`startIpfs` の `fetchTimeoutMs` はなくなり、取得の制限は `FetchLimits` (`idleTimeoutMs` など) に移った。
-- **破壊的変更**: `WorldObject` が `ImageObject | FileObject` になった。サーバーの `Room.deleteObject` / `duplicateObject` は、結果のオブジェクトを返す
+- **破壊的変更**: `WorldObject` が `ImageObject | FileObject` になった (その後、デモ空間のボックスを同期オブジェクトにしたときに `BoxObject` も加わり、`ImageObject | FileObject | BoxObject` になった)。サーバーの `Room.deleteObject` / `duplicateObject` は、結果のオブジェクトを返す
   (サーバーが参照を数えるため)。サーバーの IPFS 層は `fetchAndPin` をやめて `fetchVerified` / `pin` / `unpin` / `gc` / `has` に分け、
   `ImageRejected` は `ContentRejected` に改名した。
 - 削除したオブジェクトの画像が、サーバーのメモリに残り続けていた問題を解消した (参照が無くなったら unpin + gc で解放する)。
