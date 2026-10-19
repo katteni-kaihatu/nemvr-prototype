@@ -34,6 +34,17 @@ describe("parsePose", () => {
     expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: "1" })).toBeNull();
     expect(parsePose({ position: [0, 0, 0], head: [0, 0, 0, 1], crouch: NaN })).toBeNull();
   });
+  it("accepts an optional lean, clamped to -1..1, and rejects a non-number lean", () => {
+    const base = { position: [0, 0, 0], head: [0, 0, 0, 1] };
+    expect(parsePose({ ...base, lean: -0.5 })?.lean).toBe(-0.5);
+    expect(parsePose({ ...base, lean: 9 })?.lean).toBe(1);
+    expect(parsePose({ ...base, lean: -9 })?.lean).toBe(-1);
+    expect(parsePose(base)).not.toHaveProperty("lean");
+    expect(parsePose({ ...base, lean: "1" })).toBeNull();
+    expect(parsePose({ ...base, lean: NaN })).toBeNull();
+    // しゃがみと同時でもよい
+    expect(parsePose({ ...base, crouch: 0.5, lean: 0.25 })).toMatchObject({ crouch: 0.5, lean: 0.25 });
+  });
   it("rejects invalid values", () => {
     expect(parsePose(null)).toBeNull();
     expect(parsePose({ position: [0, 0], head: [0, 0, 0, 1] })).toBeNull();

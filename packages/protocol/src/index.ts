@@ -32,6 +32,8 @@ export interface Pose {
   head: Quat;
   /** しゃがみの深さ (0 = 立っている、1 = しゃがみきっている)。無ければ 0。 */
   crouch?: number;
+  /** リーン (体を横に傾ける)。-1 = 左いっぱい、0 = まっすぐ、1 = 右いっぱい。無ければ 0。 */
+  lean?: number;
 }
 
 export interface PeerInfo {

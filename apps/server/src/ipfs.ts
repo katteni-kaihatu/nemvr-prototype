@@ -125,6 +125,11 @@ export async function startIpfs(
         }),
       },
     }),
+    // 直前に送ったブロックは、同じ相手から 5 秒間は再送しない (bitswap の既定)。
+    // ダウンロードが途中で中断して取り直すと、その要求が無視されて止まるため、窓を 0 にする。
+    // 中断のたびに相手も状態を捨てればよいが、bitswap を単体で作り直す手段がなく、
+    // ノードごと作り直すとピア ID・配信中のアップロード・中継の予約まで失う。
+    { doNotResendBlockWindow: 0 },
   ).start();
 
   const fs = unixfs(helia);
@@ -156,8 +161,9 @@ export async function startIpfs(
 
     /**
      * 1 回の取得。最初のデータが `retryAfterMs` 届かなければ、取り消して `"retry"` を返す。
-     * bitswap の送信側は、直前 (約 5 秒以内) に送ったブロックを同じ相手に再送しない。先頭だけを調べた直後に全部を取りに来ると
-     * (遅延転送) 要求が無視されて止まるので、取り消して要求し直す (取り消すと、相手の要求の記録が消える)。
+     * 送信側の設定 (doNotResendBlockWindow) や、要求の取りこぼしで先頭のブロックが届かないことがあるので、
+     * 取り消して要求し直す (取り消すと、相手の要求の記録が消える)。このノードは窓を 0 にしているが、
+     * 相手が古い設定のクライアント (再読み込みしていないタブなど) のこともあるため、保険として残す。
      */
     const attempt = async (): Promise<Fetched | "retry"> => {
       const stall = new AbortController();

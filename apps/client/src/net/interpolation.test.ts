@@ -39,6 +39,15 @@ describe("PoseBuffer", () => {
     expect(b.sample(1075)?.crouch).toBeCloseTo(0.5);
   });
 
+  it("interpolates the lean, and treats a missing lean as upright", () => {
+    const b = new PoseBuffer();
+    b.push(1000, { position: [0, 0, 0], head: [0, 0, 0, 1], lean: -1 });
+    b.push(1050, { position: [0, 0, 0], head: [0, 0, 0, 1], lean: 1 });
+    expect(b.sample(1025)?.lean).toBeCloseTo(0);
+    b.push(1100, { position: [0, 0, 0], head: [0, 0, 0, 1] });
+    expect(b.sample(1075)?.lean).toBeCloseTo(0.5);
+  });
+
   it("ignores out-of-order samples", () => {
     const b = new PoseBuffer();
     b.push(1000, pose(0));

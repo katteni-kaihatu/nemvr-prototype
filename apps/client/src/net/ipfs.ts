@@ -120,6 +120,10 @@ async function createNode(
       connectionGater: { denyDialMultiaddr: () => false },
       services: { identify: identify() },
     }),
+    // 直前に送ったブロックは、同じ相手から 5 秒間は再送しない (bitswap の既定)。
+    // 取得を途中で中断して取り直すと、その要求が無視されて止まるため、窓を 0 にする
+    // (このノードは、サーバーや他のブラウザにアップロードしたファイルを配る側にもなる)。
+    { doNotResendBlockWindow: 0 },
   ).start();
 
   // サーバーの Helia ノードに接続する (画像の取得元・中継役)

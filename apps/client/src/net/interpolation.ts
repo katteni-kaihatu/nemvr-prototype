@@ -45,10 +45,13 @@ export function slerpQuat(a: Quat, b: Quat, t: number): Quat {
 export function lerpPose(a: Pose, b: Pose, t: number): Pose {
   const crouchA = a.crouch ?? 0;
   const crouchB = b.crouch ?? 0;
+  const leanA = a.lean ?? 0;
+  const leanB = b.lean ?? 0;
   return {
     position: lerpVec3(a.position, b.position, t),
     head: slerpQuat(a.head, b.head, t),
     crouch: crouchA + (crouchB - crouchA) * t,
+    lean: leanA + (leanB - leanA) * t,
   };
 }
 

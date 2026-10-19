@@ -141,7 +141,7 @@ export function ObjectInteraction() {
     };
     // E キー: つかんでいる間、移動モードと回転モードを切り替える
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== "KeyE" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.code !== "KeyE" || e.repeat || e.metaKey || e.altKey) return; // Ctrl は、しゃがみのキーなので、押していてもよい
       if (!grab.current || useInteraction.getState().menuTargetId) return;
       const next = useInteraction.getState().grabMode === "move" ? "rotate" : "move";
       useInteraction.setState({ grabMode: next });

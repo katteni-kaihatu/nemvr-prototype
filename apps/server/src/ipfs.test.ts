@@ -293,3 +293,82 @@ describe("circuit relay reservations", () => {
     }
   }, 60_000);
 });
+
+describe("bitswap: 中断したダウンロードの取り直し", () => {
+  it("受信側が途中で中断しても、すぐ取り直せば取れる (再送の窓が原因で止まらない)", async () => {
+    // ブラウザの ServingBlockstore と同じく、取得したブロックを保存しないクライアント。
+    // 保存しないので、取り直すとすべてのブロックをネットワークから取り直すことになる
+    const discard = {
+      async put(key: unknown) {
+        return key;
+      },
+      async has() {
+        return false;
+      },
+      async *get(): AsyncGenerator<Uint8Array> {
+        throw new Error("not found");
+      },
+      async delete() {},
+      async *getAll(): AsyncGenerator<never> {},
+    };
+    const helia = await withBitswap(
+      withLibp2pLight(createHeliaLight({ blockstore: discard as never }), {
+        transports: [webSockets()],
+        connectionEncrypters: [noise()],
+        streamMuxers: [yamux()],
+        connectionGater: { denyDialMultiaddr: () => false },
+        services: { identify: identify() },
+      }),
+      { doNotResendBlockWindow: 0 }, // ブラウザと同じ設定 (配る側になったときのため)
+    ).start();
+    try {
+      const fs = unixfs(helia);
+      await helia.libp2p.dial(multiaddr(`/ip4/127.0.0.1/tcp/${PORT}/ws/p2p/${server.info.peerId}`));
+      const data = unique(6 * 1024 * 1024);
+      const cid = (await client.fs.addBytes(data)).toString();
+      await server.fetchVerified(cid, { ...LIMITS, maxBytes: 10 * 1024 * 1024, idleTimeoutMs: 10_000 });
+      await server.pin(cid);
+      try {
+        // 1 回目: 最初のチャンクを受け取ったところで中断する (転送の打ち切りに相当)
+        const abort = new AbortController();
+        let first = 0;
+        try {
+          for await (const chunk of fs.cat(cid as never, { signal: abort.signal })) {
+            first += chunk.length;
+            abort.abort();
+          }
+        } catch {
+          // 中断した
+        }
+        expect(first).toBeGreaterThan(0);
+
+        // 2 回目: 直後に取り直す。送信側の再送の窓が 5 秒のままだと、ここで止まる
+        const refetch = async () => {
+          const controller = new AbortController();
+          let got = 0;
+          const run = (async () => {
+            for await (const chunk of fs.cat(cid as never, { signal: controller.signal })) got += chunk.length;
+            return got;
+          })();
+          const watchdog = new Promise<"timeout">((resolve) =>
+            setTimeout(() => {
+              controller.abort();
+              resolve("timeout");
+            }, 8_000),
+          );
+          return Promise.race([run, watchdog]);
+        };
+        const started = Date.now();
+        const got = await refetch();
+        const elapsed = Date.now() - started;
+        expect(got).toBe(data.length);
+        expect(elapsed).toBeLessThan(5_000); // 止まらず、すぐ取れる
+      } finally {
+        await server.unpin(cid);
+        await server.gc();
+      }
+    } finally {
+      await helia.stop();
+    }
+  }, 60_000);
+});
