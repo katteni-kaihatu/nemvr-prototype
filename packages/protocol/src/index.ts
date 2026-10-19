@@ -21,7 +21,6 @@ export const EAGER_FILE_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_OBJECTS = 100; // ワールドに置けるオブジェクトの最大数
 export const MIN_OBJECT_SIZE = 0.1; // m
 export const MAX_OBJECT_SIZE = 20; // m
-export const GRAB_REACH = 8; // m。画面中央のレイがこの距離までのオブジェクトをつかめる
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];

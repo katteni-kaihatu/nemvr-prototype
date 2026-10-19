@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Raycaster, Vector2 } from "three";
-import { GRAB_REACH, TICK_RATE } from "@proto/protocol";
+import { TICK_RATE } from "@proto/protocol";
 import {
   applyLocalObjectPose,
   sendGrabObject,
@@ -60,12 +60,13 @@ export function ObjectInteraction() {
   const lastPose = useRef({ x: 0, z: 0, yaw: 0, pitch: 0 });
   const lastMovedAt = useRef(performance.now());
 
-  /** 画面中央のレイが、届く範囲で最初に当たるオブジェクトの ID。 */
+  /** 画面中央のレイが、最初に当たるオブジェクトの ID (距離の制限なし)。 */
   const aimedObjectId = (): string | null => {
     camera.updateMatrixWorld();
     const rc = raycaster.current;
     rc.setFromCamera(CENTER, camera);
-    rc.far = GRAB_REACH;
+    // 距離の制限は設けない (無限遠。画面中央に写っているものは、どこにあっても狙える)
+    rc.far = Infinity;
     const hit = rc.intersectObjects([...objectMeshes.values()], false)[0];
     return (hit?.object.userData.objectId as string | undefined) ?? null;
   };

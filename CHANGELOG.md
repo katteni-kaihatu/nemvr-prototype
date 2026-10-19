@@ -217,6 +217,7 @@
 
 ### Changed
 
+- **画面中央のカーソルで選べる距離の制限 (8m) をなくした**。画面に写っているオブジェクトは、遠くても狙って、つかむ・メニューを開くことができる (`Raycaster.far` を無限遠にした。`GRAB_REACH` は削除)。
 - 公開先のホスト名を `nemvr.nemnomi.dev` にした (A レコードで VPS を指す)。`deploy/setup-vps.sh` は、再実行のたびに `/etc/proto/server.env` の `TURN_HOST` を `PROTO_HOST` に合わせる (秘密は変えない)。
   Caddy が新しい名前の証明書を自動で取得する。移行前のホスト名 (`172-104-89-28.ip.linodeusercontent.com`) は配信されなくなった。
 - ファイルのアップロード上限を 20MB から 2 GiB に、サーバーが保持する合計の既定を 256MB (メモリ) から 20 GiB (ディスク) にした。
@@ -259,6 +260,9 @@
 
 ### Notes
 
+- **カーソルの距離制限の解除の確認 (ヘッドレス Firefox、手元のマシン)**: `reach.mjs` で、35m 先に置いたボックスを狙ってリングメニューを開き、右ボタンでつかめることを確認した (以前は 8m まで)。
+  回帰: `interact.mjs` (28)、`box.mjs` (46)。単体テストは protocol 21・client 115・server 129。型チェックも通った。
+  **注意**: 選択 (レイ) は無限遠だが、描画のカメラの far は 200m。それより遠いものは見えない (ワールドは 50m 四方なので、通常は関係ない)。
 - **取得元がピアになることの確認 (ヘッドレス Firefox、手元のマシン)**: `peer-source.mjs` で、bob のサーバーへの libp2p 接続を禁止して切断し (alice との直接 WebRTC だけ)、
   動画のダウンロードを実行した。取得元は **alice (直接 WebRTC)** になり、HUD に「取得元: alice (直接 WebRTC) 1 ブロック」と出て、保存した内容も元と一致した。
   回帰: `video.mjs` (29)、`files.mjs` (39)、`interact.mjs` (28)。単体テストは protocol 21・client 115・server 129。型チェックも通った。
