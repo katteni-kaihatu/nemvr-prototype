@@ -10,6 +10,18 @@ export interface ContentBackend {
   pin(cid: string): Promise<void>;
   unpin(cid: string): Promise<void>;
   gc(): Promise<void>;
+  /** このノードがその内容 (少なくともルートブロック) を持っているか。 */
+  has(cid: string): Promise<boolean>;
+}
+
+/** コンテンツ台帳の 1 項目 (JSON にそのまま保存できる形)。 */
+export interface ContentLedgerEntry {
+  cid: string;
+  size: number;
+  /** 先頭の最大 16 バイト (画像形式などの判定用)。 */
+  head: number[];
+  /** この内容を指しているオブジェクトの数。 */
+  refs: number;
 }
 
 export interface ContentStoreOptions {
@@ -23,6 +35,8 @@ export interface ContentStoreOptions {
   maxTotalMs?: number;
   /** 参照が無くなってから gc するまでの待ち時間 (短時間の連続削除をまとめる) */
   gcDelayMs?: number;
+  /** 台帳の内容が変わった (add / release / retain が成功した)。呼び出し側で debounce して保存する。 */
+  onChange?: () => void;
   log?: (message: string) => void;
 }
 
@@ -84,6 +98,7 @@ export class ContentStore {
     if (known) {
       this.check(kind, known.size, known.head);
       known.refs++;
+      this.notifyChange();
       return { size: known.size, head: known.head };
     }
 
@@ -110,6 +125,7 @@ export class ContentStore {
       const raced = this.entries.get(cid);
       if (raced) {
         raced.refs++;
+        this.notifyChange();
         return { size: raced.size, head: raced.head };
       }
 
@@ -126,6 +142,7 @@ export class ContentStore {
         this.total -= fetched.size;
         throw err;
       }
+      this.notifyChange();
       return { size: fetched.size, head: fetched.head };
     } catch (err) {
       this.scheduleGc(); // 途中まで取得したブロックを片付ける
@@ -140,6 +157,59 @@ export class ContentStore {
   known(cid: string): { size: number; head: Uint8Array } | undefined {
     const entry = this.entries.get(cid);
     return entry && { size: entry.size, head: entry.head };
+  }
+
+  /** コンテンツ台帳として保存できる形にする (JSON にそのまま書ける)。 */
+  snapshot(): ContentLedgerEntry[] {
+    return [...this.entries].map(([cid, entry]) => ({
+      cid,
+      size: entry.size,
+      head: [...entry.head],
+      refs: entry.refs,
+    }));
+  }
+
+  /**
+   * 台帳から復元する。内容がブロックストアに残っていれば pin して登録し、
+   * 無くなっていれば (不完全な取得・削除) その項目だけ捨てる。
+   * 1 件の不正な項目・pin の失敗で全体を止めない。
+   */
+  async restore(entries: readonly unknown[]): Promise<void> {
+    if (!Array.isArray(entries)) {
+      this.log("content ledger is not an array; ignoring");
+      return;
+    }
+    let changed = false;
+    for (const raw of entries) {
+      const entry = parseLedgerEntry(raw);
+      if (!entry) {
+        this.log("ignoring an invalid content ledger entry");
+        continue;
+      }
+      if (this.entries.has(entry.cid)) continue;
+      try {
+        if (!(await this.backend.has(entry.cid))) {
+          this.log(`dropping ${entry.cid}: the blockstore does not have it`);
+          changed = true;
+          continue;
+        }
+        const head = Uint8Array.from(entry.head);
+        this.entries.set(entry.cid, { size: entry.size, head, refs: entry.refs });
+        this.total += entry.size;
+        try {
+          await this.backend.pin(entry.cid);
+        } catch (err) {
+          this.entries.delete(entry.cid);
+          this.total -= entry.size;
+          this.log(`failed to pin ${entry.cid} while restoring: ${String(err)}`);
+          continue;
+        }
+        changed = true;
+      } catch (err) {
+        this.log(`failed to restore ${entry.cid}: ${String(err)}`);
+      }
+    }
+    if (changed) this.notifyChange();
   }
 
   /**
@@ -165,7 +235,9 @@ export class ContentStore {
   /** 複製など、保持している内容を指すオブジェクトが増えた。 */
   retain(cid: string): void {
     const entry = this.entries.get(cid);
-    if (entry) entry.refs++;
+    if (!entry) return;
+    entry.refs++;
+    this.notifyChange();
   }
 
   /** オブジェクトが削除された。最後の参照なら unpin して、メモリを空ける。 */
@@ -173,13 +245,17 @@ export class ContentStore {
     const entry = this.entries.get(cid);
     if (!entry) return;
     entry.refs--;
-    if (entry.refs > 0) return;
+    if (entry.refs > 0) {
+      this.notifyChange();
+      return;
+    }
     this.entries.delete(cid);
     this.total -= entry.size;
     this.unpinChain = this.unpinChain
       .then(() => this.backend.unpin(cid))
       .catch((err: unknown) => this.log(`unpin failed for ${cid}: ${String(err)}`));
     this.scheduleGc();
+    this.notifyChange();
     this.log(`released ${cid} (${formatBytes(entry.size)}); holding ${formatBytes(this.total)} in ${this.entries.size} item(s)`);
   }
 
@@ -267,4 +343,23 @@ export class ContentStore {
   private log(message: string): void {
     this.options.log?.(message);
   }
+
+  private notifyChange(): void {
+    try {
+      this.options.onChange?.();
+    } catch (err) {
+      this.log(`onChange failed: ${String(err)}`);
+    }
+  }
+}
+
+function parseLedgerEntry(raw: unknown): ContentLedgerEntry | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { cid, size, head, refs } = raw as Record<string, unknown>;
+  if (typeof cid !== "string" || cid.length === 0 || cid.length > 256) return null;
+  if (typeof size !== "number" || !Number.isFinite(size) || size < 0) return null;
+  if (!Array.isArray(head) || head.length > 16) return null;
+  if (!head.every((byte) => typeof byte === "number" && Number.isInteger(byte) && byte >= 0 && byte <= 255)) return null;
+  if (typeof refs !== "number" || !Number.isInteger(refs) || refs < 1) return null;
+  return { cid, size, head: head as number[], refs };
 }

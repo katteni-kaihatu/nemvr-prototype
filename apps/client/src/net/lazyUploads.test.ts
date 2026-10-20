@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FileObject, ImageObject, WorldObject } from "@proto/protocol";
-import { needsLocalFile } from "./lazyUploads";
+import { needsLocalFile, uploadsToRelease } from "./lazyUploads";
 
 const file = (id: string, over: Partial<FileObject> = {}): FileObject => ({
   id,
@@ -15,7 +15,18 @@ const file = (id: string, over: Partial<FileObject> = {}): FileObject => ({
   owner: "me",
   ...over,
 });
+const image = (id: string, over: Partial<ImageObject> = {}): ImageObject => ({
+  id,
+  kind: "image",
+  cid: "cid-a",
+  position: [0, 0, 0],
+  yaw: 0,
+  width: 1,
+  height: 1,
+  ...over,
+});
 const world = (...objects: WorldObject[]) => Object.fromEntries(objects.map((o) => [o.id, o]));
+const servingAll = () => true;
 
 describe("needsLocalFile", () => {
   it("is true while a file I placed has not been stored by the server yet", () => {
@@ -55,5 +66,41 @@ describe("needsLocalFile", () => {
 
   it("is false when I am not known yet", () => {
     expect(needsLocalFile(world(file("1")), "cid-a", undefined)).toBe(false);
+  });
+});
+
+describe("uploadsToRelease", () => {
+  it("releases images and stored files that are no longer needed", () => {
+    const objects = world(image("i", { cid: "cid-a" }), file("1", { cid: "cid-b", stored: true, owner: undefined }));
+    expect(uploadsToRelease(objects, "me", servingAll)).toEqual(["cid-a", "cid-b"]);
+  });
+
+  it("keeps an unstored file that I placed", () => {
+    expect(uploadsToRelease(world(file("1")), "me", servingAll)).toEqual([]);
+  });
+
+  it("keeps a stored file while another object still needs it", () => {
+    const objects = world(file("1", { stored: true, owner: undefined }), file("2"));
+    expect(uploadsToRelease(objects, "me", servingAll)).toEqual([]);
+  });
+
+  it("keeps a video while it is being served", () => {
+    const video = file("1", { category: "video", name: "clip.webm", stored: true, owner: undefined });
+    expect(uploadsToRelease(world(video), "me", servingAll)).toEqual([]);
+  });
+
+  it("releases an unstored file that someone else placed", () => {
+    expect(uploadsToRelease(world(file("1", { owner: "someone-else" })), "me", servingAll)).toEqual(["cid-a"]);
+  });
+
+  it("deduplicates CIDs and returns them in a deterministic order", () => {
+    const objects = world(
+      file("1", { cid: "cid-b", stored: true, owner: undefined }),
+      file("2", { cid: "cid-b", stored: true, owner: undefined }),
+      image("i", { cid: "cid-a" }),
+      image("j", { cid: "cid-a" }),
+    );
+    expect(uploadsToRelease(objects, "me", servingAll)).toEqual(["cid-a", "cid-b"]);
+    expect(uploadsToRelease(objects, "me", () => false)).toEqual([]);
   });
 });

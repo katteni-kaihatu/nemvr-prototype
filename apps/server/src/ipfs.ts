@@ -87,6 +87,7 @@ export async function startIpfs(
     host = "0.0.0.0",
     publicPort = wsPort,
     blockstoreDir,
+    resetBlockstore = true,
   }: {
     /** libp2p の WebSocket を待ち受けるアドレス。リバースプロキシの背後なら 127.0.0.1。 */
     host?: string;
@@ -94,16 +95,22 @@ export async function startIpfs(
     publicPort?: number;
     /**
      * ブロックを置くディレクトリ。指定すると、中身はメモリではなくディスクに置く (大きなファイルのために必須)。
-     * 起動時に空にする: このサーバーは、再起動するとワールドの状態 (どのオブジェクトがどの中身を指すか) を失うので、
-     * 前回のブロックを残しても、誰からも参照されないままディスクを埋めるだけになる。
+     * legacy では起動時に空にする: このサーバーは、再起動するとワールドの状態 (どのオブジェクトがどの中身を指すか)
+     * を失うので、前回のブロックを残しても、誰からも参照されないままディスクを埋めるだけになる。
+     * crdt-v1 では `resetBlockstore: false` にして、保持した内容を再起動後も使う。
      * 指定しなければメモリ上 (テスト用)。
      */
     blockstoreDir?: string;
+    /**
+     * 起動時にブロックストアを削除するか (既定 true = legacy の挙動)。
+     * false のときはディレクトリを残したまま開く。
+     */
+    resetBlockstore?: boolean;
   } = {},
 ): Promise<IpfsNode> {
   let blockstore: FsBlockstore | undefined;
   if (blockstoreDir) {
-    await rm(blockstoreDir, { recursive: true, force: true });
+    if (resetBlockstore) await rm(blockstoreDir, { recursive: true, force: true });
     await mkdir(blockstoreDir, { recursive: true });
     blockstore = new FsBlockstore(blockstoreDir);
     await blockstore.open();

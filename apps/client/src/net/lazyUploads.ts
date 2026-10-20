@@ -26,3 +26,18 @@ export function needsLocalFile(
         (serving && o.category === "video")),
   );
 }
+
+/** このクライアントが配り続けている CID のうち、もう配る必要がないもの。 */
+export function uploadsToRelease(
+  objects: Record<string, WorldObject>,
+  selfId: string | undefined,
+  isServing: (cid: string) => boolean,
+): string[] {
+  const serving = new Set<string>();
+  for (const object of Object.values(objects)) {
+    if ("cid" in object && isServing(object.cid)) serving.add(object.cid);
+  }
+  return [...serving]
+    .filter((cid) => !needsLocalFile(objects, cid, selfId, true))
+    .sort();
+}

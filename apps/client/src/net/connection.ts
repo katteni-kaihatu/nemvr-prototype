@@ -3,18 +3,28 @@ import {
   formatBytes,
   MAX_AVATAR_BYTES,
   type ClientMessage,
+  type CrdtSyncInfo,
   type FileObject,
   type PeerInfo,
   type PlaceFile,
   type PlaceImage,
   type Pose,
   type ServerMessage,
+  type Vec3,
   type VideoPlaybackState,
   type WorldObject,
 } from "@proto/protocol";
 import { resetInteraction, useInteraction } from "../world/interaction";
-import { needsLocalFile } from "./lazyUploads";
+import { needsLocalFile, uploadsToRelease } from "./lazyUploads";
 import { PoseBuffer } from "./interpolation";
+import { openCrdtWorld, type CrdtCallbacks, type CrdtSyncStatus, type CrdtWorld } from "./crdt";
+import {
+  forgetSyncPeer,
+  p2pPeerCount,
+  rememberSyncPeer,
+  startWorldSyncP2P,
+  stopWorldSyncP2P,
+} from "./crdtP2P";
 import {
   addContent,
   describeError,
@@ -55,6 +65,11 @@ interface NetState {
   directPeers: number;
   /** 動画の再生状態 (サーバーが保持)。オブジェクト ID ごと。 */
   videoStates: Record<string, VideoPlaybackState>;
+  /** 同期モード。crdt-v1 のときだけ legacy 以外になる。 */
+  sync: "legacy" | CrdtSyncStatus;
+  localSaved: boolean;
+  serverSaved: boolean;
+  peerCount: number;
 }
 
 export const useNet = create<NetState>(() => ({
@@ -67,6 +82,10 @@ export const useNet = create<NetState>(() => ({
   ipfs: "idle",
   directPeers: 0,
   videoStates: {},
+  sync: "legacy",
+  localSaved: false,
+  serverSaved: false,
+  peerCount: 0,
 }));
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,13 +101,47 @@ export const peerBuffers = new Map<string, PoseBuffer>();
 let socket: WebSocket | null = null;
 let serverTimeOffset: number | null = null;
 
+/** クライアントの実験モード指定。既定は legacy。 */
+const requested = import.meta.env.VITE_SYNC_MODE === "crdt-v1";
+
+let crdtWorld: CrdtWorld | null = null;
+let crdtInfo: CrdtSyncInfo | null = null;
+/** 入室したサーバーが crdt-v1 だった (再接続でも維持する)。 */
+let crdtMode = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let reconnectAttempt = 0;
+let explicitExit = false;
+let lastName = "";
+let lastAvatarFile: File | null = null;
+let crdtNoticeShown = false;
+let connectionEpoch = 0;
+
+/** この入室セッションで P2P 同期相手として覚えた IPFS ピア ID (明示的な退出で忘れる)。 */
+const knownSyncPeers = new Set<string>();
+/** Helia / libp2p が使える状態か (P2P transport を開始してよいか)。 */
+let p2pIpfsReady = false;
+let p2pStart: Promise<void> | null = null;
+
+interface PendingPlacement {
+  message: ClientMessage;
+  cid: string;
+  name: string;
+}
+
+/** オフライン中に置こうとしたファイル (接続が戻ったら、同じ objectId で送る)。 */
+let pendingPlacements: PendingPlacement[] = [];
+
 /** 現在のサーバー時刻の推定値 (ms)。snapshot 未受信なら null。 */
 export function serverNow(): number | null {
   return serverTimeOffset === null ? null : Date.now() + serverTimeOffset;
 }
 
-function send(msg: ClientMessage): void {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+function send(msg: ClientMessage): boolean {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(msg));
+    return true;
+  }
+  return false;
 }
 
 export function sendPose(pose: Pose): void {
@@ -106,7 +159,13 @@ export function sendVideoControl(id: string, playing: boolean, time: number): vo
 }
 
 export function sendPlaceImage(place: PlaceImage): void {
-  send({ type: "place_image", ...place });
+  if (!crdtMode) {
+    send({ type: "place_image", ...place });
+    return;
+  }
+  const objectId = place.objectId ?? crypto.randomUUID();
+  const message: ClientMessage = { type: "place_image", ...place, objectId };
+  if (!send(message)) queuePlacement(message, place.cid, place.name ?? "画像");
 }
 
 /** 入室時に選ばれたアバターのファイル。接続が確立するまで覚えておく。 */
@@ -167,20 +226,92 @@ export function requestStored(object: FileObject): Promise<void> {
 }
 
 export function sendPlaceFile(place: PlaceFile): void {
-  send({ type: "place_file", ...place });
+  if (!crdtMode) {
+    send({ type: "place_file", ...place });
+    return;
+  }
+  const objectId = place.objectId ?? crypto.randomUUID();
+  const message: ClientMessage = { type: "place_file", ...place, objectId };
+  if (!send(message)) queuePlacement(message, place.cid, place.name);
 }
 
 /** 貼られた URL を置く (サーバーが取得して、画像・ファイル・リンクのいずれかにする)。 */
 export function sendPlaceUrl(url: string, position: [number, number, number], yaw: number): void {
-  send({ type: "place_url", url, position, yaw });
+  if (!crdtMode) {
+    send({ type: "place_url", url, position, yaw });
+    return;
+  }
+  // URL の取り込みはサーバー依存なので、保留せずに明示的に断る
+  if (!send({ type: "place_url", url, position, yaw })) {
+    showNotice("サーバーに接続していないため、URL を取り込めません。サーバー復帰後に配置できます", 10_000);
+  }
 }
 
-export const sendGrabObject = (id: string): void => send({ type: "grab_object", id });
-export const sendReleaseObject = (id: string): void => send({ type: "release_object", id });
-export const sendDeleteObject = (id: string): void => send({ type: "delete_object", id });
-export const sendDuplicateObject = (id: string): void => send({ type: "duplicate_object", id });
+/** オフライン中に置こうとしたファイルを保留する (タブが生きている間、元のファイルを配り続ける)。 */
+function queuePlacement(message: ClientMessage, cid: string, name: string): void {
+  pendingPlacements.push({ message, cid, name });
+  keepServing(cid);
+  showNotice(`${name}: オフラインのため保留しました。接続が戻ると配置します`, 10_000);
+}
+
+/** 再接続時 (welcome のあと) に、保留した配置を同じ objectId で送り直す。 */
+function flushPendingPlacements(): void {
+  if (pendingPlacements.length === 0) return;
+  const remaining: PendingPlacement[] = [];
+  for (const placement of pendingPlacements) {
+    if (!send(placement.message)) remaining.push(placement);
+  }
+  const sent = pendingPlacements.length - remaining.length;
+  pendingPlacements = remaining;
+  if (sent > 0) showNotice(`保留していた配置を ${sent} 件送信しました`);
+}
+
+export const sendGrabObject = (id: string): void => {
+  if (crdtMode) {
+    crdtWorld?.startGrab(id);
+    return;
+  }
+  send({ type: "grab_object", id });
+};
+export const sendReleaseObject = (id: string): void => {
+  if (crdtMode) {
+    crdtWorld?.endGrab(id);
+    return;
+  }
+  send({ type: "release_object", id });
+};
+export const sendDeleteObject = (id: string): void => {
+  if (crdtMode) {
+    crdtWorld?.deleteObject(id);
+    return;
+  }
+  send({ type: "delete_object", id });
+};
+export const sendDuplicateObject = (id: string): void => {
+  if (crdtMode) {
+    crdtWorld?.duplicateObject(id);
+    return;
+  }
+  send({ type: "duplicate_object", id });
+};
 export function sendMoveObject(id: string, position: [number, number, number], yaw: number, pitch = 0): void {
+  if (crdtMode) {
+    crdtWorld?.movePreview(id, position, yaw, pitch);
+    crdtWorld?.moveThrottled(id, position, yaw, pitch);
+    return;
+  }
   send({ type: "move_object", id, position, yaw, pitch });
+}
+
+/** 実験用: ボックスを 1 個作る (CRDT が有効なときだけ)。 */
+export function createBoxAt(position: [number, number, number]): WorldObject | undefined {
+  return crdtWorld?.createBox(position);
+}
+
+/** crdt-v1 の実験用: サーバーを通さず、リンクを文書へ直接置く。 */
+export function placeLinkLocal(url: string, position: Vec3, yaw: number): boolean {
+  if (!crdtMode || crdtWorld === null) return false;
+  return crdtWorld.createLink(url, position, yaw) !== undefined;
 }
 
 /**
@@ -195,6 +326,8 @@ export function applyLocalObjectPose(id: string, position: [number, number, numb
 }
 
 function reset(): void {
+  // P2P transport を先に止める (Helia はこの後 stopIpfs で止まる)
+  stopCrdtP2P();
   for (const id of [...prepareWaits.keys()]) settlePrepare(id, new Error("サーバーとの接続が切れました"));
   pendingUploads.clear();
   // 接続が切れたら、選ばれたアバターと、進行中のアップロードの結果は捨てる
@@ -209,27 +342,143 @@ function reset(): void {
 
 export function connect(name: string, avatarFile?: File): void {
   if (socket) return;
+  explicitExit = false;
+  // 再接続でも同じ名前・アバターで join できるように覚えておく
+  lastName = name;
+  lastAvatarFile = avatarFile ?? null;
   // ソケットを開く前に、入室時に選ばれたアバターを覚えておく
   pendingAvatarFile = avatarFile ?? null;
+  const keepObjects = requested && crdtWorld !== null;
   useNet.setState({
     status: "connecting",
     message: null,
     self: null,
     peers: {},
-    objects: {},
+    objects: keepObjects ? useNet.getState().objects : {},
     notice: null,
-    ipfs: "idle",
+    ipfs: keepObjects ? useNet.getState().ipfs : "idle",
     directPeers: 0,
     videoStates: {},
+    sync: "legacy",
+    localSaved: false,
+    serverSaved: false,
+    peerCount: 0,
   });
+  openSocket();
+}
 
+function crdtCallbacks(): CrdtCallbacks {
+  return {
+    onObjects: (objects) => {
+      useNet.setState({ objects });
+      // サーバーが保持した (CRDT の文書に反映された) ファイル・画像は、もう配る必要がない
+      for (const cid of uploadsToRelease(objects, useNet.getState().self?.id, isServing)) releaseUpload(cid);
+    },
+    onStatus: (status) =>
+      useNet.setState({
+        sync: status.sync,
+        localSaved: status.localSaved,
+        serverSaved: status.serverSaved,
+        peerCount: status.peerCount,
+      }),
+    send: (msg) => send(msg),
+    onWarning: (message) => showNotice(message, 12_000),
+  };
+}
+
+function rememberCrdtPeer(ipfsPeerId: string): void {
+  knownSyncPeers.add(ipfsPeerId);
+  rememberSyncPeer(ipfsPeerId);
+}
+
+/**
+ * CRDT 文書と IPFS の両方が準備できた後に、P2P transport を 1 回だけ開始する。
+ * IPFS が使えない環境では WS だけのモードのまま続ける。
+ */
+function maybeStartWorldSyncP2P(): void {
+  if (!crdtMode || crdtWorld === null || !p2pIpfsReady || p2pStart !== null) return;
+  p2pStart = startWorldSyncP2P({
+    getWorld: () => crdtWorld,
+    log: (message) => console.info(`[crdt-p2p] ${message}`),
+  })
+    .catch((error: unknown) => {
+      console.warn(`[crdt-p2p] start failed: ${describeError(error)}`, error);
+    })
+    .finally(() => {
+      p2pStart = null;
+    });
+}
+
+function stopCrdtP2P(): void {
+  for (const peerId of knownSyncPeers) forgetSyncPeer(peerId);
+  knownSyncPeers.clear();
+  stopWorldSyncP2P();
+  p2pIpfsReady = false;
+  p2pStart = null;
+}
+
+/** welcome のあと、保存済み文書を開いて hello を送る。再接続では既存の文書を使う。 */
+async function activateCrdt(info: CrdtSyncInfo, ws: WebSocket, epoch: number, peerCount: number): Promise<void> {
+  try {
+    if (!crdtWorld) {
+      const world = await openCrdtWorld(info, () => useNet.getState().self?.id, crdtCallbacks());
+      if (epoch !== connectionEpoch || socket !== ws || !crdtMode) {
+        await world.close();
+        return;
+      }
+      crdtWorld = world;
+    } else {
+      crdtWorld.notifyTransport(true);
+    }
+    crdtWorld.setPeerCount(peerCount);
+    crdtWorld.sendHello();
+    flushPendingPlacements();
+    maybeStartWorldSyncP2P();
+  } catch (error) {
+    console.warn(`[crdt] open failed: ${describeError(error)}`, error);
+    showNotice(`CRDT のローカル文書を開けませんでした: ${describeError(error)}`, 15_000);
+  }
+}
+
+/** 指数バックオフ (1s, 2s, 4s, 8s, 10s + jitter)。明示的退出では呼ばない。 */
+function scheduleReconnect(): void {
+  if (explicitExit || !crdtMode || reconnectTimer !== undefined) return;
+  const base = [1000, 2000, 4000, 8000, 10_000][Math.min(reconnectAttempt, 4)] ?? 10_000;
+  reconnectAttempt++;
+  const jitter = base * (Math.random() * 0.4 - 0.2);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    if (explicitExit || !crdtMode || socket) return;
+    openSocket();
+  }, Math.max(0, Math.round(base + jitter)));
+}
+
+/** モード不一致などで、この接続の CRDT を畳む (文書の保存データは残す)。 */
+function teardownCrdt(): void {
+  crdtMode = false;
+  stopCrdtP2P();
+  const world = crdtWorld;
+  crdtWorld = null;
+  crdtInfo = null;
+  pendingPlacements = [];
+  if (world) void world.close();
+}
+
+function openSocket(): void {
+  if (socket) return;
+  const epoch = ++connectionEpoch;
   const ws = new WebSocket(WS_URL);
   socket = ws;
   let welcomed = false;
 
-  ws.onopen = () => send({ type: "join", name });
+  ws.onopen = () => {
+    if (socket !== ws) return;
+    send({ type: "join", name: lastName });
+  };
 
   ws.onmessage = (ev) => {
+    // 退出後・別の接続のメッセージは無視する
+    if (socket !== ws) return;
     if (typeof ev.data !== "string") return;
     let msg: ServerMessage;
     try {
@@ -243,27 +492,109 @@ export function connect(name: string, avatarFile?: File): void {
   const handleMessage = (msg: ServerMessage) => {
     switch (msg.type) {
       case "welcome": {
+        const serverSync = msg.sync;
+        if (serverSync?.mode === "crdt-v1" && !requested) {
+          welcomed = false;
+          teardownCrdt();
+          useNet.setState({
+            status: "idle",
+            message: "サーバーは crdt-v1 です。VITE_SYNC_MODE=crdt-v1 でビルドしてください",
+            self: null,
+            peers: {},
+            objects: {},
+            sync: "legacy",
+            localSaved: false,
+            serverSaved: false,
+            peerCount: 0,
+          });
+          ws.close();
+          break;
+        }
+        if (requested && serverSync?.mode !== "crdt-v1") {
+          welcomed = false;
+          teardownCrdt();
+          useNet.setState({
+            status: "idle",
+            message: "サーバーは legacy モードです。VITE_SYNC_MODE=crdt-v1 とサーバーの SYNC_MODE=crdt-v1 を揃えてください",
+            self: null,
+            peers: {},
+            objects: {},
+            sync: "legacy",
+            localSaved: false,
+            serverSaved: false,
+            peerCount: 0,
+          });
+          ws.close();
+          break;
+        }
+
         welcomed = true;
+        reconnectAttempt = 0;
+        crdtNoticeShown = false;
         const peers: Record<string, PeerInfo> = {};
         for (const p of msg.peers) {
           peers[p.id] = { id: p.id, name: p.name, color: p.color, avatarCid: p.avatarCid };
         }
-        const objects: Record<string, WorldObject> = {};
-        for (const o of msg.objects) objects[o.id] = o;
-        useNet.setState({
-          status: "connected",
-          self: msg.self,
-          peers,
-          objects,
-          videoStates: msg.videos ?? {},
-          ipfs: "starting",
-        });
         // 先に入室していた人の libp2p ID に名前を結び付ける (ダウンロードの取得元の表示用)
-        for (const peer of msg.peers) if (peer.ipfsPeerId) rememberPeerName(peer.ipfsPeerId, peer.name);
-        // 画像の取得・共有に使うブラウザ内 IPFS ノードを起動してサーバーに接続する
+        for (const peer of msg.peers) {
+          if (!peer.ipfsPeerId) continue;
+          rememberPeerName(peer.ipfsPeerId, peer.name);
+          if (serverSync?.mode === "crdt-v1") rememberCrdtPeer(peer.ipfsPeerId);
+        }
+        p2pIpfsReady = useNet.getState().ipfs === "ready";
+
+        if (serverSync?.mode === "crdt-v1") {
+          crdtMode = true;
+          // 別ワールド・別スキーマにはマージしない
+          if (
+            crdtWorld &&
+            crdtInfo &&
+            (crdtInfo.worldId !== serverSync.worldId || crdtInfo.schemaVersion !== serverSync.schemaVersion)
+          ) {
+            const stale = crdtWorld;
+            crdtWorld = null;
+            crdtInfo = null;
+            stopCrdtP2P();
+            void stale.close();
+            useNet.setState({ objects: {} });
+          }
+          crdtInfo = serverSync;
+          useNet.setState({
+            status: "connected",
+            self: msg.self,
+            peers,
+            videoStates: msg.videos ?? {},
+            ipfs: useNet.getState().ipfs === "ready" ? "ready" : "starting",
+            sync: "connecting",
+            serverSaved: false,
+            peerCount: Object.keys(peers).length,
+          });
+          void activateCrdt(serverSync, ws, epoch, Object.keys(peers).length);
+        } else {
+          crdtMode = false;
+          crdtInfo = null;
+          const objects: Record<string, WorldObject> = {};
+          for (const o of msg.objects) objects[o.id] = o;
+          useNet.setState({
+            status: "connected",
+            self: msg.self,
+            peers,
+            objects,
+            videoStates: msg.videos ?? {},
+            ipfs: "starting",
+            sync: "legacy",
+            localSaved: false,
+            serverSaved: false,
+            peerCount: Object.keys(peers).length,
+          });
+        }
+        // 画像の取得・共有に使うブラウザ内 IPFS ノードを起動してサーバーに接続する (起動済みなら何もしない)
         startIpfs(msg.ipfs, msg.iceServers, (directPeers) => useNet.setState({ directPeers })).then(
           () => {
+            if (epoch !== connectionEpoch) return;
             useNet.setState({ ipfs: "ready" });
+            p2pIpfsReady = true;
+            maybeStartWorldSyncP2P();
             // 他のブラウザから直接接続してもらえる状態になったら、自分のピア ID を知らせる
             waitForDialable()
               .then(
@@ -274,6 +605,8 @@ export function connect(name: string, avatarFile?: File): void {
               .finally(() => void uploadPendingAvatar());
           },
           (err: unknown) => {
+            if (epoch !== connectionEpoch) return;
+            p2pIpfsReady = false;
             console.warn(`[ipfs] start failed: ${describeError(err)}`, err);
             useNet.setState({ ipfs: "error" });
             showNotice(
@@ -287,6 +620,7 @@ export function connect(name: string, avatarFile?: File): void {
         break;
       }
       case "object_updated": {
+        if (crdtMode) break; // CRDT では文書が正本 (object_* で上書きしない)
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
         if (object.kind === "file") {
@@ -305,6 +639,7 @@ export function connect(name: string, avatarFile?: File): void {
         break;
       }
       case "object_removed": {
+        if (crdtMode) break;
         const removed = useNet.getState().objects[msg.id];
         useNet.setState((s) => {
           const { [msg.id]: _removed, ...rest } = s.objects;
@@ -328,10 +663,14 @@ export function connect(name: string, avatarFile?: File): void {
         // 後から準備ができた人へ、既にいる側から直接接続しに行く
         const peerName = useNet.getState().peers[msg.id]?.name;
         if (peerName) rememberPeerName(msg.ipfsPeerId, peerName); // ダウンロードの取得元の表示に使う
-        void dialPeer(msg.ipfsPeerId);
+        void dialPeer(msg.ipfsPeerId).finally(() => {
+          // IPFS のピア ID は WS の peer と違って安定している。退出するまで覚えておく
+          if (crdtMode) rememberCrdtPeer(msg.ipfsPeerId);
+        });
         break;
       }
       case "object_added": {
+        if (crdtMode) break;
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
         if (object.kind === "box" || object.kind === "link") break; // ボックス・リンクは中身 (IPFS) を持たない
@@ -421,15 +760,16 @@ export function connect(name: string, avatarFile?: File): void {
       }
       case "peer_joined": {
         const { id, name, color, avatarCid } = msg.peer;
-        useNet.setState((s) => ({ peers: { ...s.peers, [id]: { id, name, color, avatarCid } } }));
+        const next = { ...useNet.getState().peers, [id]: { id, name, color, avatarCid } };
+        useNet.setState({ peers: next, peerCount: Object.keys(next).length });
+        crdtWorld?.setPeerCount(Object.keys(next).length);
         break;
       }
       case "peer_left": {
         peerBuffers.delete(msg.id);
-        useNet.setState((s) => {
-          const { [msg.id]: _removed, ...rest } = s.peers;
-          return { peers: rest };
-        });
+        const { [msg.id]: _removed, ...rest } = useNet.getState().peers;
+        useNet.setState({ peers: rest, peerCount: Object.keys(rest).length });
+        crdtWorld?.setPeerCount(Object.keys(rest).length);
         break;
       }
       case "snapshot": {
@@ -444,6 +784,22 @@ export function connect(name: string, avatarFile?: File): void {
         }
         break;
       }
+      case "sync_init":
+      case "sync_update":
+      case "sync_part":
+      case "sync_ack": {
+        crdtWorld?.handleServerMessage(msg);
+        break;
+      }
+      case "sync_error": {
+        crdtWorld?.handleServerMessage(msg);
+        showNotice(`同期エラー: ${msg.message}`, 10_000);
+        break;
+      }
+      case "claim": {
+        crdtWorld?.handleServerMessage(msg);
+        break;
+      }
       case "error": {
         // 入室後のエラーは HUD に一時表示、入室前は入室画面に表示する
         if (useNet.getState().status === "connected") showNotice(msg.message);
@@ -454,7 +810,32 @@ export function connect(name: string, avatarFile?: File): void {
   };
 
   ws.onclose = () => {
+    if (socket !== ws) return;
     const prev = useNet.getState();
+    if (crdtMode && !explicitExit) {
+      // 文書・シーン・IPFS は止めない。transport だけを切り替えて再接続する。
+      // P2P のリンクが残っていれば、そちらで同期を続ける
+      const p2pCount = p2pPeerCount();
+      crdtWorld?.setPeerCount(p2pCount);
+      crdtWorld?.markP2PAvailable(p2pCount > 0);
+      crdtWorld?.notifyTransport(false);
+      peerBuffers.clear();
+      serverTimeOffset = null;
+      socket = null;
+      useNet.setState({
+        peers: {},
+        peerCount: p2pCount,
+        serverSaved: false,
+        directPeers: 0,
+        ...(crdtWorld ? {} : { sync: (p2pCount > 0 ? "p2p" : "offline") as CrdtSyncStatus }),
+      });
+      if (!crdtNoticeShown) {
+        crdtNoticeShown = true;
+        showNotice("サーバーとの接続が切れました。編集は続けられます", 10_000);
+      }
+      scheduleReconnect();
+      return;
+    }
     reset();
     useNet.setState({
       status: "idle",
@@ -465,14 +846,61 @@ export function connect(name: string, avatarFile?: File): void {
       ipfs: "idle",
       directPeers: 0,
       videoStates: {},
+      sync: "legacy",
+      localSaved: false,
+      serverSaved: false,
+      peerCount: 0,
       message:
         prev.message ??
         (welcomed ? "サーバーとの接続が切断されました" : "サーバーに接続できませんでした"),
     });
+    explicitExit = false;
   };
 }
 
 export function disconnect(): void {
+  explicitExit = true;
+  connectionEpoch++;
+  if (reconnectTimer !== undefined) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+  reconnectAttempt = 0;
+  crdtNoticeShown = false;
+
+  // 明示的な退出では P2P transport を IPFS より先に止める
+  stopCrdtP2P();
+
+  if (crdtMode) {
+    crdtMode = false;
+    const world = crdtWorld;
+    const ws = socket;
+    crdtWorld = null;
+    crdtInfo = null;
+    pendingPlacements = [];
+    socket = null;
+    if (world) void world.close();
+    reset();
+    useNet.setState({
+      status: "idle",
+      self: null,
+      peers: {},
+      objects: {},
+      message: null,
+      notice: null,
+      ipfs: "idle",
+      directPeers: 0,
+      videoStates: {},
+      sync: "legacy",
+      localSaved: false,
+      serverSaved: false,
+      peerCount: 0,
+    });
+    ws?.close();
+    explicitExit = false;
+    return;
+  }
+
   socket?.close();
 }
 

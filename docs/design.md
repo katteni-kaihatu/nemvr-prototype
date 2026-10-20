@@ -455,11 +455,84 @@ validate.ts  受信メッセージの検証・正規化
 | アバターの表情・アニメーション | `PeerInfo.avatarCid` で VRM を同期済み。表情・モーションの状態を `Pose` に足し、`VrmAvatar` で反映する |
 | ボイスチャット | 別途 SFU (LiveKit 等) を用意。ピア ID をトークン発行時の identity に使う |
 | 画像以外のオブジェクト・回転 / 拡大縮小・元に戻す | `WorldObject` に `kind` を追加する。`object_updated` はオブジェクト全体を送るので、プロパティを足せばそのまま同期できる。操作・排他制御はサーバーが既に持っている |
-| 音声の再生、ファイルのプレビュー、動画の再生同期 | 映像は、リングメニューで 3D 空間の中に再生できる (Service Worker + ブラウザの IPFS で P2P ストリーミング)。音声も同じ仕組みで足せる。再生位置のクライアント間の同期は未実装 |
+| 音声の再生、ファイルのプレビュー、動画の再生同期 | 映像は、リングメニューで 3D 空間の中に再生できる (Service Worker + ブラウザの IPFS で P2P ストリーミング)。音声も同じ仕組みで足せる。再生位置のクライアント間の同期は legacy で実装済み。crdt-v1 では未対応 |
 | バイナリプロトコル | `type` 毎に固定レイアウトの `ArrayBuffer` へ移行 |
 
 ## 9. テスト・検証方針
 
-- server: `validate.ts` の単体テスト (不正値の扱い)。それ以外は手動確認。
-- client: 補間ロジック (`interpolation.ts`) の純粋関数部分の単体テスト。
-- 結合: ブラウザタブを複数開いて、互いのアバターが見え、動き、退室で消えることを目視確認する。
+- server: `validate` / `content` / `ipfs` / `room` / `syncHub` / `worldStore` の単体テスト。
+- client: 補間ロジック (`interpolation`) と `crdt` / `crdtP2P` / `idb` の単体テスト。
+- protocol / world-sync: メッセージ型、文書モデル、projection、transfer codec の単体テスト。
+- 結合: ブラウザタブを複数開いて、互いのアバターが見え、動き、退室で消えることを目視確認する。crdt-v1 は Node 上の 2 クライアント smoke test まで確認済みで、実ブラウザの障害試験は未実施 (詳細は [CRDT 実験モード](crdt-experiment.md) の「15. 検証状況」)。
+
+## 10. CRDT 実験モード (crdt-v1)
+
+> **状態**: 既定は legacy。以下は `SYNC_MODE=crdt-v1` / `VITE_SYNC_MODE=crdt-v1` を指定した実験モードの設計で、コードと単体テストは実装済み。ただし実ブラウザでの IndexedDB、障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証。保証範囲・設定・障害試験の詳細は [CRDT 実験モード](crdt-experiment.md) を参照。
+
+### プロトコル
+
+制御メッセージは JSON、Yjs の更新は base64 で運ぶ。クライアントが `sync_hello` で state vector を送り、サーバーが `sync_init` で差分を返す。その後は `sync_update` の増分を双方向に配り、サーバーは保存完了後に `sync_ack` で state vector を返す。
+
+| type | 方向 | 主なフィールド | 説明 |
+|---|---|---|---|
+| `sync_hello` | Client → Server | `worldId`, `schemaVersion`, `stateVector` | 接続時の照合と、クライアントの state vector の送信 |
+| `sync_init` | Server → Client | `update` | クライアントの vector に対する差分。大きい場合は `sync_part` に分割 |
+| `sync_update` | 双方向 | `update` | 増分更新。重複・順序逆転を許容する |
+| `sync_part` | 双方向 | `transferId`, `index`, `count`, `data` | 大きな更新の分割転送 (48 KiB/チャンク、`data` は base64) |
+| `sync_ack` | Server → Client | `stateVector` | 保存完了後のサーバーの state vector。クライアントは比較し、遅れていればローカル差分を送って次の ACK を待つ |
+| `claim` | Client → Server / Server → Client | `id`, `peerId`, `sessionId`, `seq`, `until` | つかみの一時 claim。サーバーは送信元の `peerId` を付けて他へ配る |
+| `claim_release` | Client → Server / Server → Client | `id`, `sessionId` | claim の解放。サーバーは `until: 0` の `claim` としてブロードキャストする |
+
+- 初期上限は文書 16 MiB、接続ごとの送信待ち 2 MiB。超過は診断可能な同期エラーにし、収束済みと表示しない。
+- P2P は既存の libp2p 接続 (WebRTC / circuit relay) 上の `/proto/world-sync/1.0.0` を使う。同じ論理メッセージを 4 バイト big-endian の長さ + UTF-8 JSON で運ぶ。実装済みだが、実際の障害中にリンクが生存するかは未検証で、停止中の新規接続は確立できない。
+- legacy のメッセージと同じ文書に書き込まない。モード・スキーマ不一致は明示エラーにする。
+
+### 文書のレイアウト
+
+```text
+Y.Doc
+├─ objects: Y.Map<Y.Map>
+│   └─ <objectId>
+│       ├─ id / kind / cid / name / size / category など (生成後不変)
+│       └─ transform: { position, yaw, pitch, updateId }
+└─ deleted: Y.Map<true>
+```
+
+- `transform` は一つの値として置換し、座標軸ごとにマージしない。
+- 削除は tombstone として保持し、同じ ID を復活・再作成しない。複製は新しい UUID を使う。
+- pose・つかみ claim・ドラッグプレビュー・転送進捗は文書に入れない。claim は 3 秒で失効し、ドラッグ中は最大 1Hz、離した時点で transform を確定する。
+- ファイルの検証結果 (サイズ・種類など) は transform と別の属性に持つ。
+
+### 永続化
+
+- ブラウザは IndexedDB のトランザクション完了を「ローカル保存済み」とする。使用不可・容量超過は警告し、保存済みと偽らない。
+- サーバーは保存キューで Yjs の全状態を直列化し、一時ファイル書込・flush・atomic rename の完了後に ACK を返す。ACK の state vector は保存完了後に取得する。
+- IndexedDB の復元は接続後、CRDT の welcome を受けてから行う。welcome で objects を全置換しない。壊れた snapshot・未知スキーマでは空ワールドを作らず起動失敗を明示する。
+- 「ローカル保存済み」「他ノードへ反映」「サーバー保存済み」を HUD とログで区別する。
+
+### 再接続とバックオフ
+
+- WebSocket の切断では transport の状態だけを変え、シーン・文書・Helia の寿命を分離する。切断時に文書を消さない。
+- 指数バックオフ (1s, 2s, 4s, 8s, 10s + jitter) と WebSocket の ping / pong、claim の heartbeat を使う。明示的な退出では再接続を停止するが、保存済み文書は消さない。
+- 復旧時はクライアントが `sync_hello` を送り、サーバーが `sync_init` で差分を返す。クライアントは `sync_ack` の state vector を比較し、不足があれば `sync_update` で送る。サーバーは 10 秒ごとにも ACK を送り、定期的な差分再同期で取りこぼしを回復する。経路切替で同じ操作を再生成しない。
+- 送信キューが飽和したら文書から差分同期をやり直す。未反映更新を黙って捨てない。
+
+### 競合規則
+
+- 同じ transform への同時更新は Yjs の決定的な解決に従う。実時刻の最後の操作や端末時計で勝者を決めない。
+- 削除は単調な tombstone。移動・検証完了・複製・古い更新が後から届いても削除済み ID を表示しない。
+- 削除と複製が競合した場合は複製を残す。削除と検証完了が競合しても復活させない。
+- つかみ claim は分断をまたぐロックではない。同時 claim は sessionId / dragId の順序で表示上の勝者を決め、敗者は操作を中止・補正する。
+- `MAX_OBJECTS=100` はローカルの新規作成抑止。マージ後の超過は保持したまま超過表示する。
+
+### クライアント HUD
+
+| 表示 | 意味 |
+|---|---|
+| オンライン | WebSocket 接続済み。サーバーと同期している |
+| P2P のみ | サーバーには未接続だが、P2P 経路で文書の変更を同期している (他参加者の姿勢・アバターは WS 再接続まで更新されない) |
+| 孤立 | どの経路も未接続。ローカル編集を続け、保存済みとして扱う |
+| 再同期中 | 再接続後に state vector と差分を交換している |
+| 保存失敗 | IndexedDB の保存に失敗した。保存済みと表示しない |
+
+P2P のみ・孤立でも編集は継続する。新規ファイル検証・URL のメディア取り込み・新規参加はサーバー復帰待ちとし、動画同期は crdt-v1 では未対応とする。WS が切れるとクライアントは peer 一覧と姿勢バッファを消すため、他参加者の姿勢・アバターは再接続まで更新されない。P2P で継続するのは文書編集と claim で、姿勢の P2P 共有は未実装。実験用の「実験: ボックスを置く」「実験: リンクを置く」ボタンは、この状態でも文書へ直接配置できる (リンクは URL のメディア取り込みをしない)。

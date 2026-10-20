@@ -7,6 +7,25 @@ export * from "./files.js";
 export const TICK_RATE = 20; // Hz
 export const MAX_NAME_LENGTH = 24;
 export const MAX_MESSAGE_BYTES = 4096;
+
+/** CRDT 同期プロトコルのスキーマ版。 */
+export const SYNC_SCHEMA_VERSION = 1;
+export type SyncMode = "crdt-v1";
+
+/** welcome で実験モードであることと、接続先のワールドを識別する。 */
+export interface CrdtSyncInfo {
+  mode: SyncMode;
+  worldId: string;
+  schemaVersion: number;
+}
+
+/** 分割転送の 1 片。data は base64。 */
+export interface SyncPart {
+  transferId: string;
+  index: number;
+  count: number;
+  data: string;
+}
 /** 貼り付けを受け付ける URL の長さの上限。 */
 export const MAX_URL_LENGTH = 2048;
 export const MAX_ABS_POSITION = 1000;
@@ -153,20 +172,29 @@ export interface IceServer {
   credential?: string;
 }
 
-/** place_image の本体部分 (id はサーバーが採番する)。サーバーは cid の中身を検証してから置く。 */
-export type PlaceImage = Pick<ImageObject, "cid" | "position" | "yaw" | "width" | "height" | "name">;
+/**
+ * place_image の本体部分 (id はサーバーが採番する)。サーバーは cid の中身を検証してから置く。
+ * objectId はクライアント生成 UUID (CRDT モード用)。旧クライアントでは省略される。
+ */
+export type PlaceImage = Pick<ImageObject, "cid" | "position" | "yaw" | "width" | "height" | "name"> & {
+  objectId?: string;
+};
 
 /**
  * place_file の本体部分。size と category はサーバーが中身から決めるので、クライアントは送らない。
  * サーバーは cid の中身を取得して (上限 MAX_FILE_BYTES) から置く。
+ * objectId はクライアント生成 UUID (CRDT モード用)。旧クライアントでは省略される。
  */
-export type PlaceFile = Pick<FileObject, "cid" | "name" | "position" | "yaw">;
+export type PlaceFile = Pick<FileObject, "cid" | "name" | "position" | "yaw"> & { objectId?: string };
 
 /** place_url: 貼られた http(s) の URL。位置・向きは、ファイルを置いたときと同じ。 */
-export type PlaceUrl = Pick<LinkObject, "url" | "position" | "yaw">;
+export type PlaceUrl = Pick<LinkObject, "url" | "position" | "yaw"> & { objectId?: string };
 
 /** place_box の本体部分 (id はサーバーが採番する)。デモ用のボックス配置・テスト用。 */
-export type PlaceBox = Pick<BoxObject, "position" | "yaw" | "size" | "color"> & { pitch?: number };
+export type PlaceBox = Pick<BoxObject, "position" | "yaw" | "size" | "color"> & {
+  pitch?: number;
+  objectId?: string;
+};
 
 // Client -> Server
 export type ClientMessage =
@@ -189,7 +217,14 @@ export type ClientMessage =
   | { type: "release_object"; id: string }
   | { type: "video_control"; id: string; playing: boolean; time: number }
   | { type: "delete_object"; id: string }
-  | { type: "duplicate_object"; id: string };
+  | { type: "duplicate_object"; id: string }
+  // CRDT 同期 (crdt-v1)。stateVector / update は base64。
+  | { type: "sync_hello"; worldId: string; schemaVersion: number; stateVector: string }
+  | { type: "sync_update"; update: string }
+  | ({ type: "sync_part" } & SyncPart)
+  // 一時的なつかみ claim。until は期限 (ms)。seq は session 内で単調増加。
+  | { type: "claim"; id: string; sessionId: string; seq: number; until: number }
+  | { type: "claim_release"; id: string; sessionId: string };
 
 // Server -> Client
 export type ServerMessage =
@@ -204,6 +239,8 @@ export type ServerMessage =
       /** STUN / TURN の設定。サーバーに TURN が設定されていないときは省略される (クライアントは既定の公開 STUN を使う)。 */
       iceServers?: IceServer[];
       tickRate: number;
+      /** crdt-v1 のときだけ付く。旧クライアントには無い。 */
+      sync?: CrdtSyncInfo;
     }
   | { type: "object_added"; object: WorldObject }
   // 位置・向き・つかまれている状態が変わった (全体の状態を送る)
@@ -225,4 +262,12 @@ export type ServerMessage =
   | { type: "peer_joined"; peer: PeerState }
   | { type: "peer_left"; id: string }
   | { type: "snapshot"; time: number; poses: Record<string, Pose> }
+  // CRDT 同期 (crdt-v1)。update / stateVector は base64。
+  | { type: "sync_init"; update: string }
+  | { type: "sync_update"; update: string }
+  | ({ type: "sync_part" } & SyncPart)
+  | { type: "sync_ack"; stateVector: string }
+  | { type: "sync_error"; message: string }
+  // 他ピアのつかみ claim の通知。
+  | { type: "claim"; id: string; peerId: string; sessionId: string; seq: number; until: number }
   | { type: "error"; message: string };

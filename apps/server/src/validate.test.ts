@@ -240,6 +240,130 @@ describe("parseClientMessage", () => {
   });
 });
 
+describe("crdt-v1 messages", () => {
+  const worldId = "world-1234";
+  const sessionId = "session-abcdefgh";
+  const id = "123e4567-e89b-42d3-a456-426614174030";
+
+  describe("sync_hello", () => {
+    it("accepts a valid hello", () => {
+      const hello = { type: "sync_hello", worldId, schemaVersion: 1, stateVector: "AAAA" };
+      expect(parseClientMessage(JSON.stringify(hello))).toEqual(hello);
+      expect(parseClientMessage(JSON.stringify({ ...hello, stateVector: "" }))).toEqual({ ...hello, stateVector: "" });
+    });
+
+    it("rejects bad worldId / schemaVersion / stateVector", () => {
+      const base = { type: "sync_hello", worldId, schemaVersion: 1, stateVector: "AAAA" };
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...base, ...patch }));
+      expect(bad({ worldId: "short" })).toBeNull();
+      expect(bad({ worldId: "has spaces" })).toBeNull();
+      expect(bad({ worldId: "a".repeat(129) })).toBeNull();
+      expect(bad({ worldId: 5 })).toBeNull();
+      expect(bad({ schemaVersion: 0 })).toBeNull();
+      expect(bad({ schemaVersion: -1 })).toBeNull();
+      expect(bad({ schemaVersion: 1.5 })).toBeNull();
+      expect(bad({ schemaVersion: "1" })).toBeNull();
+      expect(bad({ stateVector: "not base64!" })).toBeNull();
+      expect(bad({ stateVector: "AAAA=" })).toBeNull();
+      expect(bad({ stateVector: 5 })).toBeNull();
+    });
+  });
+
+  describe("sync_update", () => {
+    it("accepts empty and valid base64 updates", () => {
+      expect(parseClientMessage(JSON.stringify({ type: "sync_update", update: "" }))).toEqual({ type: "sync_update", update: "" });
+      expect(parseClientMessage(JSON.stringify({ type: "sync_update", update: "AAAA" }))).toEqual({ type: "sync_update", update: "AAAA" });
+    });
+    it("rejects malformed base64", () => {
+      expect(parseClientMessage(JSON.stringify({ type: "sync_update", update: "***" }))).toBeNull();
+      expect(parseClientMessage(JSON.stringify({ type: "sync_update", update: 5 }))).toBeNull();
+    });
+  });
+
+  describe("sync_part", () => {
+    const valid = { type: "sync_part", transferId: "init:peer:1", index: 0, count: 2, data: "AAAA" };
+    it("accepts a valid part", () => {
+      expect(parseClientMessage(JSON.stringify(valid))).toEqual(valid);
+    });
+    it("rejects bad indices / counts / transferId / data", () => {
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...valid, ...patch }));
+      expect(bad({ transferId: "" })).toBeNull();
+      expect(bad({ transferId: "x".repeat(257) })).toBeNull();
+      expect(bad({ index: -1 })).toBeNull();
+      expect(bad({ index: 1.5 })).toBeNull();
+      expect(bad({ index: 2 })).toBeNull(); // index >= count
+      expect(bad({ count: 0 })).toBeNull();
+      expect(bad({ count: 4097 })).toBeNull();
+      expect(bad({ count: 1.5 })).toBeNull();
+      expect(bad({ data: "!!!!" })).toBeNull();
+      expect(bad({ data: 5 })).toBeNull();
+    });
+  });
+
+  describe("claims", () => {
+    it("accepts valid claims", () => {
+      const claim = { type: "claim", id, sessionId, seq: 0, until: 1000 };
+      expect(parseClientMessage(JSON.stringify(claim))).toEqual(claim);
+      const release = { type: "claim_release", id, sessionId };
+      expect(parseClientMessage(JSON.stringify(release))).toEqual(release);
+    });
+    it("rejects invalid claims / releases", () => {
+      const claim = { type: "claim", id, sessionId, seq: 1, until: 1000 };
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...claim, ...patch }));
+      expect(bad({ id: "nope" })).toBeNull();
+      expect(bad({ sessionId: "short" })).toBeNull();
+      expect(bad({ sessionId: "has spaces" })).toBeNull();
+      expect(bad({ seq: -1 })).toBeNull();
+      expect(bad({ seq: 1.5 })).toBeNull();
+      expect(bad({ until: 0 })).toBeNull();
+      expect(bad({ until: Number.POSITIVE_INFINITY })).toBeNull();
+      expect(bad({ until: "soon" })).toBeNull();
+
+      const release = { type: "claim_release", id, sessionId };
+      expect(parseClientMessage(JSON.stringify({ ...release, id: "nope" }))).toBeNull();
+      expect(parseClientMessage(JSON.stringify({ ...release, sessionId: "" }))).toBeNull();
+    });
+  });
+
+  describe("client-generated objectId", () => {
+    const objectId = "123e4567-e89b-42d3-a456-426614174031";
+    it("includes a valid objectId on placements", () => {
+      const image = {
+        type: "place_image",
+        cid: dagPbCid,
+        position: [1, 0, -2],
+        yaw: 1.5,
+        width: 2,
+        height: 1.5,
+        objectId,
+      };
+      expect(parseClientMessage(JSON.stringify(image))).toEqual(image);
+
+      const file = { type: "place_file", cid: dagPbCid, name: "report.pdf", position: [1, 0, -2], yaw: 0.5, objectId };
+      expect(parseClientMessage(JSON.stringify(file))).toEqual(file);
+
+      const url = { type: "place_url", url: "https://example.com/", position: [1, 0, 2], yaw: 0, objectId };
+      expect(parseClientMessage(JSON.stringify(url))).toEqual(url);
+
+      const box = { type: "place_box", position: [1, 0, 2], yaw: 0, size: 1, color: "#aabbcc", objectId };
+      expect(parseClientMessage(JSON.stringify(box))).toEqual(box);
+    });
+
+    it("rejects an invalid objectId and omits an absent one", () => {
+      const image = {
+        type: "place_image",
+        cid: dagPbCid,
+        position: [1, 0, -2],
+        yaw: 1.5,
+        width: 2,
+        height: 1.5,
+      };
+      expect(parseClientMessage(JSON.stringify({ ...image, objectId: "nope" }))).toBeNull();
+      expect(parseClientMessage(JSON.stringify(image))).not.toHaveProperty("objectId");
+    });
+  });
+});
+
 describe("normalizeCid", () => {
   it("accepts UnixFS file CIDs (dag-pb / raw, sha2-256)", () => {
     expect(normalizeCid(rawCid)).toBe(rawCid);

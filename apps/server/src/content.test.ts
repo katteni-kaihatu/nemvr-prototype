@@ -56,6 +56,9 @@ class FakeBackend implements ContentBackend {
     await new Promise((r) => setTimeout(r, 5));
     this.events.push("gc:end");
   }
+  async has(cid: string): Promise<boolean> {
+    return this.contents.has(cid);
+  }
   count(prefix: string): number {
     return this.events.filter((e) => e.startsWith(prefix)).length;
   }
@@ -362,5 +365,84 @@ describe("garbage collection", () => {
     await store.settle();
     expect(backend.count("unpin:")).toBe(3);
     expect(backend.count("gc:end")).toBe(1);
+  });
+});
+
+describe("content ledger", () => {
+  it("restores content that is still in the blockstore, pins it, and drops missing content", async () => {
+    const { backend, store } = make();
+    backend.put("present", 120);
+    await store.restore([
+      { cid: "present", size: 120, head: [...TEXT_HEAD], refs: 2 },
+      { cid: "missing", size: 30, head: [], refs: 1 },
+    ]);
+
+    expect(store.known("present")).toEqual({ size: 120, head: TEXT_HEAD });
+    expect(store.known("missing")).toBeUndefined();
+    expect(backend.pinned.has("present")).toBe(true);
+    expect(backend.pinned.has("missing")).toBe(false);
+    expect(store.totalBytes).toBe(120);
+    expect(store.count).toBe(1);
+  });
+
+  it("roundtrips through snapshot and restore", async () => {
+    const { backend, store } = make();
+    backend.put("a", 400);
+    await store.add("a", "file");
+    store.retain("a");
+    const snapshot = store.snapshot();
+    expect(snapshot).toEqual([{ cid: "a", size: 400, head: [...TEXT_HEAD], refs: 2 }]);
+
+    const restored = new ContentStore(backend, { maxTotalBytes: 1000 });
+    await restored.restore(snapshot);
+    expect(restored.snapshot()).toEqual(snapshot);
+    expect(restored.known("a")).toEqual({ size: 400, head: TEXT_HEAD });
+  });
+
+  it("ignores invalid entries without throwing, and restores the valid ones", async () => {
+    const { backend, store } = make();
+    backend.put("ok", 10);
+    await expect(
+      store.restore([
+        null,
+        42,
+        {},
+        { cid: "", size: 10, head: [], refs: 1 },
+        { cid: "neg", size: -1, head: [], refs: 1 },
+        { cid: "head", size: 10, head: [300], refs: 1 },
+        { cid: "refs", size: 10, head: [], refs: 0 },
+        { cid: "ok", size: 10, head: [...TEXT_HEAD], refs: 1 },
+      ]),
+    ).resolves.toBeUndefined();
+    expect(store.count).toBe(1);
+    expect(store.known("ok")).toBeDefined();
+  });
+
+  it("does not register an entry when pinning fails, and continues with the rest", async () => {
+    const { backend, store } = make();
+    backend.put("bad", 10);
+    backend.put("good", 20);
+    backend.failPin = true;
+    await store.restore([{ cid: "bad", size: 10, head: [], refs: 1 }]);
+    expect(store.known("bad")).toBeUndefined();
+    backend.failPin = false;
+    await store.restore([{ cid: "good", size: 20, head: [], refs: 1 }]);
+    expect(store.known("good")).toBeDefined();
+  });
+
+  it("notifies onChange after add, retain and release", async () => {
+    const backend = new FakeBackend();
+    let changes = 0;
+    const store = new ContentStore(backend, { maxTotalBytes: 1000, gcDelayMs: 5, onChange: () => changes++ });
+    backend.put("a", 10);
+    await store.add("a", "file");
+    expect(changes).toBe(1);
+    store.retain("a");
+    expect(changes).toBe(2);
+    store.release("a");
+    expect(changes).toBe(3);
+    store.release("a");
+    expect(changes).toBe(4);
+    await store.settle();
   });
 });

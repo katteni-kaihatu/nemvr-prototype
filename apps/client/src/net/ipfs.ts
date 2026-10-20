@@ -16,6 +16,9 @@ import { assembleBlob } from "./blobAssembly";
 import { ServingBlockstore, importFileBacked } from "./fileBackedBlockstore";
 
 const CONNECT_TIMEOUT_MS = 10_000;
+
+/** CRDT の P2P 同期に使う libp2p のプロトコル ID。 */
+export const WORLD_SYNC_PROTOCOL = "/proto/world-sync/1.0.0";
 /** データが届かない状態がこの時間続いたら、取得を打ち切る。合計時間ではなく止まっているかで見る (大きなファイルは時間がかかってよい)。 */
 const IDLE_TIMEOUT_MS = 30_000;
 /** 1 回の取得の合計時間の上限。 */
@@ -154,6 +157,11 @@ async function createNode(
 
 type Node = Awaited<ReturnType<typeof createNode>>;
 
+/** 起動中の Helia ノードの libp2p。 */
+export type Libp2pNode = Node["helia"]["libp2p"];
+/** `dialProtocol` が返す双方向ストリーム。 */
+export type Libp2pStream = Awaited<ReturnType<Libp2pNode["dialProtocol"]>>;
+
 let nodePromise: Promise<Node> | null = null;
 /** アップロード中のファイルを配るブロックストア (ノードを起動したら入る)。 */
 let servingStore: ServingBlockstore | null = null;
@@ -238,19 +246,56 @@ export async function waitForDialable(): Promise<string> {
 
 /** 他のブラウザへ、サーバーの中継を使って WebRTC で直接接続する。失敗してもサーバー経由で動き続ける。 */
 export async function dialPeer(ipfsPeerId: string): Promise<void> {
+  await dialPeerViaRelay(ipfsPeerId, true);
+}
+
+/** 中継経由の接続。同期の再試行では、呼び出し側がまとめてログするので黙って失敗できる。 */
+async function dialPeerViaRelay(ipfsPeerId: string, logFailure: boolean): Promise<void> {
   const { helia } = await requireNode();
   try {
     await helia.libp2p.dial(multiaddr(`${serverAddr}/p2p-circuit/webrtc/p2p/${ipfsPeerId}`), {
       signal: AbortSignal.timeout(PEER_DIAL_TIMEOUT_MS),
     });
   } catch (err) {
-    console.warn(`[ipfs] direct connection to ${ipfsPeerId} failed: ${describeError(err)}`, err);
+    if (logFailure) console.warn(`[ipfs] direct connection to ${ipfsPeerId} failed: ${describeError(err)}`, err);
   }
 }
 
 function requireNode(): Promise<Node> {
   if (!nodePromise) throw new Error("IPFS ノードが起動していません");
   return nodePromise;
+}
+
+/** 起動中の Helia ノードの libp2p を返す。未起動なら明確なエラーにする。 */
+export async function getLibp2p(): Promise<Libp2pNode> {
+  const { helia } = await requireNode();
+  return helia.libp2p;
+}
+
+/** サーバー (Helia) の libp2p ピア ID。まだ IPFS を起動していなければ null。 */
+export function getServerPeerId(): string | null {
+  return serverPeerId.length > 0 ? serverPeerId : null;
+}
+
+/**
+ * CRDT 同期のストリームを開く。既存の WebRTC / circuit relay 接続を使う。
+ * まだ接続が無い場合は、コンテンツ取得と同じ中継経路で 1 回だけ接続を試す
+ * (サーバー / リレーが停止していれば失敗し、呼び出し側が後で再試行する)。
+ */
+export async function dialSyncProtocol(peerId: string, options: { signal?: AbortSignal } = {}): Promise<Libp2pStream> {
+  if (typeof peerId !== "string" || peerId.length === 0) throw new Error("libp2p のピア ID が空です");
+  const libp2p = await getLibp2p();
+  const target = multiaddr(`/p2p/${peerId}`);
+  const dialOptions = { signal: options.signal, runOnLimitedConnection: true };
+  try {
+    return await libp2p.dialProtocol(target, WORLD_SYNC_PROTOCOL, dialOptions);
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    // 接続がまだ無い場合だけ、既存のコンテンツ取得と同じ中継経路を 1 回試す。
+    // 失敗のログは呼び出し側 (再試行間隔で抑える) に任せる
+    await dialPeerViaRelay(peerId, false);
+    return libp2p.dialProtocol(target, WORLD_SYNC_PROTOCOL, dialOptions);
+  }
 }
 
 // ---- アップロードしたファイルを、サーバーが取り終えるまで配る ----
@@ -484,7 +529,7 @@ export function getImageUrl(cid: string): Promise<string> {
 }
 
 // 開発時のみ、ブラウザのコンソールや E2E テストから動作確認できるようにする
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV && typeof window !== "undefined") {
   (window as unknown as { __ipfs: unknown }).__ipfs = {
     addImage: addContent,
     addContent,

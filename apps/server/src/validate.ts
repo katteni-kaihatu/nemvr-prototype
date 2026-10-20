@@ -13,6 +13,7 @@ import {
   type PlaceUrl,
   type Pose,
   type Quat,
+  type SyncPart,
   type Vec3,
 } from "@proto/protocol";
 
@@ -82,6 +83,26 @@ function parseObjectId(v: unknown): string | null {
   return typeof v === "string" && UUID_RE.test(v) ? v : null;
 }
 
+const WORLD_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+const CLAIM_SESSION_RE = /^[A-Za-z0-9:_-]{8,128}$/;
+/** 同期の state vector / update の base64 文字列の上限 (再構成後の上限 16 MiB に対応)。 */
+const MAX_SYNC_FIELD_LENGTH = 16 * 1024 * 1024;
+/** sync_part の 1 片の base64 文字列の上限。 */
+const MAX_SYNC_PART_LENGTH = 1024 * 1024;
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/** 明らかに base64 でない文字列を、デコードする前に早めに弾く。 */
+function parseBase64String(v: unknown, maxLength: number): string | null {
+  return typeof v === "string" && v.length <= maxLength && BASE64_RE.test(v) ? v : null;
+}
+
+/** objectId (クライアント生成 UUID) は任意。ある場合だけ検証して返す。 */
+function parseOptionalObjectId(v: unknown): { objectId?: string } | null {
+  if (v === undefined) return {};
+  const id = parseObjectId(v);
+  return id ? { objectId: id } : null;
+}
+
 /** 位置 (有限・範囲内) と向き (有限) を検証する。置く・動かすメッセージで共通。 */
 function parsePlacement(v: Record<string, unknown>): { position: Vec3; yaw: number; pitch?: number } | null {
   const { position, yaw, pitch } = v;
@@ -109,7 +130,8 @@ export function parsePlaceUrl(v: Record<string, unknown>): PlaceUrl | null {
   const { url } = v;
   if (typeof url !== "string" || url.length === 0 || url.length > MAX_URL_LENGTH) return null;
   if (!/^https?:\/\//i.test(url)) return null;
-  return { url, ...placement };
+  const objectId = parseOptionalObjectId(v.objectId);
+  return objectId ? { url, ...placement, ...objectId } : null;
 }
 
 /** place_box の検証。デモ用のボックス配置・テスト用。 */
@@ -119,7 +141,8 @@ export function parsePlaceBox(v: Record<string, unknown>): PlaceBox | null {
   const { size, color } = v;
   if (typeof size !== "number" || !Number.isFinite(size) || size < MIN_OBJECT_SIZE || size > MAX_OBJECT_SIZE) return null;
   if (typeof color !== "string" || !COLOR_RE.test(color)) return null;
-  return { ...placement, size, color };
+  const objectId = parseOptionalObjectId(v.objectId);
+  return objectId ? { ...placement, size, color, ...objectId } : null;
 }
 
 export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
@@ -128,9 +151,11 @@ export function parsePlaceImage(v: Record<string, unknown>): PlaceImage | null {
   if (!cid || !placement) return null;
   const { width, height } = v;
   if (!isSize(width) || !isSize(height)) return null;
+  const objectId = parseOptionalObjectId(v.objectId);
+  if (!objectId) return null;
   // ファイル名は任意 (ダウンロード時の名前)。あれば整える
   const name = typeof v.name === "string" ? sanitizeFileName(v.name, "") : "";
-  return { cid, ...placement, width, height, ...(name ? { name } : {}) };
+  return { cid, ...placement, width, height, ...(name ? { name } : {}), ...objectId };
 }
 
 /** size と category はサーバーが中身から決めるので、受け取らない。 */
@@ -138,7 +163,8 @@ export function parsePlaceFile(v: Record<string, unknown>): PlaceFile | null {
   const cid = normalizeCid(v.cid);
   const placement = parsePlacement(v);
   if (!cid || !placement) return null;
-  return { cid, name: sanitizeFileName(v.name), ...placement };
+  const objectId = parseOptionalObjectId(v.objectId);
+  return objectId ? { cid, name: sanitizeFileName(v.name), ...placement, ...objectId } : null;
 }
 
 export function sanitizeName(raw: unknown, fallbackSuffix: string): string {
@@ -214,6 +240,42 @@ export function parseClientMessage(text: string): ClientMessage | null {
     case "place_image": {
       const place = parsePlaceImage(msg);
       return place ? { type: "place_image", ...place } : null;
+    }
+    case "sync_hello": {
+      const { worldId, schemaVersion, stateVector } = msg;
+      if (typeof worldId !== "string" || !WORLD_ID_RE.test(worldId)) return null;
+      if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion) || schemaVersion <= 0) return null;
+      const vector = parseBase64String(stateVector, MAX_SYNC_FIELD_LENGTH);
+      return vector === null ? null : { type: "sync_hello", worldId, schemaVersion, stateVector: vector };
+    }
+    case "sync_update": {
+      const update = parseBase64String(msg.update, MAX_SYNC_FIELD_LENGTH);
+      return update === null ? null : { type: "sync_update", update };
+    }
+    case "sync_part": {
+      const { transferId, index, count, data } = msg;
+      if (typeof transferId !== "string" || transferId.length === 0 || transferId.length > 256) return null;
+      if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return null;
+      if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 4096) return null;
+      if (index >= count) return null;
+      const partData = parseBase64String(data, MAX_SYNC_PART_LENGTH);
+      if (partData === null) return null;
+      const part: SyncPart = { transferId, index, count, data: partData };
+      return { type: "sync_part", ...part };
+    }
+    case "claim": {
+      const id = parseObjectId(msg.id);
+      const { sessionId, seq, until } = msg;
+      if (!id || typeof sessionId !== "string" || !CLAIM_SESSION_RE.test(sessionId)) return null;
+      if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0) return null;
+      if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) return null;
+      return { type: "claim", id, sessionId, seq, until };
+    }
+    case "claim_release": {
+      const id = parseObjectId(msg.id);
+      const { sessionId } = msg;
+      if (!id || typeof sessionId !== "string" || !CLAIM_SESSION_RE.test(sessionId)) return null;
+      return { type: "claim_release", id, sessionId };
     }
     default:
       return null;

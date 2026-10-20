@@ -7,6 +7,7 @@ import {
   type IceServer,
   type IpfsInfo,
   TICK_RATE,
+  type CrdtSyncInfo,
   type PeerInfo,
   type PeerState,
   type PlaceBox,
@@ -54,6 +55,8 @@ export class Room {
     private readonly ipfs: IpfsInfo,
     /** 入室するユーザー用の STUN / TURN 設定を作る (TURN 未設定なら undefined)。 */
     private readonly iceServersFor: (userId: string) => IceServer[] | undefined = () => undefined,
+    /** crdt-v1 のときだけ渡す。welcome に同期情報を載せ、objects は空にして文書から読ませる。 */
+    private readonly syncInfo?: CrdtSyncInfo,
   ) {}
 
   private peers = new Map<string, Peer>();
@@ -78,11 +81,13 @@ export class Room {
       type: "welcome",
       self: info,
       peers: others,
-      objects: [...this.objects.values()],
+      // crdt-v1 ではクライアントが Yjs 文書を読む。旧来の objects で全置換させない
+      objects: this.syncInfo ? [] : [...this.objects.values()],
       videos: Object.fromEntries(this.videoStates),
       ipfs: this.ipfs,
       iceServers: this.iceServersFor(id),
       tickRate: TICK_RATE,
+      ...(this.syncInfo ? { sync: this.syncInfo } : {}),
     });
     this.broadcast({ type: "peer_joined", peer: state }, id);
     this.startTimer();

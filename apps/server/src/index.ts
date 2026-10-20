@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -6,6 +8,7 @@ import {
   EAGER_FILE_MAX_BYTES,
   FILE_FLOAT_HEIGHT,
   MAX_MESSAGE_BYTES,
+  MAX_OBJECTS,
   classifyFile,
   formatBytes,
   type FileObject,
@@ -19,9 +22,11 @@ import { ContentRejected, startIpfs } from "./ipfs.js";
 import { mediaType, parseRange } from "./media.js";
 import { PlacementQueue } from "./queue.js";
 import { Room } from "./room.js";
+import { SyncHub, CRDT_MAX_MESSAGE_BYTES } from "./syncHub.js";
 import { iceServersFor, turnConfigFromEnv } from "./turn.js";
 import { parseClientMessage } from "./validate.js";
 import { fetchUrl } from "./urlFetch.js";
+import { WorldStore, writeFileAtomic } from "./worldStore.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const IPFS_PORT = Number(process.env.IPFS_PORT ?? 8081);
@@ -30,6 +35,20 @@ const IPFS_PORT = Number(process.env.IPFS_PORT ?? 8081);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const IPFS_PUBLIC_PORT = Number(process.env.IPFS_PUBLIC_PORT ?? IPFS_PORT);
 const PING_INTERVAL_MS = 30_000;
+// 通常モード (legacy) は従来どおり。crdt-v1 は専用の保存ディレクトリが必須で、
+// 文書・コンテンツ台帳・ブロックストアを CRDT_DATA_DIR の下に隔離する
+const SYNC_MODE = process.env.SYNC_MODE ?? "legacy";
+if (SYNC_MODE !== "legacy" && SYNC_MODE !== "crdt-v1") {
+  console.error(`SYNC_MODE が不正です: ${SYNC_MODE} (legacy または crdt-v1 を指定してください)`);
+  process.exit(1);
+}
+const IS_CRDT = SYNC_MODE === "crdt-v1";
+const CRDT_DATA_DIR = process.env.CRDT_DATA_DIR;
+if (IS_CRDT && (!CRDT_DATA_DIR || CRDT_DATA_DIR.trim().length === 0)) {
+  console.error("SYNC_MODE=crdt-v1 には CRDT_DATA_DIR が必要です (例: CRDT_DATA_DIR=./.crdt-data)");
+  process.exit(1);
+}
+const CRDT_DIR = IS_CRDT ? CRDT_DATA_DIR! : null;
 // 画像・ファイルの取り込み (IPFS から取得) の順番待ち。同じ人の分は 1 件ずつ (同じ接続の転送は先着順に処理されるので、
 // 並列にすると後ろが飢えてタイムアウトする)、全体では同時にこの件数まで
 const MAX_CONCURRENT_VERIFY = 4;
@@ -38,25 +57,181 @@ const QUEUED_HEARTBEAT_MS = 10_000; // 順番待ちの間、本人に状況を�
 // サーバーが保持する画像・ファイルの合計サイズの上限 (MB)。ディスクに置くので、ディスクの空きより十分小さくする。
 // 既定は 20 GiB (2 GiB のファイルを 10 個まで)
 const MAX_TOTAL_MB = Number(process.env.CONTENT_MAX_TOTAL_MB ?? 20 * 1024);
-// 画像・ファイルの中身 (ブロック) を置くディレクトリ。起動のたびに空にする (再起動でワールドの状態が消えるので、残しても参照されない)
-const BLOCKSTORE_DIR = process.env.BLOCKSTORE_DIR ?? join(tmpdir(), "vr-sns-proto-blocks");
+// 画像・ファイルの中身 (ブロック) を置くディレクトリ。legacy では起動のたびに空にする (再起動でワールドの状態が消えるので、
+// 残しても参照されない)。crdt-v1 では CRDT_DATA_DIR/blocks を既定にして、再起動後も保持する
+const BLOCKSTORE_DIR =
+  process.env.BLOCKSTORE_DIR ?? (CRDT_DIR ? join(CRDT_DIR, "blocks") : join(tmpdir(), "vr-sns-proto-blocks"));
+const CONTENT_LEDGER_PATH = CRDT_DIR ? join(CRDT_DIR, "content.json") : null;
 const PROGRESS_INTERVAL_MS = 500; // 取得の進捗を、置いている本人に知らせる間隔
 
-const ipfs = await startIpfs(IPFS_PORT, { host: HOST, publicPort: IPFS_PUBLIC_PORT, blockstoreDir: BLOCKSTORE_DIR });
+// 接続を受け付ける前に、保存済みの文書を読む (壊れていれば空のワールドを作らずにここで失敗する)
+let store: WorldStore | null = null;
+if (CRDT_DIR) {
+  try {
+    store = await WorldStore.open({ dir: CRDT_DIR, log: (message) => console.log(`[world-store] ${message}`) });
+  } catch (err) {
+    console.error(`CRDT の保存データを開けません: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
+
+const ipfs = await startIpfs(IPFS_PORT, {
+  host: HOST,
+  publicPort: IPFS_PUBLIC_PORT,
+  blockstoreDir: BLOCKSTORE_DIR,
+  resetBlockstore: !IS_CRDT,
+});
 // TURN (WebRTC の中継)。TURN_HOST と TURN_SECRET が未設定なら使わない (クライアントは既定の公開 STUN のみ)
 const turn = turnConfigFromEnv(process.env);
-const room = new Room(ipfs.info, (userId) => iceServersFor(turn, userId));
-room.seedDemoBoxes(); // デモ空間のボックス (つかんで動かせる)
-// 置かれた画像・ファイルの中身 (CID) の保持。参照が無くなったら unpin + gc で解放する
+const room = new Room(ipfs.info, (userId) => iceServersFor(turn, userId), store?.syncInfo);
+if (!store) room.seedDemoBoxes(); // legacy: デモ空間のボックス (つかんで動かせる)。crdt では WorldStore が初回だけ seed する
+// 置かれた画像・ファイルの中身 (CID) の保持。参照が無くなったら unpin + gc で解放する (crdt では台帳に保存する)
 const content = new ContentStore(ipfs, {
   maxTotalBytes: MAX_TOTAL_MB * 1024 * 1024,
   log: (message) => console.log(`[content] ${message}`),
+  ...(CONTENT_LEDGER_PATH ? { onChange: () => scheduleContentSave() } : {}),
 });
+
+let contentSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let contentSavePromise: Promise<void> | null = null;
+let contentSaveDirty = false;
+const CONTENT_SAVE_DEBOUNCE_MS = 500;
+
+/** 台帳の保存を debounce する。連続する add / release / retain は 1 回の書き込みにまとめる。 */
+function scheduleContentSave(): void {
+  if (!CONTENT_LEDGER_PATH) return;
+  contentSaveDirty = true;
+  if (contentSaveTimer || contentSavePromise) return;
+  contentSaveTimer = setTimeout(() => {
+    contentSaveTimer = null;
+    void saveContentLedger();
+  }, CONTENT_SAVE_DEBOUNCE_MS);
+}
+
+/** いまの台帳を atomic に保存する。保存中に変わったら、終わってからもう一度書く。 */
+function saveContentLedger(): Promise<void> {
+  if (!CONTENT_LEDGER_PATH) return Promise.resolve();
+  if (contentSavePromise) {
+    contentSaveDirty = true;
+    return contentSavePromise;
+  }
+  contentSavePromise = (async () => {
+    do {
+      contentSaveDirty = false;
+      const data = `${JSON.stringify({ version: 1, entries: content.snapshot() }, null, 2)}\n`;
+      await writeFileAtomic(CONTENT_LEDGER_PATH, data);
+    } while (contentSaveDirty);
+  })()
+    .catch((err: unknown) => {
+      console.warn("[content] 台帳を保存できませんでした:", err instanceof Error ? err.message : err);
+    })
+    .finally(() => {
+      contentSavePromise = null;
+      if (contentSaveDirty) scheduleContentSave();
+    });
+  return contentSavePromise;
+}
+
+/** 終了時に、予約中の台帳保存も含めて確定させる。 */
+async function flushContentLedger(): Promise<void> {
+  if (!CONTENT_LEDGER_PATH) return;
+  if (contentSaveTimer) {
+    clearTimeout(contentSaveTimer);
+    contentSaveTimer = null;
+  }
+  if (contentSavePromise) await contentSavePromise;
+  if (contentSaveDirty || !contentSavePromise) await saveContentLedger();
+}
+
+/** 保存済みのコンテンツ台帳を復元する。壊れていれば黙って空にせず、起動を失敗させる。 */
+async function restoreContentLedger(): Promise<void> {
+  if (!CONTENT_LEDGER_PATH) return;
+  let text: string;
+  try {
+    text = await readFile(CONTENT_LEDGER_PATH, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  let entries: unknown;
+  try {
+    const parsed = JSON.parse(text) as { entries?: unknown };
+    entries = parsed?.entries;
+  } catch {
+    throw new Error(`コンテンツ台帳が壊れています: ${CONTENT_LEDGER_PATH} を JSON として読めません`);
+  }
+  if (!Array.isArray(entries)) {
+    throw new Error(`コンテンツ台帳が壊れています: ${CONTENT_LEDGER_PATH} に entries がありません`);
+  }
+  await content.restore(entries);
+  console.log(`[content] restored ${content.count} item(s) from ${CONTENT_LEDGER_PATH}`);
+}
+
+/**
+ * 起動時の照合。文書が stored と言っていても、台帳 (とブロックストア) に無ければ
+ * 取得待ちに戻す。オブジェクトは削除しない。
+ */
+function reconcileStoredFiles(): void {
+  if (!store) return;
+  for (const object of store.fileObjects()) {
+    if (!object.stored) continue;
+    if (content.known(object.cid)) continue;
+    store.world.setMetadata(object.id, { stored: false, offline: true });
+    console.warn(`[content] ${object.cid} is marked stored but is missing from the ledger; marked offline`);
+  }
+}
+
+if (store) {
+  try {
+    await restoreContentLedger();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  reconcileStoredFiles();
+  // reconcile で文書を書き換えた可能性があるので、台帳と文書の両方を確定させる
+  void store.scheduleSave().catch((err: unknown) => {
+    console.warn("[world-store] 起動時の保存に失敗しました:", err instanceof Error ? err.message : err);
+  });
+  scheduleContentSave();
+}
+
+const hub = store ? new SyncHub(store, { log: (message) => console.log(`[sync] ${message}`) }) : null;
+
+type CrdtInsertResult = "added" | "duplicate" | "conflict" | "full";
+
+/** 再送された配置か (同じ ID で、同じ種類・同じ内容)。 */
+function isSameLogicalObject(a: WorldObject, b: WorldObject): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "image" || a.kind === "file") return "cid" in b && a.cid === b.cid;
+  if (a.kind === "link") return "url" in b && a.url === b.url;
+  return true;
+}
+
+/**
+ * crdt-v1 のオブジェクト追加。クライアント生成 ID の再送は冪等に成功させる。
+ * 削除済みの ID は復活させない (同じ ID での再作成は禁止)。
+ */
+function insertCrdtObject(object: WorldObject): CrdtInsertResult {
+  if (!store) return "conflict";
+  const existing = store.world.getObject(object.id);
+  if (existing) return isSameLogicalObject(existing, object) ? "duplicate" : "conflict";
+  if (store.world.isDeleted(object.id)) return "conflict";
+  if (store.world.count() >= MAX_OBJECTS) return "full";
+  return store.world.createObject(object) ? "added" : "conflict";
+}
+
+function reportCrdtInsert(peerId: string, result: CrdtInsertResult, label: string): void {
+  if (result === "full") room.sendError(peerId, "これ以上オブジェクトを置けません");
+  else if (result === "conflict") room.sendError(peerId, `${label}の objectId が既存のオブジェクトと競合しています`);
+}
+
+
 /**
  * 貼られた URL を取得して置く。画像・動画・音声はサーバーで取得して IPFS に入れ、画像/ファイルとして置く。
  * それ以外 (HTML など) は、本文を読まずに URL のリンクとして置く。
  */
-function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number): void {
+function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number, objectId?: string): void {
   schedule({
     peerKey: peerId,
     notifyQueued: () => {}, // URL の取得は進捗を出さない (クライアントは「取得中」を表示している)
@@ -65,6 +240,20 @@ function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number):
       try {
         const fetched = await fetchUrl(url);
         if (fetched.kind === "link") {
+          if (store) {
+            const result = insertCrdtObject({
+              id: objectId ?? randomUUID(),
+              kind: "link",
+              url: fetched.url,
+              position,
+              yaw,
+            });
+            reportCrdtInsert(peerId, result, "リンク");
+            if (result === "added" || result === "duplicate") {
+              console.log(`[url] ${fetched.url} -> link (${fetched.contentType || "unknown"})`);
+            }
+            return;
+          }
           if (!room.addLink({ url: fetched.url, position, yaw })) {
             room.sendError(peerId, "これ以上オブジェクトを置けません");
             return;
@@ -76,6 +265,23 @@ function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number):
         const cid = await ipfs.addBytes(fetched.bytes);
         await content.add(cid, fetched.kind === "image" ? "image" : "file");
         if (fetched.kind === "image") {
+          if (store) {
+            const result = insertCrdtObject({
+              id: objectId ?? randomUUID(),
+              kind: "image",
+              cid,
+              name: fetched.name,
+              position,
+              yaw,
+              width: fetched.width ?? 1,
+              height: fetched.height ?? 1,
+            });
+            reportCrdtInsert(peerId, result, "画像");
+            if (result === "added" || result === "duplicate") {
+              console.log(`[url] ${fetched.url} -> image ${cid} (${fetched.width}x${fetched.height})`);
+            }
+            return;
+          }
           const added = room.addImage({
             cid,
             name: fetched.name,
@@ -91,6 +297,25 @@ function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number):
           }
           console.log(`[url] ${fetched.url} -> image ${cid} (${fetched.width}x${fetched.height})`);
         } else {
+          if (store) {
+            const result = insertCrdtObject({
+              id: objectId ?? randomUUID(),
+              kind: "file",
+              cid,
+              name: fetched.name,
+              // ファイルのアイコンは、ドロップしたときと同じ高さに浮かせる
+              position: [position[0], FILE_FLOAT_HEIGHT, position[2]],
+              yaw,
+              size: fetched.size,
+              category: fetched.kind,
+              stored: true,
+            });
+            reportCrdtInsert(peerId, result, "ファイル");
+            if (result === "added" || result === "duplicate") {
+              console.log(`[url] ${fetched.url} -> ${fetched.kind} ${cid} (${formatBytes(fetched.size)})`);
+            }
+            return;
+          }
           const added = room.addFile({
             cid,
             name: fetched.name,
@@ -132,7 +357,7 @@ async function handleMedia(req: IncomingMessage, res: ServerResponse): Promise<v
     return;
   }
   const cid = decodeURIComponent(url.pathname.slice("/media/".length));
-  const object = room.findStoredFile(cid);
+  const object = store ? store.findFileByCid(cid) : room.findStoredFile(cid);
   if (!object || object.size <= 0) {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("not found");
     return;
@@ -186,7 +411,11 @@ const httpServer = createServer((req, res) => {
     res.end();
   });
 });
-const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
+const wss = new WebSocketServer({
+  noServer: true,
+  // legacy は従来どおり 4 KiB。crdt-v1 は 1 MiB まで受け付け、大きな更新は sync_part に分ける
+  maxPayload: store ? CRDT_MAX_MESSAGE_BYTES : MAX_MESSAGE_BYTES,
+});
 httpServer.on("upgrade", (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
@@ -243,6 +472,10 @@ function reportPlaceError(peerId: string, label: string, kind: string, err: unkn
 
 /** 画像: 中身を取得・検証して pin し、通ったらワールドに置く。画像は全員が表示するので、すぐに取得する。 */
 function placeImage(peerId: string, place: PlaceImage): void {
+  if (store) {
+    placeImageCrdt(peerId, place);
+    return;
+  }
   if (room.isFull) {
     room.sendError(peerId, "これ以上オブジェクトを置けません");
     return;
@@ -270,6 +503,58 @@ function placeImage(peerId: string, place: PlaceImage): void {
   });
 }
 
+/** crdt-v1 の画像配置。objectId があれば再送を冪等に扱い、削除済み ID は復活させない。 */
+function placeImageCrdt(peerId: string, place: PlaceImage): void {
+  if (!store) return;
+  const id = place.objectId ?? randomUUID();
+  const existing = store.world.getObject(id);
+  if (existing) {
+    if (!isSameLogicalObject(existing, { id, kind: "image", cid: place.cid, position: place.position, yaw: place.yaw, width: place.width, height: place.height })) {
+      reportCrdtInsert(peerId, "conflict", "画像");
+    }
+    return;
+  }
+  if (store.world.isDeleted(id)) {
+    reportCrdtInsert(peerId, "conflict", "画像");
+    return;
+  }
+  if (store.world.count() >= MAX_OBJECTS) {
+    reportCrdtInsert(peerId, "full", "画像");
+    return;
+  }
+  const { cid } = place;
+  schedule({
+    peerKey: peerId,
+    notifyQueued: () => room.sendPlaceProgress(peerId, cid, 0, undefined, true),
+    onFull: () => room.sendError(peerId, "順番待ちの画像が多すぎます。いくつか終わってからやり直してください"),
+    run: async () => {
+      try {
+        const fetched = await content.add(cid, "image", {
+          onProgress: throttled((loaded, declared) => room.sendPlaceProgress(peerId, cid, loaded, declared)),
+        });
+        const object: WorldObject = {
+          id,
+          kind: "image",
+          cid,
+          position: place.position,
+          yaw: place.yaw,
+          width: place.width,
+          height: place.height,
+          ...(place.name ? { name: place.name } : {}),
+        };
+        const result = insertCrdtObject(object);
+        reportCrdtInsert(peerId, result, "画像");
+        if (result === "added" || result === "duplicate") {
+          console.log(`[place_image] ${cid} (${formatBytes(fetched.size)}) by ${peerId}${result === "duplicate" ? " (already placed)" : ""}`);
+        }
+        // crdt-v1 では、配置に失敗しても検証済みの内容を unpin しない (明示的リセットまで保持)
+      } catch (err) {
+        reportPlaceError(peerId, "画像", "image", err);
+      }
+    },
+  });
+}
+
 /**
  * ファイル: 置いた時点で、サーバーが取得して保持する (置いた人が、いつ退室するか分からないため)。
  * 小さければ (EAGER_FILE_MAX_BYTES 以下)、全部取得してから置く。
@@ -278,6 +563,10 @@ function placeImage(peerId: string, place: PlaceImage): void {
  * ダウンロードする人は、先に直接取得を試し、だめなら `request_file` でこの取得の完了を待つ。
  */
 function placeFile(peerId: string, place: PlaceFile): void {
+  if (store) {
+    placeFileCrdt(peerId, place);
+    return;
+  }
   if (room.isFull) {
     room.sendError(peerId, "これ以上オブジェクトを置けません");
     return;
@@ -312,6 +601,85 @@ function placeFile(peerId: string, place: PlaceFile): void {
           content.release(cid);
           room.sendError(peerId, "これ以上オブジェクトを置けません");
         }
+      } catch (err) {
+        reportPlaceError(peerId, "ファイル", "file", err);
+      }
+    },
+  });
+}
+
+/** crdt-v1 のファイル配置。小さいものは取得してから、大きいものは先に置いて背景で取得する。 */
+function placeFileCrdt(peerId: string, place: PlaceFile): void {
+  if (!store) return;
+  const id = place.objectId ?? randomUUID();
+  const existing = store.world.getObject(id);
+  if (existing) {
+    if (!isSameLogicalObject(existing, { id, kind: "file", cid: place.cid, name: place.name, position: place.position, yaw: place.yaw, size: 0, stored: false, category: "file" })) {
+      reportCrdtInsert(peerId, "conflict", "ファイル");
+    }
+    return;
+  }
+  if (store.world.isDeleted(id)) {
+    reportCrdtInsert(peerId, "conflict", "ファイル");
+    return;
+  }
+  if (store.world.count() >= MAX_OBJECTS) {
+    reportCrdtInsert(peerId, "full", "ファイル");
+    return;
+  }
+  const { cid } = place;
+  schedule({
+    peerKey: peerId,
+    notifyQueued: () => room.sendPlaceProgress(peerId, cid, 0, undefined, true),
+    onFull: () => room.sendError(peerId, "順番待ちのファイルが多すぎます。いくつか終わってからやり直してください"),
+    run: async () => {
+      try {
+        // 既にサーバーが保持している内容は、取得せずに、そのまま保持済みとして置く
+        const probe = await content.probe(cid, "file");
+        const category = classifyFile(place.name, probe.head);
+        if (probe.size > EAGER_FILE_MAX_BYTES && !content.known(cid)) {
+          const object: WorldObject = {
+            id,
+            kind: "file",
+            cid,
+            name: place.name,
+            position: place.position,
+            yaw: place.yaw,
+            size: probe.size,
+            category,
+            stored: false,
+            owner: peerId,
+          };
+          const result = insertCrdtObject(object);
+          reportCrdtInsert(peerId, result, "ファイル");
+          if (result === "added" || result === "duplicate") {
+            console.log(`[place_file] ${cid} (${formatBytes(probe.size)}, placed; fetching in the background) by ${peerId}`);
+            const placed = store!.world.getObject(id);
+            if (placed?.kind === "file" && !placed.stored) stageFileCrdt(null, placed);
+          }
+          return;
+        }
+        const fetched = await content.add(cid, "file", {
+          onProgress: throttled((loaded, declared) => room.sendPlaceProgress(peerId, cid, loaded, declared)),
+        });
+        // 種類 (アイコン) とサイズは、クライアントの申告ではなく、取得した中身から決める
+        const object: WorldObject = {
+          id,
+          kind: "file",
+          cid,
+          name: place.name,
+          position: place.position,
+          yaw: place.yaw,
+          size: fetched.size,
+          category: classifyFile(place.name, fetched.head),
+          stored: true,
+        };
+        const result = insertCrdtObject(object);
+        reportCrdtInsert(peerId, result, "ファイル");
+        if (result === "added" || result === "duplicate") {
+          console.log(`[place_file] ${cid} (${formatBytes(fetched.size)}) by ${peerId}${result === "duplicate" ? " (already placed)" : ""}`);
+        }
+        // crdt-v1 では、配置に失敗しても検証済みの内容を unpin しない
       } catch (err) {
         reportPlaceError(peerId, "ファイル", "file", err);
       }
@@ -394,6 +762,75 @@ function describeSenders(senders: Map<string, number>, ownerId: string): string 
     .join(", ");
 }
 
+/** crdt-v1 で、まだ保持していないファイルを取得している最中の内容 (CID ごとに共有する)。 */
+const crdtStaging = new Map<string, Set<string>>();
+
+/**
+ * crdt-v1 の背景取得。置いた人 (owner) から取得して pin し、文書の stored / size / category を更新する。
+ * 失敗してもオブジェクトは削除せず、offline にして所有者に知らせる。同じ CID の取得は 1 回だけ。
+ */
+function stageFileCrdt(requesterId: string | null, object: FileObject): void {
+  if (!store) return;
+  const { cid } = object;
+  if (object.stored) return;
+  if (object.offline || !object.owner) {
+    if (requesterId) room.sendPrepareFailed(requesterId, cid, "アップロードした人が退室しているため、取得できません");
+    return;
+  }
+  const waiting = crdtStaging.get(cid);
+  if (waiting) {
+    if (requesterId) waiting.add(requesterId);
+    return;
+  }
+  const owner = object.owner;
+  const waiters = new Set<string>(requesterId ? [requesterId] : []);
+  crdtStaging.set(cid, waiters);
+  const current = () => store!.fileObjects().filter((file) => file.cid === cid && !file.stored);
+  const failAll = (message: string) => {
+    for (const file of current()) {
+      store!.world.setMetadata(file.id, { offline: true, owner: undefined });
+    }
+    for (const id of waiters) room.sendPrepareFailed(id, cid, message);
+    room.sendError(owner, `${object.name}: ${message}`);
+    crdtStaging.delete(cid);
+  };
+  const progressTo = (loaded: number, total?: number, queued?: boolean) => {
+    room.sendPlaceProgress(owner, cid, loaded, total, queued);
+    for (const id of waiters) if (id !== owner) room.sendPrepareProgress(id, cid, loaded, total, queued);
+  };
+
+  schedule({
+    peerKey: owner,
+    notifyQueued: () => progressTo(0, undefined, true),
+    onFull: () => failAll("順番待ちが多すぎます。しばらくしてからやり直してください"),
+    onCancel: () => failAll("アップロードした人が退室したため、取得できません"),
+    run: async () => {
+      try {
+        const fetched = await content.add(cid, "file", {
+          onProgress: throttled((loaded, declared) => progressTo(loaded, declared)),
+        });
+        let updated = 0;
+        for (const file of current()) {
+          store!.world.setMetadata(file.id, {
+            stored: true,
+            size: fetched.size,
+            category: classifyFile(file.name, fetched.head),
+            owner: undefined,
+            offline: false,
+          });
+          updated++;
+        }
+        console.log(`[stage_file] ${cid} (${formatBytes(fetched.size)}) now stored in crdt mode; ${updated} object(s)`);
+      } catch (err) {
+        console.warn(`[stage_file] failed for ${cid}:`, err instanceof Error ? err.message : err);
+        failAll(err instanceof ContentRejected ? err.message : "取得できませんでした");
+      } finally {
+        crdtStaging.delete(cid);
+      }
+    },
+  });
+}
+
 /** サーバーが中身を保持しているオブジェクトか (保持していれば、削除・複製で参照を数える)。 */
 const holdsContent = (object: WorldObject): boolean => object.kind === "image" || (object.kind === "file" && object.stored);
 
@@ -450,12 +887,19 @@ wss.on("connection", (ws) => {
 
   ws.on("message", (data, isBinary) => {
     if (isBinary) return;
-    const msg = parseClientMessage(data.toString());
-    if (!msg) return; // 不正なメッセージは無視
+    const text = data.toString();
+    const msg = parseClientMessage(text);
+    if (!msg) {
+      // crdt の同期メッセージが不正なら、黙って捨てずに診断できるエラーを返す
+      hub?.reportMalformed(ws, text);
+      return;
+    }
+    if (hub?.handleMessage(ws, msg)) return;
 
     if (msg.type === "join") {
       if (peerId) return; // 二重 join は無視
       peerId = room.join(ws, msg.name).id;
+      hub?.attach(ws, peerId);
       console.log(`[join] ${peerId} (room size: ${room.size})`);
     } else if (msg.type === "pose") {
       if (!peerId) return; // join 前は無視
@@ -471,35 +915,80 @@ wss.on("connection", (ws) => {
         .then(() => setAvatar(id, cid))
         .catch((err: unknown) => console.warn("[avatar] unexpected error:", err instanceof Error ? err.message : err));
     } else if (msg.type === "video_control") {
-      if (peerId) room.setVideoState(msg.id, msg.playing, msg.time);
+      if (!peerId) return;
+      if (hub) hub.rejectVideo(ws); // crdt-v1 では動画同期は未対応
+      else room.setVideoState(msg.id, msg.playing, msg.time);
     } else if (msg.type === "grab_object") {
-      if (peerId) room.grabObject(peerId, msg.id);
+      if (!peerId) return;
+      if (hub) {
+        hub.requireReady(ws); // hello 前は sync_error。その後はクライアントが文書を直接更新するので無視
+      } else {
+        room.grabObject(peerId, msg.id);
+      }
     } else if (msg.type === "move_object") {
-      if (peerId) room.moveObject(peerId, msg.id, msg.position, msg.yaw, msg.pitch);
+      if (!peerId) return;
+      if (hub) {
+        hub.requireReady(ws);
+      } else {
+        room.moveObject(peerId, msg.id, msg.position, msg.yaw, msg.pitch);
+      }
     } else if (msg.type === "release_object") {
-      if (peerId) room.releaseObject(peerId, msg.id);
+      if (!peerId) return;
+      if (hub) {
+        hub.requireReady(ws);
+      } else {
+        room.releaseObject(peerId, msg.id);
+      }
     } else if (msg.type === "delete_object") {
       if (!peerId) return;
-      const removed = room.deleteObject(peerId, msg.id);
-      if (removed && holdsContent(removed) && (removed.kind === "image" || removed.kind === "file")) content.release(removed.cid); // 最後の参照なら、unpin してディスクを空ける
+      if (hub) {
+        hub.requireReady(ws); // crdt では削除は監視された文書更新で行う。コンテンツも解放しない
+      } else {
+        const removed = room.deleteObject(peerId, msg.id);
+        if (removed && holdsContent(removed) && (removed.kind === "image" || removed.kind === "file")) content.release(removed.cid); // 最後の参照なら、unpin してディスクを空ける
+      }
     } else if (msg.type === "duplicate_object") {
       if (!peerId) return;
-      const copy = room.duplicateObject(peerId, msg.id);
-      if (copy && holdsContent(copy) && (copy.kind === "image" || copy.kind === "file")) content.retain(copy.cid); // 複製は同じ中身を指す
-      if (copy) console.log(`[duplicate] ${msg.id} (${copy.kind}) by ${peerId}`);
+      if (hub) {
+        hub.requireReady(ws); // crdt ではクライアントが新しい ID で複製する。参照は増やさない (pin したまま)
+      } else {
+        const copy = room.duplicateObject(peerId, msg.id);
+        if (copy && holdsContent(copy) && (copy.kind === "image" || copy.kind === "file")) content.retain(copy.cid); // 複製は同じ中身を指す
+        if (copy) console.log(`[duplicate] ${msg.id} (${copy.kind}) by ${peerId}`);
+      }
     } else if (msg.type === "place_image") {
       if (!peerId) return;
       const { type: _type, ...place } = msg;
       placeImage(peerId, place);
     } else if (msg.type === "place_url") {
-      if (peerId) placeFromUrl(peerId, msg.url, msg.position, msg.yaw);
+      if (peerId) placeFromUrl(peerId, msg.url, msg.position, msg.yaw, msg.objectId);
     } else if (msg.type === "place_box") {
       if (!peerId) return;
-      const { type: _boxtype, ...box } = msg;
-      if (room.isFull) {
-        room.sendError(peerId, "これ以上オブジェクトを置けません");
-      } else if (!room.addBox(box)) {
-        room.sendError(peerId, "これ以上オブジェクトを置けません");
+      if (store && hub) {
+        if (!hub.requireReady(ws)) return;
+        if (store.world.count() >= MAX_OBJECTS) {
+          room.sendError(peerId, "これ以上オブジェクトを置けません");
+          return;
+        }
+        const object: WorldObject = {
+          id: msg.objectId ?? randomUUID(),
+          kind: "box",
+          position: msg.position,
+          yaw: msg.yaw,
+          ...(msg.pitch === undefined ? {} : { pitch: msg.pitch }),
+          size: msg.size,
+          color: msg.color,
+        };
+        if (insertCrdtObject(object) === "conflict") {
+          room.sendError(peerId, "box の objectId が既存のオブジェクトと競合しています");
+        }
+      } else {
+        const { type: _boxtype, ...box } = msg;
+        if (room.isFull) {
+          room.sendError(peerId, "これ以上オブジェクトを置けません");
+        } else if (!room.addBox(box)) {
+          room.sendError(peerId, "これ以上オブジェクトを置けません");
+        }
       }
     } else if (msg.type === "place_file") {
       if (!peerId) return;
@@ -507,8 +996,13 @@ wss.on("connection", (ws) => {
       placeFile(peerId, place);
     } else if (msg.type === "request_file") {
       if (!peerId) return;
-      const object = room.getObject(msg.id);
-      if (object?.kind === "file") stageFile(peerId, object);
+      if (store) {
+        const object = store.world.getObject(msg.id);
+        if (object?.kind === "file") stageFileCrdt(peerId, object);
+      } else {
+        const object = room.getObject(msg.id);
+        if (object?.kind === "file") stageFile(peerId, object);
+      }
     }
   });
 
@@ -517,6 +1011,15 @@ wss.on("connection", (ws) => {
     if (!peerId) return;
     room.leave(peerId);
     placements.cancelPending(peerId); // 順番待ちのものは、取りに行かない (取得できない)
+    if (store) {
+      hub?.detach(ws);
+      // 配っていたファイルは取得できなくなる。オブジェクトは削除せず、offline にする (文書更新として配る)
+      for (const object of store.fileObjects()) {
+        if (!object.stored && object.owner === peerId) {
+          store.world.setMetadata(object.id, { offline: true, owner: undefined });
+        }
+      }
+    }
     for (const [id, cid] of avatarCids) releaseAvatar(id, cid);
     avatarCids.clear();
     console.log(`[leave] ${peerId} (room size: ${room.size})`);
@@ -541,18 +1044,35 @@ const pingTimer = setInterval(() => {
 }, PING_INTERVAL_MS);
 
 httpServer.on("listening", () => {
+  console.log(`Mode: ${SYNC_MODE}${store ? ` (worldId ${store.worldId}, data ${CRDT_DIR})` : ""}`);
   console.log(turn ? `TURN: ${turn.host}:${turn.port} (credentials valid ${turn.ttlSeconds}s)` : "TURN: disabled");
   console.log(`WebSocket server listening on ${HOST}:${PORT}`);
   console.log(`IPFS (libp2p ws) listening on ${HOST}:${IPFS_PORT} (public port ${IPFS_PUBLIC_PORT}) as ${ipfs.info.peerId}`);
   console.log(`Content: ${BLOCKSTORE_DIR} (limit ${MAX_TOTAL_MB} MB in total)`);
 });
 
-function shutdown(): void {
+let shuttingDown = false;
+
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   clearInterval(pingTimer);
+  hub?.close();
   room.close();
   wss.close();
   httpServer.close();
-  void ipfs.stop().finally(() => process.exit(0));
+  try {
+    if (store) {
+      await store.flush();
+      await flushContentLedger();
+      store.close();
+    }
+  } catch (err) {
+    console.warn("[shutdown] 保存に失敗しました:", err instanceof Error ? err.message : err);
+  } finally {
+    await ipfs.stop();
+    process.exit(0);
+  }
 }
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

@@ -140,9 +140,11 @@ describe("demo boxes", () => {
     room.seedDemoBoxes();
     const a = new FakeSocket();
     const aId = room.join(a as unknown as WebSocket, "alice").id;
-    const objects = a.of("welcome")[0]!.objects;
+    const welcome = a.of("welcome")[0]!;
+    const objects = welcome.objects;
     expect(objects.length).toBe(5);
     expect(objects.every((o) => o.kind === "box")).toBe(true);
+    expect(welcome).not.toHaveProperty("sync");
     const box = objects[0]!;
     a.clear();
     room.grabObject(aId, box.id);
@@ -578,5 +580,20 @@ describe("links", () => {
 
     room.deleteObject(aId, added.id);
     expect(a.of("object_removed").some((m) => m.id === added.id)).toBe(true);
+  });
+});
+
+describe("crdt welcome", () => {
+  it("includes sync info and sends no legacy objects so the client loads the document", () => {
+    const sync = { mode: "crdt-v1" as const, worldId: "12345678-abcd", schemaVersion: 1 };
+    const room = new Room({ peerId: "p", wsPort: 1 }, undefined, sync);
+    room.addBox({ position: [1, 0, 2], yaw: 0, size: 1, color: "#aabbcc" });
+    const a = new FakeSocket();
+    room.join(a as unknown as WebSocket, "alice");
+
+    const welcome = a.of("welcome")[0]!;
+    expect(welcome.sync).toEqual(sync);
+    expect(welcome.objects).toEqual([]);
+    expect(welcome.tickRate).toBeGreaterThan(0);
   });
 });

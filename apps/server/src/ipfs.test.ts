@@ -259,6 +259,23 @@ describe("blockstore directory", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("keeps existing blocks when resetBlockstore is false (crdt-v1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "proto-blocks-keep-"));
+    try {
+      await mkdir(join(dir, "AA"), { recursive: true });
+      await writeFile(join(dir, "AA", "kept.data"), "kept from a previous run");
+
+      const node = await startIpfs(18_084, { blockstoreDir: dir, resetBlockstore: false });
+      try {
+        expect(await readdir(join(dir, "AA"))).toContain("kept.data");
+      } finally {
+        await node.stop();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe("circuit relay reservations", () => {

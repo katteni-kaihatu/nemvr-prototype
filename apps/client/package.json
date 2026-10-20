@@ -23,6 +23,7 @@
     "@multiformats/multiaddr": "^13.0.3",
     "@pixiv/three-vrm": "^3.5.5",
     "@proto/protocol": "workspace:*",
+    "@proto/world-sync": "workspace:*",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
     "blockstore-core": "^7.0.1",
