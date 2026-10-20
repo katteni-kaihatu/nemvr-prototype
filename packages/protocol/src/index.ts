@@ -7,6 +7,8 @@ export * from "./files.js";
 export const TICK_RATE = 20; // Hz
 export const MAX_NAME_LENGTH = 24;
 export const MAX_MESSAGE_BYTES = 4096;
+/** 貼り付けを受け付ける URL の長さの上限。 */
+export const MAX_URL_LENGTH = 2048;
 export const MAX_ABS_POSITION = 1000;
 
 // 画像オブジェクト (画像本体は IPFS で共有し、ワールドには CID だけを載せる)
@@ -124,7 +126,16 @@ export interface BoxObject extends ObjectBase {
   color: string;
 }
 
-export type WorldObject = ImageObject | FileObject | BoxObject;
+/**
+ * 3D 空間に置かれたリンク (URL)。中身 (ファイル) は持たない。
+ * 画像・動画・音声ではない URL (HTML など) を貼ったときに作る。リングメニューからブラウザの別タブで開く。
+ */
+export interface LinkObject extends ObjectBase {
+  kind: "link";
+  url: string;
+}
+
+export type WorldObject = ImageObject | FileObject | BoxObject | LinkObject;
 
 /** サーバーの IPFS (libp2p) ノードへの接続情報。ホスト名はクライアントがページの接続先から補う。 */
 export interface IpfsInfo {
@@ -151,6 +162,9 @@ export type PlaceImage = Pick<ImageObject, "cid" | "position" | "yaw" | "width" 
  */
 export type PlaceFile = Pick<FileObject, "cid" | "name" | "position" | "yaw">;
 
+/** place_url: 貼られた http(s) の URL。位置・向きは、ファイルを置いたときと同じ。 */
+export type PlaceUrl = Pick<LinkObject, "url" | "position" | "yaw">;
+
 /** place_box の本体部分 (id はサーバーが採番する)。デモ用のボックス配置・テスト用。 */
 export type PlaceBox = Pick<BoxObject, "position" | "yaw" | "size" | "color"> & { pitch?: number };
 
@@ -161,6 +175,8 @@ export type ClientMessage =
   | ({ type: "place_image" } & PlaceImage)
   | ({ type: "place_file" } & PlaceFile)
   | ({ type: "place_box" } & PlaceBox)
+  // URL を貼った。画像・動画・音声ならサーバーが取得して IPFS に置き、それ以外はリンクとして置く
+  | ({ type: "place_url" } & PlaceUrl)
   // まだサーバーが保持していないファイル (取得中の大きなファイル) の、取得の完了を待つ。ダウンロードで、直接の取得がだめだったときの切り替え先
   | { type: "request_file"; id: string }
   // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)

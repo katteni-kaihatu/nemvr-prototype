@@ -7,10 +7,11 @@ import {
   FILE_ICON_WIDTH,
   MAX_FILE_BYTES,
   MAX_IMAGE_BYTES,
+  MAX_URL_LENGTH,
   MIN_OBJECT_SIZE,
   formatBytes,
 } from "@proto/protocol";
-import { expectUpload, sendPlaceFile, sendPlaceImage, showNotice } from "../net/connection";
+import { expectUpload, sendPlaceFile, sendPlaceImage, sendPlaceUrl, showNotice } from "../net/connection";
 import { addContent } from "../net/ipfs";
 
 const IMAGE_LONG_EDGE = 2.5; // 置く画像の長辺 (m)
@@ -187,6 +188,27 @@ export function DropTarget() {
       canvas.removeEventListener("dragover", onDragOver);
       canvas.removeEventListener("drop", onDrop);
     };
+  }, [camera, canvas]);
+
+  // Ctrl+V で http(s) の URL を貼ると、その URL を取得して置く (サーバーが取得するので CORS の影響を受けない)
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text/plain")?.trim() ?? "";
+      if (!/^https?:\/\//i.test(text)) return; // URL 以外の貼り付けは、そのまま
+      if (text.length > MAX_URL_LENGTH) {
+        e.preventDefault();
+        showNotice(`URL が長すぎます (${MAX_URL_LENGTH} 文字まで)`);
+        return;
+      }
+      e.preventDefault();
+      const point = resolveDropPoint(camera, canvas, canvas.clientWidth / 2, canvas.clientHeight / 2);
+      const from = camera.position;
+      const yaw = Math.atan2(from.x - point.x, from.z - point.z);
+      sendPlaceUrl(text, [point.x, 0, point.z], yaw);
+      showNotice(`URL を取得中... ${text.length > 70 ? `${text.slice(0, 70)}...` : text}`, 60000);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
   }, [camera, canvas]);
 
   return null;

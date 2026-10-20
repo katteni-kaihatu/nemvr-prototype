@@ -68,6 +68,8 @@ export interface IpfsNode {
   gc(): Promise<void>;
   /** このノードがそのブロックを持っているか。 */
   has(cid: string): Promise<boolean>;
+  /** バイト列を IPFS に追加して、CID を返す (URL から取得した画像・動画・音声を置くため)。 */
+  addBytes(bytes: Uint8Array): Promise<string>;
   /** 中身を、指定した範囲 (offset から length バイト) だけ流す (動画のストリーミング配信)。 */
   cat(cid: string, options?: { offset?: number; length?: number; signal?: AbortSignal }): AsyncIterable<Uint8Array>;
   stop(): Promise<void>;
@@ -281,6 +283,7 @@ export async function startIpfs(
     unpin,
     gc: () => helia.gc(),
     has: async (cid) => helia.blockstore.has(CID.parse(cid)),
+    addBytes: async (bytes) => (await fs.addBytes(bytes)).toString(),
     cat: (cidString, options = {}) => fs.cat(CID.parse(cidString), options),
     stop: async () => {
       await helia.stop();

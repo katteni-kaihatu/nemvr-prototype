@@ -170,6 +170,11 @@ export function sendPlaceFile(place: PlaceFile): void {
   send({ type: "place_file", ...place });
 }
 
+/** 貼られた URL を置く (サーバーが取得して、画像・ファイル・リンクのいずれかにする)。 */
+export function sendPlaceUrl(url: string, position: [number, number, number], yaw: number): void {
+  send({ type: "place_url", url, position, yaw });
+}
+
 export const sendGrabObject = (id: string): void => send({ type: "grab_object", id });
 export const sendReleaseObject = (id: string): void => send({ type: "release_object", id });
 export const sendDeleteObject = (id: string): void => send({ type: "delete_object", id });
@@ -329,7 +334,7 @@ export function connect(name: string, avatarFile?: File): void {
       case "object_added": {
         const { object } = msg;
         useNet.setState((s) => ({ objects: { ...s.objects, [object.id]: object } }));
-        if (object.kind === "box") break; // ボックスは中身 (IPFS) を持たない
+        if (object.kind === "box" || object.kind === "link") break; // ボックス・リンクは中身 (IPFS) を持たない
         const name = pendingUploads.get(object.cid);
         pendingUploads.delete(object.cid);
         if (object.kind === "file" && !object.stored && object.owner === useNet.getState().self?.id) {

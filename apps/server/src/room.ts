@@ -12,6 +12,7 @@ import {
   type PlaceBox,
   type PlaceFile,
   type PlaceImage,
+  type PlaceUrl,
   type Pose,
   type Vec3,
   type ServerMessage,
@@ -29,7 +30,7 @@ const COLORS = [
  * 複製したときの、元からのずらし量 (m)。横にずらし、同一平面での重なり (描画のちらつき) を避けるため法線方向にも少しずらす。
  * 画像は大きいので少しだけ (重なってよい)、ファイルのアイコンは重ならない距離だけずらす。
  */
-const DUPLICATE_SIDE_OFFSET = { image: 0.6, file: FILE_ICON_WIDTH + 0.15 } as const;
+const DUPLICATE_SIDE_OFFSET = { image: 0.6, file: FILE_ICON_WIDTH + 0.15, link: 0.6 } as const;
 const DUPLICATE_NORMAL_OFFSET = 0.05;
 
 const INITIAL_POSE: Pose = { position: [0, 0, 0], head: [0, 0, 0, 1] };
@@ -121,6 +122,15 @@ export class Room {
     const state: VideoPlaybackState = { playing, time: Math.max(0, Math.min(24 * 60 * 60, time)), at: Date.now() };
     this.videoStates.set(id, state);
     this.broadcast({ type: "video_state", id, ...state });
+  }
+
+  /** URL のリンク (画像・動画・音声ではない) を追加して全員に通知する。上限に達していたら false。 */
+  addLink(place: PlaceUrl): boolean {
+    if (this.objects.size >= MAX_OBJECTS) return false;
+    const object: WorldObject = { id: randomUUID(), kind: "link", ...place };
+    this.objects.set(object.id, object);
+    this.broadcast({ type: "object_added", object });
+    return true;
   }
 
   /** 画像オブジェクトを追加して全員に通知する。上限に達していたら false。 */

@@ -9,6 +9,7 @@ import { DropTarget } from "./DropTarget";
 import { FilePlane } from "./FilePlane";
 import { ImagePlane } from "./ImagePlane";
 import { LocalAvatar } from "./LocalAvatar";
+import { LinkPlane } from "./LinkPlane";
 import { LocalPlayer } from "./LocalPlayer";
 import { Mirror } from "./Mirror";
 import { ObjectInteraction } from "./ObjectInteraction";
@@ -75,6 +76,8 @@ export function World() {
             <FilePlane key={o.id} object={o} />
           ) : o.kind === "box" ? (
             <BoxPlane key={o.id} object={o} />
+          ) : o.kind === "link" ? (
+            <LinkPlane key={o.id} object={o} />
           ) : (
             <ImagePlane key={o.id} object={o} />
           ),
@@ -132,7 +135,7 @@ function HUD({
         {self?.name} / 接続中: {count} 人 / IPFS: {ipfsLabel}
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Shift (押している間) で走る / Space でジャンプ / C・Ctrl (押している間) でしゃがみ / Q・E (押している間) でリーン / Esc で解除</div>
-      <div style={{ opacity: 0.7 }}>ファイルや画像をドロップして配置 (視点操作中は Esc で解除してから)</div>
+      <div style={{ opacity: 0.7 }}>ファイルや画像をドロップ、または Ctrl+V で URL を貼って配置 (視点操作中は Esc で解除してから)</div>
       <div style={{ opacity: 0.7 }}>M で鏡の反射を ON/OFF (このクライアントだけ)</div>
       <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ (つかんだままマウスを上下: 持ち上げ、ホイール: 遠く・近く、E: 移動 / 回転モード) / 中ボタンでメニュー (削除・複製・ダウンロード・動画はその場で再生)</div>
       {grabbedId && (

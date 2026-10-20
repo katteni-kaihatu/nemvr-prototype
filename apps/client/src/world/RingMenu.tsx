@@ -24,9 +24,17 @@ const ITEMS: MenuItem[] = [
     run: (o) => (isPlaying(o.id) ? pauseVideo(o.id) : playVideo(o.id)),
     applies: (o) => o.kind === "file" && o.category === "video",
   },
+  {
+    id: "open",
+    label: "ブラウザで開く",
+    run: (o) => {
+      if (o.kind === "link") window.open(o.url, "_blank", "noopener,noreferrer");
+    },
+    applies: (o) => o.kind === "link",
+  },
   { id: "delete", label: "削除", run: (o) => sendDeleteObject(o.id) },
   { id: "duplicate", label: "複製", run: (o) => sendDuplicateObject(o.id) },
-  { id: "download", label: "ダウンロード", run: (o) => void downloadObject(o), applies: (o) => o.kind !== "box" },
+  { id: "download", label: "ダウンロード", run: (o) => void downloadObject(o), applies: (o) => o.kind !== "box" && o.kind !== "link" },
 ];
 
 const RING_RADIUS = 108; // 中心からボタンの中心までの距離 (px)
@@ -61,6 +69,15 @@ function describe(object: WorldObject): { title: string; detail: string } {
     return { title: object.name, detail: `${formatBytes(object.size)}${state}` };
   }
   if (object.kind === "box") return { title: "ボックス", detail: `${object.size} m` };
+  if (object.kind === "link") {
+    let host = object.url;
+    try {
+      host = new URL(object.url).host;
+    } catch {
+      // URL のまま
+    }
+    return { title: "リンク", detail: host };
+  }
   return { title: object.name ?? "画像", detail: "" };
 }
 

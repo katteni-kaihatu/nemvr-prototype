@@ -553,3 +553,30 @@ describe("video playback state", () => {
     expect(d.of("welcome")[0]!.videos[id]).toBeUndefined();
   });
 });
+
+describe("links", () => {
+  it("adds a link, broadcasts it, duplicates it with the URL, and includes it in welcome", () => {
+    const room = new Room({ peerId: "p", wsPort: 1 });
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    const aId = room.join(a as unknown as WebSocket, "alice").id;
+    room.join(b as unknown as WebSocket, "bob");
+    a.clear();
+    b.clear();
+
+    expect(room.addLink({ url: "https://example.com/x", position: [1, 0, 2], yaw: 0.5 })).toBe(true);
+    const added = a.of("object_added").at(-1)!.object;
+    expect(added).toMatchObject({ kind: "link", url: "https://example.com/x", position: [1, 0, 2], yaw: 0.5 });
+    expect(b.of("object_added").at(-1)!.object).toMatchObject({ kind: "link", url: "https://example.com/x" });
+
+    const copy = room.duplicateObject(aId, added.id)!;
+    expect(copy).toMatchObject({ kind: "link", url: "https://example.com/x" });
+
+    const c = new FakeSocket();
+    room.join(c as unknown as WebSocket, "carol");
+    expect(c.of("welcome")[0]!.objects.some((o) => o.kind === "link" && o.url === "https://example.com/x")).toBe(true);
+
+    room.deleteObject(aId, added.id);
+    expect(a.of("object_removed").some((m) => m.id === added.id)).toBe(true);
+  });
+});

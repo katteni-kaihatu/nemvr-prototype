@@ -23,7 +23,7 @@ const downloading = new Set<string>();
  * 保存するファイル名。サーバーが整えた名前を、念のためもう一度整える。
  * 名前の無い画像 (古い配置など) は、CID と画像の形式から付ける。
  */
-export function downloadName(object: Exclude<WorldObject, { kind: "box" }>, head?: Uint8Array): string {
+export function downloadName(object: Exclude<WorldObject, { kind: "box" | "link" }>, head?: Uint8Array): string {
   if (object.name) return sanitizeFileName(object.name, "download");
   const extension = head ? imageExtension(head) : "";
   return `image-${object.cid.slice(-8)}${extension ? `.${extension}` : ""}`;
@@ -85,7 +85,7 @@ export interface ObjectBlob {
  * サーバーに取得の完了を待たせて (request_file)、そのあとで取得し直す。
  */
 export async function fetchObjectBlob(
-  object: Exclude<WorldObject, { kind: "box" }>,
+  object: Exclude<WorldObject, { kind: "box" | "link" }>,
   { onProgress, onStatus, signal }: ObjectBlobOptions = {},
 ): Promise<ObjectBlob> {
   const counts = new Map<string, number>();
@@ -141,7 +141,7 @@ export async function fetchObjectBlob(
  * 進捗と結果、ブロックの取得元の内訳は HUD に表示する。
  */
 export async function downloadObject(object: WorldObject): Promise<void> {
-  if (object.kind === "box") return; // ボックスはダウンロードできない
+  if (object.kind === "box" || object.kind === "link") return; // ボックス・リンクはダウンロードできない
   if (downloading.has(object.id)) {
     console.warn(`[download] already downloading ${object.id}`);
     return;

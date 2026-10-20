@@ -2,6 +2,7 @@ import { CID } from "multiformats/cid";
 import {
   MAX_ABS_POSITION,
   MAX_NAME_LENGTH,
+  MAX_URL_LENGTH,
   MAX_OBJECT_SIZE,
   MIN_OBJECT_SIZE,
   sanitizeFileName,
@@ -9,6 +10,7 @@ import {
   type PlaceBox,
   type PlaceFile,
   type PlaceImage,
+  type PlaceUrl,
   type Pose,
   type Quat,
   type Vec3,
@@ -100,6 +102,16 @@ function parseAngles(v: Record<string, unknown>): { yaw: number; pitch?: number 
 
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
+/** place_url の検証。URL の到達性・公開性は、取得するときに別途確かめる。 */
+export function parsePlaceUrl(v: Record<string, unknown>): PlaceUrl | null {
+  const placement = parsePlacement(v);
+  if (!placement) return null;
+  const { url } = v;
+  if (typeof url !== "string" || url.length === 0 || url.length > MAX_URL_LENGTH) return null;
+  if (!/^https?:\/\//i.test(url)) return null;
+  return { url, ...placement };
+}
+
 /** place_box の検証。デモ用のボックス配置・テスト用。 */
 export function parsePlaceBox(v: Record<string, unknown>): PlaceBox | null {
   const placement = parsePlacement(v);
@@ -173,6 +185,10 @@ export function parseClientMessage(text: string): ClientMessage | null {
       const angles = parseAngles(msg);
       if (!id || !isFiniteArray(position, 3) || position.some((n) => Math.abs(n) > MAX_ABS_POSITION) || !angles) return null;
       return { type: "move_object", id, position: position as Vec3, ...angles };
+    }
+    case "place_url": {
+      const place = parsePlaceUrl(msg);
+      return place ? { type: "place_url", ...place } : null;
     }
     case "place_box": {
       const place = parsePlaceBox(msg);

@@ -48,6 +48,12 @@ describe("colliderFor", () => {
     expect(c.half).toEqual([FILE_ICON_WIDTH / 2, FILE_ICON_HEIGHT / 2, PLATE_THICKNESS / 2]);
   });
 
+  it("リンクは、画像と同じ薄い板", () => {
+    const c = colliderFor({ id: "x", kind: "link", url: "https://example.com", position: [1, 2, 3], yaw: 0.5 })!;
+    expect(c.half).toEqual([FILE_ICON_WIDTH / 2, FILE_ICON_HEIGHT / 2, PLATE_THICKNESS / 2]);
+    expect(c.pitch).toBe(0);
+  });
+
   it("誰かがつかんでいるものは、当たり判定を外す", () => {
     expect(colliderFor({ ...base, kind: "box", size: 1, color: "#fff", heldBy: "someone" })).toBeNull();
   });

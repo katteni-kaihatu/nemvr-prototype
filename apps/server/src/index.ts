@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   EAGER_FILE_MAX_BYTES,
+  FILE_FLOAT_HEIGHT,
   MAX_MESSAGE_BYTES,
   classifyFile,
   formatBytes,
   type FileObject,
   type PlaceFile,
   type PlaceImage,
+  type Vec3,
   type WorldObject,
 } from "@proto/protocol";
 import { ContentStore } from "./content.js";
@@ -19,6 +21,7 @@ import { PlacementQueue } from "./queue.js";
 import { Room } from "./room.js";
 import { iceServersFor, turnConfigFromEnv } from "./turn.js";
 import { parseClientMessage } from "./validate.js";
+import { fetchUrl } from "./urlFetch.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const IPFS_PORT = Number(process.env.IPFS_PORT ?? 8081);
@@ -49,6 +52,70 @@ const content = new ContentStore(ipfs, {
   maxTotalBytes: MAX_TOTAL_MB * 1024 * 1024,
   log: (message) => console.log(`[content] ${message}`),
 });
+/**
+ * 貼られた URL を取得して置く。画像・動画・音声はサーバーで取得して IPFS に入れ、画像/ファイルとして置く。
+ * それ以外 (HTML など) は、本文を読まずに URL のリンクとして置く。
+ */
+function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number): void {
+  schedule({
+    peerKey: peerId,
+    notifyQueued: () => {}, // URL の取得は進捗を出さない (クライアントは「取得中」を表示している)
+    onFull: () => room.sendError(peerId, "順番待ちが多すぎます。しばらくしてからやり直してください"),
+    run: async () => {
+      try {
+        const fetched = await fetchUrl(url);
+        if (fetched.kind === "link") {
+          if (!room.addLink({ url: fetched.url, position, yaw })) {
+            room.sendError(peerId, "これ以上オブジェクトを置けません");
+            return;
+          }
+          console.log(`[url] ${fetched.url} -> link (${fetched.contentType || "unknown"})`);
+          return;
+        }
+        if (!fetched.bytes) throw new Error("URL の内容を取得できませんでした");
+        const cid = await ipfs.addBytes(fetched.bytes);
+        await content.add(cid, fetched.kind === "image" ? "image" : "file");
+        if (fetched.kind === "image") {
+          const added = room.addImage({
+            cid,
+            name: fetched.name,
+            position,
+            yaw,
+            width: fetched.width ?? 1,
+            height: fetched.height ?? 1,
+          });
+          if (!added) {
+            content.release(cid);
+            room.sendError(peerId, "これ以上オブジェクトを置けません");
+            return;
+          }
+          console.log(`[url] ${fetched.url} -> image ${cid} (${fetched.width}x${fetched.height})`);
+        } else {
+          const added = room.addFile({
+            cid,
+            name: fetched.name,
+            // ファイルのアイコンは、ドロップしたときと同じ高さに浮かせる
+            position: [position[0], FILE_FLOAT_HEIGHT, position[2]],
+            yaw,
+            size: fetched.size,
+            category: fetched.kind,
+            stored: true,
+          });
+          if (!added) {
+            content.release(cid);
+            room.sendError(peerId, "これ以上オブジェクトを置けません");
+            return;
+          }
+          console.log(`[url] ${fetched.url} -> ${fetched.kind} ${cid} (${formatBytes(fetched.size)})`);
+        }
+      } catch (err) {
+        console.warn(`[url] failed for ${url}:`, err instanceof Error ? err.message : err);
+        room.sendError(peerId, err instanceof Error ? err.message : "URL を取得できませんでした");
+      }
+    },
+  });
+}
+
 /**
  * 動画のストリーミング配信。`GET /media/<cid>` に、ブラウザの `<video>` が送る Range 要求で応える。
  * 指定された範囲だけを IPFS から流すので、全体を取得しなくても再生が始まり、シークもできる。
@@ -423,6 +490,8 @@ wss.on("connection", (ws) => {
       if (!peerId) return;
       const { type: _type, ...place } = msg;
       placeImage(peerId, place);
+    } else if (msg.type === "place_url") {
+      if (peerId) placeFromUrl(peerId, msg.url, msg.position, msg.yaw);
     } else if (msg.type === "place_box") {
       if (!peerId) return;
       const { type: _boxtype, ...box } = msg;

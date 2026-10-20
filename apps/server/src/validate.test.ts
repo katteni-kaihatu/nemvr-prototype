@@ -206,6 +206,19 @@ describe("parseClientMessage", () => {
       expect(bad({ time: "1" })).toBeNull();
       expect(bad({ id: "nope" })).toBeNull();
     });
+    it("parses place_url and validates http(s) / length / pose", () => {
+      const ok = { type: "place_url", url: "https://example.com/a.png", position: [1, 0, 2], yaw: 0.5 };
+      expect(parseClientMessage(JSON.stringify(ok))).toEqual(ok);
+      const http = { ...ok, url: "http://example.com/" };
+      expect(parseClientMessage(JSON.stringify(http))).toEqual(http);
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...ok, ...patch }));
+      expect(bad({ url: "ftp://example.com/x" })).toBeNull();
+      expect(bad({ url: "javascript:alert(1)" })).toBeNull();
+      expect(bad({ url: `https://${"a".repeat(3000)}` })).toBeNull();
+      expect(bad({ url: 5 })).toBeNull();
+      expect(bad({ position: [1, 2] })).toBeNull();
+      expect(bad({ yaw: "x" })).toBeNull();
+    });
     it("parses place_box and validates size, color and pose", () => {
       const ok = { type: "place_box", position: [1, 0, 2], yaw: 0, size: 1.5, color: "#aabbcc" };
       expect(parseClientMessage(JSON.stringify(ok))).toEqual(ok);

@@ -47,6 +47,8 @@ export function colliderFor(object: WorldObject): Collider | null {
       return { ...base, center: [0, object.height / 2, 0], half: [object.width / 2, object.height / 2, PLATE_THICKNESS / 2] };
     case "file":
       return { ...base, center: [0, FILE_ICON_HEIGHT / 2, 0], half: [FILE_ICON_WIDTH / 2, FILE_ICON_HEIGHT / 2, PLATE_THICKNESS / 2] };
+    case "link":
+      return { ...base, center: [0, FILE_ICON_HEIGHT / 2, 0], half: [FILE_ICON_WIDTH / 2, FILE_ICON_HEIGHT / 2, PLATE_THICKNESS / 2] };
   }
 }
 
