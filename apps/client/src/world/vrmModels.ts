@@ -2,30 +2,36 @@ import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js"
 import { VRMLoaderPlugin, VRMUtils, type VRM } from "@pixiv/three-vrm";
 import { MAX_AVATAR_BYTES } from "@proto/protocol";
 import { fetchBlob } from "../net/ipfs";
+import { RefCountedCache } from "./refCountedCache";
 
 /**
  * 同じ CID の VRM を何度もダウンロードしないためのキャッシュ。
  * バイト列 (ArrayBuffer) だけを共有し、VRM インスタンスは呼び出しごとに作り直す
  * (three.js のオブジェクトは、複数のピアで共有できない)。
+ *
+ * 参照カウントで管理し、その CID を見ている人がいなくなったら捨てる
+ * (退出したユーザーのアバターを、他のクライアントに残さない)。
  */
-const buffers = new Map<string, Promise<ArrayBuffer>>();
+const vrmBuffers = new RefCountedCache<ArrayBuffer>((cid, signal) =>
+  fetchBlob(cid, { maxBytes: MAX_AVATAR_BYTES, signal }).then((blob) => blob.arrayBuffer()),
+);
 
-function fetchVrmBuffer(cid: string): Promise<ArrayBuffer> {
-  let pending = buffers.get(cid);
-  if (!pending) {
-    pending = fetchBlob(cid, { maxBytes: MAX_AVATAR_BYTES }).then((blob) => blob.arrayBuffer());
-    buffers.set(cid, pending);
-    // 失敗はキャッシュしない (次に呼ばれたら、やり直せるようにする)
-    pending.catch(() => {
-      if (buffers.get(cid) === pending) buffers.delete(cid);
-    });
-  }
-  return pending;
+if (import.meta.env.DEV) {
+  // 開発時のみ: E2E から、保持している VRM の CID を確認できるようにする
+  (window as unknown as { __vrmModels: unknown }).__vrmModels = {
+    cached: () => vrmBuffers.keys(),
+  };
+}
+
+/** この CID の表示をやめた (参照を 1 つ減らす)。最後の 1 人なら、取得中の読み込みも取り消して捨てる。 */
+export function releaseVrm(cid: string): void {
+  vrmBuffers.release(cid);
 }
 
 /** IPFS から VRM を取得して読み込む。失敗したら例外を投げる (呼び出し側は簡易アバターに戻す)。 */
 export async function loadVrm(cid: string): Promise<VRM> {
-  const data = await fetchVrmBuffer(cid);
+  // 参照を 1 つ増やす。表示をやめるときは、必ず releaseVrm を呼ぶこと
+  const data = await vrmBuffers.acquire(cid);
 
   const loader = new GLTFLoader();
   loader.register((parser) => new VRMLoaderPlugin(parser));

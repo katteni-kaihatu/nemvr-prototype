@@ -15,6 +15,8 @@
     アバターの差し替え・退室で解放する。これにより、ブラウザ同士が直接つながらない (中継のみの) 場合でも、他のユーザーはサーバーから取得できる。
   - **表示と姿勢**: `@pixiv/three-vrm` で読み込み (`loadVrm`。CID ごとに `ArrayBuffer` をキャッシュし、VRM はピアごとに作る。VRM 0.x は `rotateVRM0`)、
     ルートの位置・向き、頭のピッチ・ロール、しゃがみの脚 IK、リーンの背骨、A ポーズの腕、スプリングボーンを反映する。名前タグは残す。
+  - **退出時の解放**: ダウンロードした VRM の `ArrayBuffer` は CID ごとの参照カウント (`RefCountedCache`) で管理し、`VrmAvatar` のアンマウント (退出・CID 変更) で参照を減らす。
+    最後の閲覧者がいなくなったら、バッファを捨て、取得中なら取り消し、VRM のシーンを `deepDispose` する。退出したユーザーのアバターを、他のクライアントが保持し続けない。
   - **フォールバック**: VRM が無い・読み込めないときは、これまでどおり簡易アバターを表示する。
   - テスト: 単体テスト (`ContentStore` の avatar の上限、`set_avatar` の検証、`Room` の `peer_avatar` / `welcome`)、
     ヘッドレス Firefox の E2E (`vrm.mjs`、17 項目)。alice が VRM 1.0 をアップロードし、WebRTC の直接接続を有効にしていない bob (`directPeers = 0`) が、
@@ -278,7 +280,7 @@
   bob のカメラを alice に向けたスクリーンショット (`vrm_bob.png`) で、VRM のメッシュと名前タグを確認した。alice を x=-2 へ動かすと、bob 側の `position` が (-2, 0, 0) に追従した。
   bob 自身は VRM 無しで、bob の画面に自分の `__avatars` エントリは無く、alice の画面では bob は簡易アバター (`avatarCid: null`) だった。
   続けて carol が `/tmp/vrm0.vrm` (VRM 0.x、5.3 MiB) をアップロードし、bob が読み込めることも確認した。
-  回帰: `pnpm -r test` (protocol 21・client 115・server 136)、`pnpm -r typecheck`、`pnpm --filter @proto/client build` が通った (ビルドは chunk サイズの警告のみ)。
+  回帰: `pnpm -r test` (protocol 21・client 120・server 136)、`pnpm -r typecheck`、`pnpm --filter @proto/client build` が通った (ビルドは chunk サイズの警告のみ)。
   **制限**: 表情はモデルの既定から変えない。VRM のライセンス (利用条件) の確認・表示はしない。モデルのプレビューは無い。
   自分のアバターは一人称で見えない (体は表示しない)。モデルは退室するとサーバーから解放され、永続化しない。64 MiB まで。VRM 0.x / 1.0 に対応。
   **本番確認**: VPS (https://nemvr.nemnomi.dev/) にデプロイ済み。バンドルは 2,139,671 バイト (gzip 593.67 kB) で、`proto-server` は active、サイトは 200。
@@ -290,6 +292,9 @@
   bob が VRM なしで入室してサーバーから `avatarCid` を受信した。スクリーンショット (`prod_vrm_bob.png`) で VRM の人体メッシュ (簡易アバターではない) を目視確認し、
   サーバーは同じ CID を pin し、退室後に解放した。アプリのコンソールエラーは無し (テスト用の記録スクリプト由来のページエラーが 1 件あったが、記録なしの対照実行では出ていない)。
   **未確認**: 実機のブラウザ・別マシン・Chrome 系、複数人が同時に大きな VRM を使う場合の負荷、表情・ライセンス表示・プレビュー、64MiB の境界 (単体テストのみ)。
+- **退出時の VRM 解放の確認 (ヘッドレス Firefox、手元のマシン)**: `vrm-release.mjs` で、alice と carol が bob の VRM を表示している状態から bob を退出させ、
+  両方のクライアントで `window.__vrmModels.cached()` から bob の CID が消え、`__avatars[bob]` も削除されることを確認した。
+  参照カウントの単体テスト 5 件 (`RefCountedCache`) も追加した。`vrm.mjs` (17) も通った。
 - **カーソルの距離制限の解除の確認 (ヘッドレス Firefox、手元のマシン)**: `reach.mjs` で、35m 先に置いたボックスを狙ってリングメニューを開き、右ボタンでつかめることを確認した (以前は 8m まで)。
   回帰: `interact.mjs` (28)、`box.mjs` (46)。単体テストは protocol 21・client 115・server 129。型チェックも通った。
   **注意**: 選択 (レイ) は無限遠だが、描画のカメラの far は 200m。それより遠いものは見えない (ワールドは 50m 四方なので、通常は関係ない)。

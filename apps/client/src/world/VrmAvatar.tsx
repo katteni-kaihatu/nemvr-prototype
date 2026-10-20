@@ -7,7 +7,7 @@ import {
 } from "@pixiv/three-vrm";
 import type { Pose } from "@proto/protocol";
 import { EYE_HEIGHT, LEAN_ANGLE, eyeHeightFor } from "./movement";
-import { loadVrm } from "./vrmModels";
+import { loadVrm, releaseVrm } from "./vrmModels";
 
 /** VRM 1.0 は +Z 向き。このアプリのアバターは -Z 向きなので、180 度回す。 */
 const MODEL_YAW_OFFSET = Math.PI;
@@ -281,6 +281,8 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
         group.remove(vrm.scene);
         VRMUtils.deepDispose(vrm.scene);
       }
+      // このピアの表示をやめた。最後の 1 人なら、ダウンロードした VRM のバイト列も捨てる
+      releaseVrm(cid);
       loadedChangeRef.current?.(false);
     };
   }, [cid, poseRef, applyPose]);
