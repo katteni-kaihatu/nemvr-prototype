@@ -486,6 +486,7 @@ wss.on("connection", (ws) => {
       if (!peerId) return;
       const copy = room.duplicateObject(peerId, msg.id);
       if (copy && holdsContent(copy) && (copy.kind === "image" || copy.kind === "file")) content.retain(copy.cid); // 複製は同じ中身を指す
+      if (copy) console.log(`[duplicate] ${msg.id} (${copy.kind}) by ${peerId}`);
     } else if (msg.type === "place_image") {
       if (!peerId) return;
       const { type: _type, ...place } = msg;

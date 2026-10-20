@@ -41,6 +41,14 @@ export function World() {
       return next;
     });
   }, []);
+  // ワールド内では、ブラウザ標準のコンテキストメニューを出さない
+  // (リンクの近くで右クリックして「貼り付け」を選ぶと、同じ URL がもう 1 つ置かれてしまうため)
+  useEffect(() => {
+    const prevent = (e: Event) => e.preventDefault();
+    window.addEventListener("contextmenu", prevent);
+    return () => window.removeEventListener("contextmenu", prevent);
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "KeyM" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;

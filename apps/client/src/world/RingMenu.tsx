@@ -146,7 +146,9 @@ export function RingMenu() {
               key={item.id}
               data-testid={`ring-menu-${item.id}`}
               className="ring-menu-button"
-              onClick={() => {
+              onClick={(e) => {
+                // 右クリックなどでは実行しない (ブラウザによっては click が来ることがある)
+                if (e.button !== 0) return;
                 item.run(object);
                 closeMenu();
               }}
