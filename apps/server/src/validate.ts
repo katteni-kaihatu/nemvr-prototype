@@ -160,6 +160,13 @@ export function parseClientMessage(text: string): ClientMessage | null {
       const id = parseObjectId(msg.id);
       return id ? { type: msg.type, id } : null;
     }
+    case "video_control": {
+      const id = parseObjectId(msg.id);
+      const { playing, time } = msg;
+      if (!id || typeof playing !== "boolean") return null;
+      if (typeof time !== "number" || !Number.isFinite(time) || time < 0 || time > 24 * 60 * 60) return null;
+      return { type: "video_control", id, playing, time };
+    }
     case "move_object": {
       const id = parseObjectId(msg.id);
       const { position } = msg;

@@ -194,6 +194,18 @@ describe("parseClientMessage", () => {
       expect(bad("1")).toBeNull();
       expect(bad(null)).toBeNull();
     });
+    it("parses video_control and validates playing / time", () => {
+      const ok = { type: "video_control", id, playing: true, time: 12.5 };
+      expect(parseClientMessage(JSON.stringify(ok))).toEqual(ok);
+      const bad = (patch: object) => parseClientMessage(JSON.stringify({ ...ok, ...patch }));
+      expect(bad({ playing: "yes" })).toBeNull();
+      expect(bad({ playing: undefined })).toBeNull();
+      expect(bad({ time: -1 })).toBeNull();
+      expect(bad({ time: 24 * 60 * 60 + 1 })).toBeNull();
+      expect(bad({ time: NaN })).toBeNull();
+      expect(bad({ time: "1" })).toBeNull();
+      expect(bad({ id: "nope" })).toBeNull();
+    });
     it("parses place_box and validates size, color and pose", () => {
       const ok = { type: "place_box", position: [1, 0, 2], yaw: 0, size: 1.5, color: "#aabbcc" };
       expect(parseClientMessage(JSON.stringify(ok))).toEqual(ok);

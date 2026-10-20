@@ -403,6 +403,8 @@ wss.on("connection", (ws) => {
       avatarUpdates = avatarUpdates
         .then(() => setAvatar(id, cid))
         .catch((err: unknown) => console.warn("[avatar] unexpected error:", err instanceof Error ? err.message : err));
+    } else if (msg.type === "video_control") {
+      if (peerId) room.setVideoState(msg.id, msg.playing, msg.time);
     } else if (msg.type === "grab_object") {
       if (peerId) room.grabObject(peerId, msg.id);
     } else if (msg.type === "move_object") {

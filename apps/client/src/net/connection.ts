@@ -9,6 +9,7 @@ import {
   type PlaceImage,
   type Pose,
   type ServerMessage,
+  type VideoPlaybackState,
   type WorldObject,
 } from "@proto/protocol";
 import { resetInteraction, useInteraction } from "../world/interaction";
@@ -52,6 +53,8 @@ interface NetState {
   ipfs: "idle" | "starting" | "ready" | "error";
   /** 他のブラウザとの直接 (WebRTC) 接続の数。 */
   directPeers: number;
+  /** 動画の再生状態 (サーバーが保持)。オブジェクト ID ごと。 */
+  videoStates: Record<string, VideoPlaybackState>;
 }
 
 export const useNet = create<NetState>(() => ({
@@ -63,6 +66,7 @@ export const useNet = create<NetState>(() => ({
   notice: null,
   ipfs: "idle",
   directPeers: 0,
+  videoStates: {},
 }));
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -94,6 +98,11 @@ export function sendPose(pose: Pose): void {
 /** 自分の VRM アバターの CID をサーバーへ知らせる (null なら簡易アバターに戻す)。 */
 export function sendSetAvatar(cid: string | null): void {
   send({ type: "set_avatar", cid });
+}
+
+/** 動画の再生状態をサーバーへ知らせる (サーバーが全員に配る)。 */
+export function sendVideoControl(id: string, playing: boolean, time: number): void {
+  send({ type: "video_control", id, playing, time });
 }
 
 export function sendPlaceImage(place: PlaceImage): void {
@@ -206,6 +215,7 @@ export function connect(name: string, avatarFile?: File): void {
     notice: null,
     ipfs: "idle",
     directPeers: 0,
+    videoStates: {},
   });
 
   const ws = new WebSocket(WS_URL);
@@ -235,7 +245,14 @@ export function connect(name: string, avatarFile?: File): void {
         }
         const objects: Record<string, WorldObject> = {};
         for (const o of msg.objects) objects[o.id] = o;
-        useNet.setState({ status: "connected", self: msg.self, peers, objects, ipfs: "starting" });
+        useNet.setState({
+          status: "connected",
+          self: msg.self,
+          peers,
+          objects,
+          videoStates: msg.videos ?? {},
+          ipfs: "starting",
+        });
         // 先に入室していた人の libp2p ID に名前を結び付ける (ダウンロードの取得元の表示用)
         for (const peer of msg.peers) if (peer.ipfsPeerId) rememberPeerName(peer.ipfsPeerId, peer.name);
         // 画像の取得・共有に使うブラウザ内 IPFS ノードを起動してサーバーに接続する
@@ -286,7 +303,8 @@ export function connect(name: string, avatarFile?: File): void {
         const removed = useNet.getState().objects[msg.id];
         useNet.setState((s) => {
           const { [msg.id]: _removed, ...rest } = s.objects;
-          return { objects: rest };
+          const { [msg.id]: _video, ...videoStates } = s.videoStates;
+          return { objects: rest, videoStates };
         });
         settlePrepare(msg.id, new Error("削除されました"));
         // 自分が配っていたファイルが、すべて削除された
@@ -391,6 +409,11 @@ export function connect(name: string, avatarFile?: File): void {
         });
         break;
       }
+      case "video_state": {
+        const { id, playing, time, at } = msg;
+        useNet.setState((s) => ({ videoStates: { ...s.videoStates, [id]: { playing, time, at } } }));
+        break;
+      }
       case "peer_joined": {
         const { id, name, color, avatarCid } = msg.peer;
         useNet.setState((s) => ({ peers: { ...s.peers, [id]: { id, name, color, avatarCid } } }));
@@ -436,6 +459,7 @@ export function connect(name: string, avatarFile?: File): void {
       notice: null,
       ipfs: "idle",
       directPeers: 0,
+      videoStates: {},
       message:
         prev.message ??
         (welcomed ? "サーバーとの接続が切断されました" : "サーバーに接続できませんでした"),

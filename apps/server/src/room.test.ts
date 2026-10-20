@@ -506,3 +506,50 @@ describe("lazy files (not transferred until downloaded)", () => {
     expect(b.sent).toEqual([]);
   });
 });
+
+describe("video playback state", () => {
+  it("stores and broadcasts the state, includes it in welcome, rejects non-videos, and clears it on removal", () => {
+    const room = new Room({ peerId: "p", wsPort: 1 });
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    const aId = room.join(a as unknown as WebSocket, "alice").id;
+    room.join(b as unknown as WebSocket, "bob");
+
+    room.addFile({
+      cid: CID,
+      name: "clip.webm",
+      position: [0, 0.4, 0],
+      yaw: 0,
+      size: 1000,
+      category: "video",
+      stored: true,
+    });
+    const id = a.of("object_added").at(-1)!.object.id;
+    a.clear();
+    b.clear();
+
+    room.setVideoState(id, true, 12.5);
+    const state = b.of("video_state")[0]!;
+    expect(state).toMatchObject({ id, playing: true, time: 12.5 });
+    expect(typeof state.at).toBe("number");
+
+    // 後から入った人にも、いまの再生状態が伝わる
+    const c = new FakeSocket();
+    room.join(c as unknown as WebSocket, "carol");
+    expect(c.of("welcome")[0]!.videos[id]).toMatchObject({ playing: true, time: 12.5 });
+
+    // 映像ではないオブジェクトには設定できない
+    room.addImage({ cid: CID, position: [0, 0, 0], yaw: 0, width: 1, height: 1 });
+    const imageId = a.of("object_added").at(-1)!.object.id;
+    a.clear();
+    b.clear();
+    room.setVideoState(imageId, true, 1);
+    expect(b.sent).toEqual([]);
+
+    // 削除すると、状態も消える
+    room.deleteObject(aId, id);
+    const d = new FakeSocket();
+    room.join(d as unknown as WebSocket, "dave");
+    expect(d.of("welcome")[0]!.videos[id]).toBeUndefined();
+  });
+});

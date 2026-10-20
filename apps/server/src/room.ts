@@ -15,6 +15,7 @@ import {
   type Pose,
   type Vec3,
   type ServerMessage,
+  type VideoPlaybackState,
   type WorldObject,
 } from "@proto/protocol";
 import { sanitizeName } from "./validate.js";
@@ -56,6 +57,8 @@ export class Room {
 
   private peers = new Map<string, Peer>();
   private objects = new Map<string, WorldObject>();
+  /** 動画の再生状態 (オブジェクト ID ごと)。動画が削除されたら消す。 */
+  private videoStates = new Map<string, VideoPlaybackState>();
   private joinCount = 0;
   private timer: NodeJS.Timeout | null = null;
 
@@ -75,6 +78,7 @@ export class Room {
       self: info,
       peers: others,
       objects: [...this.objects.values()],
+      videos: Object.fromEntries(this.videoStates),
       ipfs: this.ipfs,
       iceServers: this.iceServersFor(id),
       tickRate: TICK_RATE,
@@ -105,6 +109,18 @@ export class Room {
     if (cid === null) delete peer.state.avatarCid;
     else peer.state.avatarCid = cid;
     this.broadcast({ type: "peer_avatar", id, cid }, id);
+  }
+
+  /**
+   * 動画の再生状態を記録して、全員に配る。動画 (映像のファイル) 以外には設定できない。
+   * `at` はサーバーの時刻 (クライアントは、受け取った時点のずれを足して再生位置を合わせる)。
+   */
+  setVideoState(id: string, playing: boolean, time: number): void {
+    const object = this.objects.get(id);
+    if (!object || object.kind !== "file" || object.category !== "video") return;
+    const state: VideoPlaybackState = { playing, time: Math.max(0, Math.min(24 * 60 * 60, time)), at: Date.now() };
+    this.videoStates.set(id, state);
+    this.broadcast({ type: "video_state", id, ...state });
   }
 
   /** 画像オブジェクトを追加して全員に通知する。上限に達していたら false。 */
@@ -162,6 +178,7 @@ export class Room {
       return null;
     }
     this.objects.delete(id);
+    this.videoStates.delete(id);
     this.broadcast({ type: "object_removed", id });
     return object;
   }
@@ -249,6 +266,7 @@ export class Room {
     for (const object of [...this.objects.values()]) {
       if (object.kind !== "file" || object.cid !== cid || object.stored || object.offline) continue;
       this.objects.delete(object.id);
+      this.videoStates.delete(object.id);
       this.broadcast({ type: "object_removed", id: object.id });
       removed++;
     }

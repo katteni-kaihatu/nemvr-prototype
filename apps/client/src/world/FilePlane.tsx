@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CanvasTexture, DoubleSide, SRGBColorSpace, VideoTexture } from "three";
 import { FILE_ICON_HEIGHT, FILE_ICON_WIDTH, type FileObject } from "@proto/protocol";
+import { serverNow, useNet } from "../net/connection";
 import { registerP2pMedia, type P2pMediaSource } from "../net/p2pMedia";
 import { drawFileIcon } from "./fileIcon";
 import { ObjectFrame } from "./ObjectFrame";
-import { markEnded, registerVideoElement, useVideoPlayback } from "./videoPlayback";
+import {
+  markEnded,
+  pauseVideo,
+  playVideo,
+  registerVideoElement,
+  useVideoPlayback,
+} from "./videoPlayback";
 
 /** 再生中の画面の、いちばん大きいときの幅・高さ (m)。映像の縦横比に合わせて、この範囲に収める。 */
 const SCREEN_MAX_WIDTH = 1.8;
@@ -26,10 +33,14 @@ export function FilePlane({ object }: { object: FileObject }) {
   const { name, size, category, offline, stored } = object;
   const isVideo = category === "video";
   const playing = useVideoPlayback((s) => s.playing[object.id] === true);
+  /** サーバーが保持している、この動画の再生状態 (全員で共有) */
+  const remoteVideo = useNet((s) => s.videoStates[object.id]);
 
   const [thumbnail, setThumbnail] = useState<{ image: HTMLCanvasElement; width: number; height: number } | null>(null);
   const [aspect, setAspect] = useState(16 / 9);
   const [videoTexture, setVideoTexture] = useState<VideoTexture | null>(null);
+  /** 再生用の要素に、P2P (または /media) の URL を設定し終えたか */
+  const [playerReady, setPlayerReady] = useState(false);
   /** 再生用の video 要素 (P2P の URL を最初から持つ。preload=none で、再生するまで読まない) */
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -49,6 +60,7 @@ export function FilePlane({ object }: { object: FileObject }) {
 
     // 再生用の要素。最初から P2P の URL を持たせる (再生のときに src を変えると、
     // Firefox で再生が中断されることがあるため)。preload=none なので、再生するまで取得しない
+    setPlayerReady(false);
     const player = document.createElement("video");
     player.preload = "none";
     player.muted = true; // 再生のときに音を出す
@@ -108,6 +120,7 @@ export function FilePlane({ object }: { object: FileObject }) {
       }
       // Service Worker が使えない環境では、サーバーの /media から再生する
       player.src = source?.url ?? `/media/${encodeURIComponent(object.cid)}`;
+      setPlayerReady(true);
     })();
 
     return () => {
@@ -125,6 +138,17 @@ export function FilePlane({ object }: { object: FileObject }) {
       source?.stop();
     };
   }, [isVideo, stored, object.id, object.cid, object.size, object.name]);
+
+  // 他の人の操作 (再生・一時停止) や、入室時の状態を、この要素にも反映する。
+  // serverNow() で、状態を受け取るまでの遅れ (サーバーの at からの経過) を足して、再生位置を合わせる
+  useEffect(() => {
+    if (!playerReady || !remoteVideo) return;
+    const now = serverNow() ?? remoteVideo.at;
+    const elapsed = remoteVideo.playing ? Math.max(0, (now - remoteVideo.at) / 1000) : 0;
+    const target = remoteVideo.time + elapsed;
+    if (remoteVideo.playing) playVideo(object.id, { time: target, broadcast: false, quiet: true });
+    else pauseVideo(object.id, { time: target, broadcast: false });
+  }, [playerReady, remoteVideo, object.id]);
 
   // 再生が始まったら、動画をテクスチャにする (止めたら、アイコンに戻す)
   useEffect(() => {

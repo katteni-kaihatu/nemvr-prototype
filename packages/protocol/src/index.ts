@@ -37,6 +37,13 @@ export interface Pose {
   lean?: number;
 }
 
+/** 動画の再生状態。サーバーが保持し、全員に配る。time は動画内の秒、at はサーバーの時刻 (ms)。 */
+export interface VideoPlaybackState {
+  playing: boolean;
+  time: number;
+  at: number;
+}
+
 export interface PeerInfo {
   id: string;
   name: string;
@@ -164,6 +171,7 @@ export type ClientMessage =
   | { type: "grab_object"; id: string }
   | { type: "move_object"; id: string; position: Vec3; yaw: number; pitch?: number }
   | { type: "release_object"; id: string }
+  | { type: "video_control"; id: string; playing: boolean; time: number }
   | { type: "delete_object"; id: string }
   | { type: "duplicate_object"; id: string };
 
@@ -174,6 +182,8 @@ export type ServerMessage =
       self: PeerInfo;
       peers: PeerState[];
       objects: WorldObject[];
+      /** いま再生中の動画などの状態 (オブジェクト ID ごと)。 */
+      videos: Record<string, VideoPlaybackState>;
       ipfs: IpfsInfo;
       /** STUN / TURN の設定。サーバーに TURN が設定されていないときは省略される (クライアントは既定の公開 STUN を使う)。 */
       iceServers?: IceServer[];
@@ -183,6 +193,7 @@ export type ServerMessage =
   // 位置・向き・つかまれている状態が変わった (全体の状態を送る)
   | { type: "object_updated"; object: WorldObject }
   | { type: "object_removed"; id: string }
+  | ({ type: "video_state"; id: string } & VideoPlaybackState)
   // サーバーが、置こうとしている中身を IPFS から取得している途中の進捗 (置いた本人にだけ送る)。
   // 大きなファイルは数分かかるので、その間も状況が分かるようにする。total はサーバーが分かっていれば (宣言サイズ)
   // queued: 他の転送の順番待ちをしている (まだ取得を始めていない)
