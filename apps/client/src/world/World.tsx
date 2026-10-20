@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Grid } from "@react-three/drei";
 import { useNet } from "../net/connection";
@@ -8,13 +9,44 @@ import { DropTarget } from "./DropTarget";
 import { FilePlane } from "./FilePlane";
 import { ImagePlane } from "./ImagePlane";
 import { LocalPlayer } from "./LocalPlayer";
+import { Mirror } from "./Mirror";
 import { ObjectInteraction } from "./ObjectInteraction";
 import { RemoteAvatar } from "./RemoteAvatar";
 import { RingMenu } from "./RingMenu";
 
+const MIRROR_KEY = "vr-sns:mirror";
+
 export function World() {
   const peers = useNet((s) => s.peers);
   const objects = useNet((s) => s.objects);
+
+  // 鏡の反射は、このクライアントだけで ON/OFF する (他の人には同期しない)。設定はブラウザに保存する
+  const [mirrorEnabled, setMirrorEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(MIRROR_KEY) !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const toggleMirror = useCallback(() => {
+    setMirrorEnabled((enabled) => {
+      const next = !enabled;
+      try {
+        localStorage.setItem(MIRROR_KEY, next ? "on" : "off");
+      } catch {
+        // 保存できなくても、切り替えはできる
+      }
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "KeyM" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      toggleMirror();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toggleMirror]);
 
   return (
     <>
@@ -47,6 +79,7 @@ export function World() {
           ),
         )}
 
+        <Mirror enabled={mirrorEnabled} />
         <LocalPlayer />
         <DropTarget />
         <ObjectInteraction />
@@ -56,12 +89,20 @@ export function World() {
       </Canvas>
       <CursorDot />
       <RingMenu />
-      <HUD count={Object.keys(peers).length + 1} />
+      <HUD count={Object.keys(peers).length + 1} mirrorEnabled={mirrorEnabled} onToggleMirror={toggleMirror} />
     </>
   );
 }
 
-function HUD({ count }: { count: number }) {
+function HUD({
+  count,
+  mirrorEnabled,
+  onToggleMirror,
+}: {
+  count: number;
+  mirrorEnabled: boolean;
+  onToggleMirror: () => void;
+}) {
   const self = useNet((s) => s.self);
   const notice = useNet((s) => s.notice);
   const ipfs = useNet((s) => s.ipfs);
@@ -90,6 +131,7 @@ function HUD({ count }: { count: number }) {
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Shift (押している間) で走る / Space でジャンプ / C・Ctrl (押している間) でしゃがみ / Q・E (押している間) でリーン / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>ファイルや画像をドロップして配置 (視点操作中は Esc で解除してから)</div>
+      <div style={{ opacity: 0.7 }}>M で鏡の反射を ON/OFF (このクライアントだけ)</div>
       <div style={{ opacity: 0.7 }}>中央の点で狙う: 右ボタン長押しでつかむ (つかんだままマウスを上下: 持ち上げ、ホイール: 遠く・近く、E: 移動 / 回転モード) / 中ボタンでメニュー (削除・複製・ダウンロード・動画はその場で再生)</div>
       {grabbedId && (
         <div style={{ color: "#a5d6a7" }}>
@@ -98,6 +140,23 @@ function HUD({ count }: { count: number }) {
             : "移動モード: マウスを上下に動かすと持ち上がる / ホイールで遠く・近く / E で回転モードへ"}
         </div>
       )}
+      <button
+        data-testid="mirror-toggle"
+        onClick={onToggleMirror}
+        style={{
+          pointerEvents: "auto",
+          marginTop: 4,
+          padding: "2px 8px",
+          fontSize: 12,
+          borderRadius: 4,
+          border: "1px solid rgba(255,255,255,0.4)",
+          background: mirrorEnabled ? "rgba(80,120,90,0.8)" : "rgba(70,70,80,0.8)",
+          color: "#ffffff",
+          cursor: "pointer",
+        }}
+      >
+        鏡: {mirrorEnabled ? "ON" : "OFF"} (M)
+      </button>
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
     </div>
   );
