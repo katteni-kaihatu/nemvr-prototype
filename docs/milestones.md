@@ -70,7 +70,7 @@
 サーバー停止・通信分断中も基本編集を続け、復旧後に統合できるかを検証する。既定の legacy モードは変更せず、`SYNC_MODE=crdt-v1` / `VITE_SYNC_MODE=crdt-v1` を明示した実験環境だけで動かす。設計・保証範囲・試験項目は [CRDT 実験モード](crdt-experiment.md) を参照。
 
 - [x] `packages/world-sync`: Yjs 文書・作成/移動/複製/削除・projection・共通フレーム
-- [x] server: 専用保存領域 (`CRDT_DATA_DIR`)・atomic snapshot・`worldId`・初回 seed・復元失敗の明示
+- [x] server: 専用保存領域 (`CRDT_DATA_DIR` の `meta.json` / `doc.bin` / `content.json` / `blocks/`)・`worldId`・初回 seed・復元失敗の明示
 - [x] client: IndexedDB 保存・初期復元・再接続/再同期・HUD の状態表示・オフラインで使える実験用ボックス / リンク配置ボタン
 - [x] P2P: 既存 WebRTC / circuit relay 上の `/proto/world-sync/1.0.0` の実装 (サーバー停止中の生存は未検証)
 - [x] content: 永続台帳・明示リセットまでの pin・20 GiB 上限・取得不能表示と再試行
@@ -78,7 +78,7 @@
 
 **完了条件**: WebSocket のみの遮断、Node プロセス停止、P2P のみの遮断、全経路分断、ホスト / TURN 停止、タブ再読み込み・終了、サーバー再起動、コンテンツ提供元の消失をそれぞれ再現し、復旧後に文書が収束すること。100 objects の条件でも編集継続と再統合ができ、legacy モードに回帰がないこと。通信経路と handshake の復旧から 5 秒以内の収束、サーバー復帰から 30 秒以内の自動再接続を目標とし、RTT・TURN 使用・再試行回数を記録する。測定結果が出るまでは合格としない。
 
-**現状**: 実装済み・E2E 未実施。M6 の完了条件はまだ満たしていない (Node / 単体テストの結果は [CRDT 実験モード](crdt-experiment.md) の「15. 検証状況」)。
+**現状**: 実装済み・E2E 未実施。M6 の完了条件はまだ満たしていない (Node / 単体テストの結果は [CRDT 実験モード](crdt-experiment.md) の「15. 検証状況」)。ACK ループ・耐久 ACK・マルチタブ圧縮・未保存ファイルの配布・`setMetadata` / `transforms`・終了処理・初期化復旧・マージ上限などのレビュー指摘の修正は適用済みだが、実ブラウザと障害時の E2E は未実施のまま。E2E が通るまで M6 完了とはしない。
 
 ## M7 以降 (候補。着手前に再検討する)
 

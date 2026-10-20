@@ -3,6 +3,7 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_CHUNK_BYTES,
   TransferAssembler,
+  WorldDoc,
   encodeTransfer,
   fromBase64,
   toBase64,
@@ -14,8 +15,18 @@ import type { WorldStore } from "./worldStore.js";
 export const CRDT_MAX_MESSAGE_BYTES = 1024 * 1024;
 /** base64 の state vector / update として受け付ける文字列の上限。 */
 export const MAX_SYNC_ENCODED_LENGTH = 16 * 1024 * 1024;
+/** 1 回の sync_update / 組み立て後の転送として受け付ける更新のバイト数上限。 */
+export const MAX_SYNC_UPDATE_BYTES = 8 * 1024 * 1024;
+/** 1 回の更新に含めてよい Yjs の struct 数の上限 (巨大な文書の merge を防ぐ)。 */
+export const MAX_SYNC_UPDATE_STRUCTS = 10_000;
+/** 文書に存在してよいオブジェクト数の上限 (配置の MAX_OBJECTS とは別の、merge 用の最終防衛線)。 */
+export const MAX_WORLD_OBJECTS = 1_000;
 /** つかみ claim の期限として許す、現在時刻からの最大の先読み (ms)。 */
 export const MAX_CLAIM_AHEAD_MS = 10_000;
+/** ピアごとに保持する claim の seq の上限。 */
+export const MAX_CLAIM_SEQS_PER_PEER = 256;
+/** claim_release の seq を、後続の release と比べられるように保持する時間 (ms)。 */
+export const CLAIM_RELEASE_RETENTION_MS = 60_000;
 const RESYNC_INTERVAL_MS = 10_000;
 
 interface Peer {
@@ -24,10 +35,38 @@ interface Peer {
   ready: boolean;
   readonly assembler: TransferAssembler;
   videoErrorSent: boolean;
+  /** 上限を超えた更新を送ってきたピア。以後の更新は適用も ACK もしない。 */
+  blocked: boolean;
+}
+
+interface ClaimSeq {
+  seq: number;
+  /** これ以降は不要 (cleanup の対象)。 */
+  expiresAt: number;
 }
 
 export interface SyncHubOptions {
   log?: (message: string) => void;
+}
+
+/**
+ * 更新に含まれる Yjs の struct 数を数える (適用前の上限判定用)。
+ * 専用の文書に適用して数えるので、壊れた更新なら例外になる。
+ */
+export function countUpdateStructs(update: Uint8Array): number {
+  const probe = new WorldDoc({ actorId: "server:sync-limit-probe" });
+  try {
+    probe.applyUpdate(update);
+    const clients = (
+      probe.doc as unknown as { store?: { clients?: Map<number, unknown[]> } }
+    ).store?.clients;
+    if (!clients) return 0;
+    let total = 0;
+    for (const structs of clients.values()) total += structs.length;
+    return total;
+  } finally {
+    probe.destroy();
+  }
 }
 
 /**
@@ -40,7 +79,7 @@ export interface SyncHubOptions {
 export class SyncHub {
   private readonly peers = new Map<WebSocket, Peer>();
   /** セッションごとの最後の claim seq (release を、より新しい seq で送るため)。 */
-  private readonly claimSeqs = new Map<string, number>();
+  private readonly claimSeqs = new Map<string, ClaimSeq>();
   private readonly log: (message: string) => void;
   private readonly unsubscribe: () => void;
   private readonly timer: NodeJS.Timeout;
@@ -69,6 +108,7 @@ export class SyncHub {
       ready: false,
       assembler: new TransferAssembler({ maxBytes: DEFAULT_MAX_BYTES }),
       videoErrorSent: false,
+      blocked: false,
     });
   }
 
@@ -164,21 +204,22 @@ export class SyncHub {
       this.sendSyncError(ws, "join してから sync_hello を送ってください");
       return;
     }
+    if (peer.blocked) {
+      this.sendSyncError(ws, "この接続は更新の上限を超えたため、同期できません");
+      return;
+    }
     peer.ready = false;
     if (msg.worldId !== this.store.worldId) {
-      this.sendSyncError(ws, `worldId が一致しません (server: ${this.store.worldId})`);
+      this.rejectHello(peer, `worldId が一致しません (server: ${this.store.worldId})`);
       return;
     }
     if (msg.schemaVersion !== this.store.syncInfo.schemaVersion) {
-      this.sendSyncError(
-        ws,
-        `schemaVersion が一致しません (server: ${this.store.syncInfo.schemaVersion})`,
-      );
+      this.rejectHello(peer, `schemaVersion が一致しません (server: ${this.store.syncInfo.schemaVersion})`);
       return;
     }
     const vector = fromBase64(msg.stateVector);
     if (vector === null) {
-      this.sendSyncError(ws, "stateVector が base64 として不正です");
+      this.rejectHello(peer, "stateVector が base64 として不正です");
       return;
     }
     let diff: Uint8Array;
@@ -186,12 +227,25 @@ export class SyncHub {
       // 空の state vector は「何も持っていない」と解釈する (Yjs の state vector は最低 1 バイト)
       diff = vector.length === 0 ? this.store.world.encodeUpdate() : this.store.world.encodeUpdate(vector);
     } catch {
-      this.sendSyncError(ws, "stateVector を解釈できません");
+      this.rejectHello(peer, "stateVector を解釈できません");
       return;
     }
     this.sendDocument(peer, "init", diff);
     peer.ready = true;
     this.sendAck(ws);
+  }
+
+  /**
+   * sync_hello の検証に失敗したら、sync_error を送って接続を閉じる。
+   * 繋がったまま ready にならないソケットを残さない。
+   */
+  private rejectHello(peer: Peer, message: string): void {
+    this.sendSyncError(peer.ws, message);
+    try {
+      peer.ws.close(1008, "sync_hello failed");
+    } catch (error) {
+      this.log(`failed to close a rejected peer: ${String(error)}`);
+    }
   }
 
   private onUpdate(ws: WebSocket, encoded: string): void {
@@ -200,6 +254,7 @@ export class SyncHub {
       this.sendSyncError(ws, "join してから sync_update を送ってください");
       return;
     }
+    if (peer.blocked) return;
     if (!peer.ready) {
       this.requireReady(ws);
       return;
@@ -222,6 +277,7 @@ export class SyncHub {
       this.sendSyncError(ws, "join してから sync_part を送ってください");
       return;
     }
+    if (peer.blocked) return;
     if (!peer.ready) {
       this.requireReady(ws);
       return;
@@ -252,14 +308,35 @@ export class SyncHub {
   }
 
   private applyFromPeer(peer: Peer, update: Uint8Array): void {
+    if (peer.blocked) return;
     if (update.length === 0) {
-      // 空の更新は何も変えない。Yjs に渡すと不正な更新になるので、保存を待って ACK だけ返す
-      void this.store
-        .scheduleSave()
-        .then(() => this.sendAck(peer.ws))
-        .catch((err: unknown) => this.sendSyncError(peer.ws, `保存できませんでした: ${String(err)}`));
+      // 空の更新は何も変えない。保存が確定してから ACK を返す
+      this.sendAck(peer.ws);
       return;
     }
+    // 適用前に、merge できる更新の大きさと struct 数を制限する (巨大な文書を持ち込ませない)
+    if (update.length > MAX_SYNC_UPDATE_BYTES) {
+      this.sendSyncError(
+        peer.ws,
+        `更新が大きすぎます (上限 ${MAX_SYNC_UPDATE_BYTES} バイト)`,
+      );
+      return;
+    }
+    let structs: number;
+    try {
+      structs = countUpdateStructs(update);
+    } catch {
+      this.sendSyncError(peer.ws, "更新を解釈できませんでした");
+      return;
+    }
+    if (structs > MAX_SYNC_UPDATE_STRUCTS) {
+      this.sendSyncError(
+        peer.ws,
+        `更新に含まれる変更が多すぎます (上限 ${MAX_SYNC_UPDATE_STRUCTS})`,
+      );
+      return;
+    }
+
     const before = this.updateCount;
     try {
       this.store.world.applyUpdate(update, peer.ws);
@@ -268,24 +345,39 @@ export class SyncHub {
       this.sendSyncError(peer.ws, "更新を適用できませんでした");
       return;
     }
-    // 同じ更新の再送などで Yjs が変更を出さない場合も、保存を待って ACK を返す
-    if (this.updateCount === before) {
-      void this.store
-        .scheduleSave()
-        .then(() => this.sendAck(peer.ws))
-        .catch((err: unknown) => this.sendSyncError(peer.ws, `保存できませんでした: ${String(err)}`));
+    // 適用後にオブジェクト数の上限を超えたら、以後このピアの更新は受け付けない (オブジェクトは消さない)
+    if (this.store.world.count() > MAX_WORLD_OBJECTS) {
+      peer.blocked = true;
+      this.log(
+        `peer ${peer.peerId} exceeded the object limit (${MAX_WORLD_OBJECTS}); ` +
+          `the document now has ${this.store.world.count()} object(s)`,
+      );
+      this.sendSyncError(
+        peer.ws,
+        `オブジェクト数が上限 (${MAX_WORLD_OBJECTS}) を超えました。これ以降の更新は受け付けません`,
+      );
+      return;
     }
+    // 同じ更新の再送などで Yjs が変更を出さない場合も、保存を待って ACK を返す
+    if (this.updateCount === before) this.sendAck(peer.ws);
   }
 
   private onClaim(ws: WebSocket, msg: Extract<ClientMessage, { type: "claim" }>): void {
     const peer = this.peers.get(ws);
     if (!peer) return;
     if (!this.requireReady(ws)) return;
-    if (msg.until > Date.now() + MAX_CLAIM_AHEAD_MS) {
+    const now = Date.now();
+    this.pruneClaims(now);
+    if (msg.until <= now) {
+      this.sendSyncError(ws, "claim の期限が過ぎています");
+      return;
+    }
+    if (msg.until > now + MAX_CLAIM_AHEAD_MS) {
       this.sendSyncError(ws, "claim の期限が長すぎます");
       return;
     }
-    this.claimSeqs.set(`${peer.peerId}:${msg.id}:${msg.sessionId}`, msg.seq);
+    const key = `${peer.peerId}:${msg.id}:${msg.sessionId}`;
+    this.rememberClaim(peer.peerId, key, msg.seq, msg.until);
     this.broadcast(
       { type: "claim", id: msg.id, peerId: peer.peerId, sessionId: msg.sessionId, seq: msg.seq, until: msg.until },
       ws,
@@ -296,10 +388,51 @@ export class SyncHub {
     const peer = this.peers.get(ws);
     if (!peer) return;
     if (!this.requireReady(ws)) return;
+    const now = Date.now();
+    this.pruneClaims(now);
     const key = `${peer.peerId}:${msg.id}:${msg.sessionId}`;
-    const seq = (this.claimSeqs.get(key) ?? 0) + 1;
-    this.claimSeqs.set(key, seq);
+    const seq = (this.claimSeqs.get(key)?.seq ?? 0) + 1;
+    // release の seq は、後続の release と比べられるよう、しばらく保持する
+    this.rememberClaim(peer.peerId, key, seq, now + CLAIM_RELEASE_RETENTION_MS);
     this.broadcast({ type: "claim", id: msg.id, peerId: peer.peerId, sessionId: msg.sessionId, seq, until: 0 }, ws);
+  }
+
+  /** 期限切れの claim seq を捨てる。 */
+  private pruneClaims(now: number): void {
+    for (const [key, entry] of this.claimSeqs) {
+      if (entry.expiresAt <= now) this.claimSeqs.delete(key);
+    }
+  }
+
+  /** claim seq を記録する。ピアごとの上限を超えたら、いちばん古い項目を追い出す。 */
+  private rememberClaim(peerId: string, key: string, seq: number, expiresAt: number): void {
+    if (!this.claimSeqs.has(key)) {
+      const prefix = `${peerId}:`;
+      let count = 0;
+      for (const existing of this.claimSeqs.keys()) {
+        if (existing.startsWith(prefix)) count++;
+      }
+      if (count >= MAX_CLAIM_SEQS_PER_PEER) {
+        for (const existing of this.claimSeqs.keys()) {
+          if (!existing.startsWith(prefix)) continue;
+          this.claimSeqs.delete(existing);
+          break;
+        }
+        this.log(`evicted an old claim seq for ${peerId} (limit ${MAX_CLAIM_SEQS_PER_PEER})`);
+      }
+    }
+    this.claimSeqs.set(key, { seq, expiresAt });
+  }
+
+  /** テスト・診断用: 保持している claim seq の数 (peerId を渡すとそのピア分)。 */
+  claimSeqCount(peerId?: string): number {
+    if (peerId === undefined) return this.claimSeqs.size;
+    const prefix = `${peerId}:`;
+    let count = 0;
+    for (const key of this.claimSeqs.keys()) {
+      if (key.startsWith(prefix)) count++;
+    }
+    return count;
   }
 
   private onWorldUpdate(update: Uint8Array, origin: unknown): void {
@@ -311,10 +444,7 @@ export class SyncHub {
         this.sendDocument(peer, "update", update);
       }
       // 受信した側には、保存が確定してから ACK を返す
-      void this.store
-        .scheduleSave()
-        .then(() => this.sendAck(source.ws))
-        .catch((err: unknown) => this.sendSyncError(source.ws, `保存できませんでした: ${String(err)}`));
+      this.sendAck(source.ws);
       return;
     }
 
@@ -342,8 +472,25 @@ export class SyncHub {
     }
   }
 
+  /**
+   * ACK は「ディスクに確定した state vector」だけを返す。
+   * 未保存の変更があれば保存してから送り、失敗したら sync_error にする。
+   */
   private sendAck(ws: WebSocket): void {
-    this.send(ws, { type: "sync_ack", stateVector: toBase64(this.store.world.encodeStateVector()) });
+    const peer = this.peers.get(ws);
+    if (!peer || peer.blocked || this.closed) return;
+    void this.ackWhenDurable(peer);
+  }
+
+  private async ackWhenDurable(peer: Peer): Promise<void> {
+    try {
+      if (this.store.hasUnsavedChanges()) await this.store.scheduleSave();
+    } catch (err) {
+      this.sendSyncError(peer.ws, `保存できませんでした: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (peer.blocked || this.peers.get(peer.ws) !== peer || this.closed) return;
+    this.send(peer.ws, { type: "sync_ack", stateVector: toBase64(this.store.durableVector()) });
   }
 
   private broadcast(msg: ServerMessage, except: WebSocket): void {

@@ -8,7 +8,21 @@ import type {
   WorldObject,
 } from "@proto/protocol";
 import type { ObjectMetadataPatch, WorldDocOptions, WorldTransform } from "./types.js";
-import { isFileCategory, isFiniteNumber, isValidObjectId, isValidTransform, isValidVec3, isValidWorldObjectRecord } from "./validate.js";
+import {
+  isFileCategory,
+  isFiniteNumber,
+  isValidBoxSize,
+  isValidCid,
+  isValidColor,
+  isValidFileSize,
+  isValidHttpUrl,
+  isValidObjectId,
+  isValidObjectName,
+  isValidOwner,
+  isValidPosition,
+  isValidTransform,
+  isValidWorldObjectRecord,
+} from "./validate.js";
 
 function fallbackId(): string {
   const bytes = new Uint8Array(16);
@@ -34,10 +48,15 @@ function clonePosition(position: Vec3): Vec3 {
   return [position[0], position[1], position[2]];
 }
 
-function projectObject(id: string, value: unknown): WorldObject | undefined {
+function projectObject(
+  id: string,
+  value: unknown,
+  transforms?: Y.Map<WorldTransform>,
+): WorldObject | undefined {
   if (!isValidObjectId(id) || !(value instanceof Y.Map)) return undefined;
   const kind = value.get("kind");
-  const transform = value.get("transform");
+  const shared = transforms?.get(id);
+  const transform = isValidTransform(shared) ? shared : value.get("transform");
   if (!isValidTransform(transform)) return undefined;
 
   const position = clonePosition(transform.position);
@@ -54,10 +73,10 @@ function projectObject(id: string, value: unknown): WorldObject | undefined {
       const width = value.get("width");
       const height = value.get("height");
       const name = value.get("name");
-      if (typeof cid !== "string" || cid.length === 0) return undefined;
+      if (!isValidCid(cid)) return undefined;
       if (!isFiniteNumber(width) || width <= 0) return undefined;
       if (!isFiniteNumber(height) || height <= 0) return undefined;
-      if (name !== undefined && typeof name !== "string") return undefined;
+      if (name !== undefined && !isValidObjectName(name)) return undefined;
       const image: ImageObject = {
         ...base,
         kind: "image",
@@ -76,12 +95,12 @@ function projectObject(id: string, value: unknown): WorldObject | undefined {
       const category = value.get("category");
       const owner = value.get("owner");
       const offline = value.get("offline");
-      if (typeof cid !== "string" || cid.length === 0) return undefined;
-      if (typeof name !== "string") return undefined;
-      if (!isFiniteNumber(size) || size < 0) return undefined;
+      if (!isValidCid(cid)) return undefined;
+      if (!isValidObjectName(name)) return undefined;
+      if (!isValidFileSize(size)) return undefined;
       if (stored !== undefined && typeof stored !== "boolean") return undefined;
       if (!isFileCategory(category)) return undefined;
-      if (owner !== undefined && typeof owner !== "string") return undefined;
+      if (owner !== undefined && !isValidOwner(owner)) return undefined;
       if (offline !== undefined && typeof offline !== "boolean") return undefined;
       const file: FileObject = {
         ...base,
@@ -99,20 +118,14 @@ function projectObject(id: string, value: unknown): WorldObject | undefined {
     case "box": {
       const size = value.get("size");
       const color = value.get("color");
-      if (!isFiniteNumber(size) || size <= 0) return undefined;
-      if (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color)) return undefined;
+      if (!isValidBoxSize(size)) return undefined;
+      if (!isValidColor(color)) return undefined;
       const box: BoxObject = { ...base, kind: "box", size, color };
       return box;
     }
     case "link": {
       const url = value.get("url");
-      if (typeof url !== "string") return undefined;
-      try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-      } catch {
-        return undefined;
-      }
+      if (!isValidHttpUrl(url)) return undefined;
       const link: LinkObject = { ...base, kind: "link", url };
       return link;
     }
@@ -125,6 +138,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function has(value: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
+const FILE_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "stored",
+  "size",
+  "category",
+  "owner",
+  "offline",
+  "name",
+]);
+
 export class WorldDoc {
   readonly doc: Y.Doc;
   readonly actorId: string;
@@ -132,6 +158,7 @@ export class WorldDoc {
   private readonly now: () => number;
   private readonly idFactory: () => string;
   private readonly objects: Y.Map<Y.Map<unknown>>;
+  private readonly transforms: Y.Map<WorldTransform>;
   private readonly deleted: Y.Map<boolean>;
   private readonly meta: Y.Map<unknown>;
 
@@ -144,6 +171,7 @@ export class WorldDoc {
     this.now = options.now ?? (() => Date.now());
     this.idFactory = options.idFactory ?? defaultIdFactory;
     this.objects = this.doc.getMap<Y.Map<unknown>>("objects");
+    this.transforms = this.doc.getMap<WorldTransform>("transforms");
     this.deleted = this.doc.getMap<boolean>("deleted");
     this.meta = this.doc.getMap<unknown>("meta");
   }
@@ -181,8 +209,8 @@ export class WorldDoc {
   getObjects(): WorldObject[] {
     const objects: WorldObject[] = [];
     for (const [id, value] of this.objects) {
-      if (this.deleted.get(id) === true) continue;
-      const object = projectObject(id, value);
+      if (this.deleted.has(id)) continue;
+      const object = projectObject(id, value, this.transforms);
       if (object !== undefined) objects.push(object);
     }
     objects.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -190,12 +218,12 @@ export class WorldDoc {
   }
 
   getObject(id: string): WorldObject | undefined {
-    if (this.deleted.get(id) === true) return undefined;
-    return projectObject(id, this.objects.get(id));
+    if (this.deleted.has(id)) return undefined;
+    return projectObject(id, this.objects.get(id), this.transforms);
   }
 
   isDeleted(id: string): boolean {
-    return this.deleted.get(id) === true;
+    return this.deleted.has(id);
   }
 
   count(): number {
@@ -205,7 +233,7 @@ export class WorldDoc {
   createObject(object: WorldObject, origin?: unknown): boolean {
     if (!isValidWorldObjectRecord(object)) return false;
     const id = object.id;
-    if (this.deleted.get(id) === true || this.objects.has(id)) return false;
+    if (this.deleted.has(id) || this.objects.has(id)) return false;
     this.doc.transact(() => {
       this.writeObject(object);
     }, origin);
@@ -220,12 +248,13 @@ export class WorldDoc {
     extra?: { updateId?: string },
   ): boolean {
     if (!isValidObjectId(id)) return false;
-    if (!isValidVec3(position) || !isFiniteNumber(yaw)) return false;
+    if (!isValidPosition(position) || !isFiniteNumber(yaw)) return false;
     if (pitch !== undefined && !isFiniteNumber(pitch)) return false;
-    if (this.deleted.get(id) === true) return false;
+    if (this.deleted.has(id)) return false;
     const record = this.objects.get(id);
     if (!(record instanceof Y.Map)) return false;
-    const current = record.get("transform");
+    const shared = this.transforms.get(id);
+    const current = isValidTransform(shared) ? shared : record.get("transform");
     if (!isValidTransform(current)) return false;
 
     const effectivePitch = pitch !== undefined ? pitch : current.pitch;
@@ -233,38 +262,66 @@ export class WorldDoc {
       extra !== undefined && typeof extra.updateId === "string" && extra.updateId.length > 0
         ? extra.updateId
         : this.idFactory();
+    const next = this.makeTransform(position, yaw, effectivePitch, updateId);
     this.doc.transact(() => {
-      record.set("transform", this.makeTransform(position, yaw, effectivePitch, updateId));
+      this.transforms.set(id, next);
+      record.set("transform", next);
     });
     return true;
   }
 
   setMetadata(id: string, patch: ObjectMetadataPatch, _extra?: { updateId?: string }): boolean {
     if (!isValidObjectId(id) || !isRecord(patch)) return false;
-    if (this.deleted.get(id) === true) return false;
+    if (this.deleted.has(id)) return false;
     const record = this.objects.get(id);
     if (!(record instanceof Y.Map)) return false;
 
-    const has = (key: string): boolean => Object.hasOwn(patch, key);
-    if (has("stored") && patch.stored !== undefined && typeof patch.stored !== "boolean") return false;
-    if (has("size") && patch.size !== undefined && (!isFiniteNumber(patch.size) || patch.size < 0)) return false;
-    if (has("category") && patch.category !== undefined && !isFileCategory(patch.category)) return false;
-    if (has("owner") && patch.owner !== undefined && typeof patch.owner !== "string") return false;
-    if (has("offline") && patch.offline !== undefined && typeof patch.offline !== "boolean") return false;
-    if (has("name") && patch.name !== undefined && typeof patch.name !== "string") return false;
+    const kind = record.get("kind");
+    const fields = patch as Record<string, unknown>;
+    if (kind === "image") {
+      for (const key of Object.keys(fields)) {
+        if (key !== "name") return false;
+      }
+      if (has(fields, "name") && fields["name"] !== undefined && typeof fields["name"] !== "string") {
+        return false;
+      }
+    } else if (kind === "file") {
+      const allowed = FILE_METADATA_KEYS;
+      for (const key of Object.keys(fields)) {
+        if (!allowed.has(key)) return false;
+      }
+      if (has(fields, "stored") && fields["stored"] !== undefined && typeof fields["stored"] !== "boolean") {
+        return false;
+      }
+      if (has(fields, "size") && fields["size"] !== undefined && !isValidFileSize(fields["size"])) return false;
+      if (has(fields, "category") && fields["category"] !== undefined && !isFileCategory(fields["category"])) {
+        return false;
+      }
+      if (has(fields, "owner") && fields["owner"] !== undefined && !isValidOwner(fields["owner"])) return false;
+      if (has(fields, "offline") && fields["offline"] !== undefined && typeof fields["offline"] !== "boolean") {
+        return false;
+      }
+      if (has(fields, "name") && fields["name"] !== undefined && !isValidObjectName(fields["name"])) return false;
+    } else {
+      return false;
+    }
 
     this.doc.transact(() => {
-      if (patch.stored !== undefined) record.set("stored", patch.stored);
-      if (patch.size !== undefined) record.set("size", patch.size);
-      if (patch.category !== undefined) record.set("category", patch.category);
-      if (patch.name !== undefined) record.set("name", patch.name);
+      if (kind === "image") {
+        if (isValidObjectName(fields["name"])) record.set("name", fields["name"]);
+        return;
+      }
+      if (fields["stored"] !== undefined) record.set("stored", fields["stored"]);
+      if (fields["size"] !== undefined) record.set("size", fields["size"]);
+      if (fields["category"] !== undefined) record.set("category", fields["category"]);
+      if (isValidObjectName(fields["name"])) record.set("name", fields["name"]);
 
-      if (has("owner")) {
-        if (typeof patch.owner === "string" && patch.owner.length > 0) record.set("owner", patch.owner);
+      if (has(fields, "owner")) {
+        if (isValidOwner(fields["owner"]) && fields["owner"].length > 0) record.set("owner", fields["owner"]);
         else record.delete("owner");
       }
-      if (has("offline")) {
-        if (patch.offline === true) record.set("offline", true);
+      if (has(fields, "offline")) {
+        if (fields["offline"] === true) record.set("offline", true);
         else record.delete("offline");
       }
     });
@@ -273,7 +330,7 @@ export class WorldDoc {
 
   deleteObject(id: string, origin?: unknown): boolean {
     if (!isValidObjectId(id)) return false;
-    if (this.deleted.get(id) === true) return true;
+    if (this.deleted.has(id)) return true;
     this.doc.transact(() => {
       this.deleted.set(id, true);
     }, origin);
@@ -283,7 +340,7 @@ export class WorldDoc {
   duplicateObject(sourceId: string, newObject: WorldObject): boolean {
     if (!isValidWorldObjectRecord(newObject)) return false;
     if (!isValidObjectId(sourceId) || newObject.id === sourceId) return false;
-    if (this.deleted.get(sourceId) === true) return false;
+    if (this.deleted.has(sourceId)) return false;
     if (this.getObject(sourceId) === undefined) return false;
     return this.createObject(newObject);
   }
@@ -293,12 +350,12 @@ export class WorldDoc {
       const snapshotIds = new Set<string>();
       for (const object of objects) {
         if (!isValidWorldObjectRecord(object)) continue;
-        if (this.deleted.get(object.id) === true) continue;
+        if (this.deleted.has(object.id)) continue;
         snapshotIds.add(object.id);
         this.upsertObject(object);
       }
       for (const id of [...this.objects.keys()]) {
-        if (!snapshotIds.has(id) && this.deleted.get(id) !== true) {
+        if (!snapshotIds.has(id) && !this.deleted.has(id)) {
           this.deleted.set(id, true);
         }
       }
@@ -309,7 +366,7 @@ export class WorldDoc {
     this.doc.transact(() => {
       for (const object of objects) {
         if (!isValidWorldObjectRecord(object)) continue;
-        if (this.deleted.get(object.id) === true) continue;
+        if (this.deleted.has(object.id)) continue;
         this.upsertObject(object);
       }
     }, origin);
@@ -339,10 +396,9 @@ export class WorldDoc {
   private writeObject(object: WorldObject): void {
     const record = new Y.Map<unknown>();
     record.set("kind", object.kind);
-    record.set(
-      "transform",
-      this.makeTransform(object.position, object.yaw, object.pitch),
-    );
+    const transform = this.makeTransform(object.position, object.yaw, object.pitch);
+    record.set("transform", transform);
+    this.transforms.set(object.id, transform);
 
     switch (object.kind) {
       case "image":
@@ -385,8 +441,11 @@ export class WorldDoc {
       return;
     }
 
-    existing.set("transform", this.makeTransform(object.position, object.yaw, object.pitch));
     if (existing.get("kind") !== object.kind) return;
+
+    const transform = this.makeTransform(object.position, object.yaw, object.pitch);
+    existing.set("transform", transform);
+    this.transforms.set(object.id, transform);
 
     if (object.kind === "file") {
       existing.set("name", object.name);
@@ -416,6 +475,18 @@ export const DEMO_BOXES: ReadonlyArray<{
   { position: [-10, 0, 7], yaw: 0, size: 3, color: "#9b59b6" },
 ];
 
+/**
+ * デモボックスは、オフラインだった複数のレプリカが後から同期しても
+ * 同じ id で衝突するよう、固定の UUID を使う。
+ */
+const DEMO_BOX_IDS: ReadonlyArray<string> = [
+  "5eed0000-0000-4000-8000-000000000001",
+  "5eed0000-0000-4000-8000-000000000002",
+  "5eed0000-0000-4000-8000-000000000003",
+  "5eed0000-0000-4000-8000-000000000004",
+  "5eed0000-0000-4000-8000-000000000005",
+];
+
 export function seedDemoBoxes(world: WorldDoc): void {
   const meta = world.doc.getMap<unknown>("meta");
   const objects = world.doc.getMap<Y.Map<unknown>>("objects");
@@ -423,9 +494,10 @@ export function seedDemoBoxes(world: WorldDoc): void {
 
   world.doc.transact(() => {
     meta.set("seeded", "v1");
-    for (const box of DEMO_BOXES) {
+    for (let index = 0; index < DEMO_BOXES.length; index++) {
+      const box = DEMO_BOXES[index]!;
       world.createObject({
-        id: defaultIdFactory(),
+        id: DEMO_BOX_IDS[index]!,
         kind: "box",
         position: clonePosition(box.position),
         yaw: box.yaw,

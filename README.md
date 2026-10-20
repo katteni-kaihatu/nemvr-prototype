@@ -96,13 +96,17 @@ pnpm test        # 単体テスト
 サーバーやピアが一時的に停止・分断しても基本編集を続け、復旧後に統合する実験モード (`crdt-v1`)。実装済みで opt-in。既定は従来どおり legacy モードで、5 個のデモボックス・`sync` なし・4 KiB の WS 上限・起動時のブロックストア削除はそのまま。信頼できる少人数の実験専用で、認証・権限・本番公開は対象外。
 
 ```sh
-SYNC_MODE=crdt-v1 CRDT_DATA_DIR=./.crdt-data pnpm dev:server
+SYNC_MODE=crdt-v1 CRDT_DATA_DIR="$(pwd)/.crdt-data" pnpm dev:server
 VITE_SYNC_MODE=crdt-v1 pnpm dev:client
 ```
 
+`pnpm dev:server` は `apps/server` で実行されるため、`CRDT_DATA_DIR=./.crdt-data` は `apps/server/.crdt-data` を指す。取り違えを避けるため、絶対パスを推奨する。
+
 サーバーとクライアントのモードを揃える。停止中も移動・複製・削除・ボックスやリンクの作成は続けられ、復旧後に state vector と差分で統合する。crdt-v1 の HUD には実験用の「実験: ボックスを置く」「実験: リンクを置く」ボタンがあり、リンクはサーバーを通さず URL をそのまま文書へ置く (`http(s)` のみ)。ファイルの新規検証・URL のメディア取り込み・新規参加はサーバーの復帰を待つ (動画同期は crdt-v1 では未対応)。
 
-Node / 単体テストは通過済み (26 ファイル / 395 件)。実際のブラウザでの IndexedDB、サーバー / ネットワーク障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証。設計・設定・障害試験の詳細は [CRDT 実験モード](docs/crdt-experiment.md) を参照。
+サーバーはマージ前の更新を 8 MiB / 10,000 struct で拒否し、マージ後の文書が 1,000 オブジェクトを超えたピアの更新を停止する。配置経路は 100 個で拒否するが、分断後のマージで 100 個を超えることはあり、超過を表示する専用 HUD はない。同期エラーは HUD に `同期エラー` として表示する。
+
+Node / 単体テストは通過済み (27 ファイル / 443 件)。実際のブラウザでの IndexedDB、サーバー / ネットワーク障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証。設計・設定・障害試験の詳細は [CRDT 実験モード](docs/crdt-experiment.md) を参照。
 
 ## ドキュメント
 

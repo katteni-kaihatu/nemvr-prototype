@@ -187,6 +187,13 @@ export class ContentStore {
         continue;
       }
       if (this.entries.has(entry.cid)) continue;
+      if (this.total + entry.size > this.options.maxTotalBytes) {
+        this.log(
+          `skipping ${entry.cid} while restoring: it would exceed the capacity limit (${this.options.maxTotalBytes} bytes)`,
+        );
+        changed = true;
+        continue;
+      }
       try {
         if (!(await this.backend.has(entry.cid))) {
           this.log(`dropping ${entry.cid}: the blockstore does not have it`);

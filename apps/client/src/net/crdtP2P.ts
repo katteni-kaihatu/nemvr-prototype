@@ -1,5 +1,5 @@
 import type { ClientMessage, ServerMessage } from "@proto/protocol";
-import { TransferAssembler, encodeTransfer, fromBase64, toBase64 } from "@proto/world-sync";
+import { TransferAssembler, encodeTransfer, fromBase64, stateVectorEquals, toBase64 } from "@proto/world-sync";
 import type { CrdtPeerTransport, CrdtWorld } from "./crdt";
 import {
   WORLD_SYNC_PROTOCOL,
@@ -33,7 +33,8 @@ export type PeerFrame =
   | { t: "update"; update: string }
   | { t: "part"; transferId: string; index: number; count: number; data: string }
   | { t: "ack"; vector: string }
-  | { t: "claim"; id: string; sessionId: string; seq: number; until: number }
+  /** peerId は WS 側の ID (あれば)。無ければ受信側が libp2p の ID を使う。 */
+  | { t: "claim"; id: string; sessionId: string; seq: number; until: number; peerId?: string }
   | { t: "claim_release"; id: string; sessionId: string }
   | { t: "error"; message: string };
 
@@ -87,7 +88,8 @@ export function isPeerFrame(value: unknown): value is PeerFrame {
         isNonEmptyString(value["id"]) &&
         isNonEmptyString(value["sessionId"]) &&
         isFiniteNumber(value["seq"]) &&
-        isFiniteNumber(value["until"])
+        isFiniteNumber(value["until"]) &&
+        (value["peerId"] === undefined || isNonEmptyString(value["peerId"]))
       );
     case "claim_release":
       return isNonEmptyString(value["id"]) && isNonEmptyString(value["sessionId"]);
@@ -200,6 +202,8 @@ export interface PeerSessionOptions {
   /** 相手の hello を受け入れた (worldId / schema が一致した)。 */
   onHandshake?(): void;
   onError?(message: string): void;
+  /** 致命的な同期エラー (handshake の不一致など) を HUD に伝える。 */
+  onSyncError?(message: string): void;
   /** transferId の生成 (テストで固定できる)。 */
   idFactory?(): string;
 }
@@ -220,6 +224,10 @@ export class PeerSession {
   /** release に使う、このピアから見た最後の claim seq (id:sessionId ごと)。 */
   private readonly claimSeqs = new Map<string, number>();
   private closed = false;
+  /** 有効な hello を受け取ったか。それまでは hello 以外を受け付けない。 */
+  private helloReceived = false;
+  private negotiatedWorldId: string | null = null;
+  private negotiatedSchemaVersion: number | null = null;
 
   constructor(private readonly options: PeerSessionOptions) {}
 
@@ -262,7 +270,13 @@ export class PeerSession {
     }
   }
 
-  sendClaim(claim: { id: string; sessionId: string; seq: number; until: number }): void {
+  sendClaim(claim: {
+    id: string;
+    sessionId: string;
+    seq: number;
+    until: number;
+    peerId?: string;
+  }): void {
     this.emit({ t: "claim", ...claim });
   }
 
@@ -279,6 +293,11 @@ export class PeerSession {
     try {
       if (!isPeerFrame(frame)) {
         this.fail("不正なフレームです");
+        return;
+      }
+      // hello が成立するまでは、hello 以外のフレームを一切適用しない
+      if (!this.helloReceived && frame.t !== "hello") {
+        this.reject("hello が必要です");
         return;
       }
       switch (frame.t) {
@@ -302,6 +321,7 @@ export class PeerSession {
           this.onClaimRelease(frame);
           break;
         case "error":
+          this.reportSyncError(frame.message);
           this.fail(frame.message);
           break;
       }
@@ -311,6 +331,14 @@ export class PeerSession {
   }
 
   private onHello(frame: Extract<PeerFrame, { t: "hello" }>): void {
+    // 2 回目以降の hello は、最初に合意した world / schema から変わっていないことを確認する
+    if (
+      this.helloReceived &&
+      (frame.worldId !== this.negotiatedWorldId || frame.schemaVersion !== this.negotiatedSchemaVersion)
+    ) {
+      this.reject("handshake 後に worldId / schemaVersion が変わりました");
+      return;
+    }
     let local: PeerHello;
     try {
       local = this.options.getHello();
@@ -319,30 +347,32 @@ export class PeerSession {
       return;
     }
     if (frame.worldId !== local.worldId) {
-      this.emit({ t: "error", message: `worldId が一致しません (${frame.worldId} != ${local.worldId})` });
-      this.fail("worldId mismatch");
+      this.reject(`worldId が一致しません (${frame.worldId} != ${local.worldId})`);
       return;
     }
     if (frame.schemaVersion !== local.schemaVersion) {
-      this.emit({
-        t: "error",
-        message: `schemaVersion が一致しません (${frame.schemaVersion} != ${local.schemaVersion})`,
-      });
-      this.fail("schemaVersion mismatch");
+      this.reject(`schemaVersion が一致しません (${frame.schemaVersion} != ${local.schemaVersion})`);
       return;
     }
     const vector = fromBase64(frame.vector);
     if (vector === null) {
-      this.emit({ t: "error", message: "state vector が base64 として不正です" });
-      this.fail("invalid state vector");
+      this.reject("state vector が base64 として不正です");
       return;
     }
+    this.helloReceived = true;
+    this.negotiatedWorldId = frame.worldId;
+    this.negotiatedSchemaVersion = frame.schemaVersion;
     this.options.onHandshake?.();
     try {
-      const diff = this.options.diffFor(vector);
-      // 差分が無くても init は返す (相手は適用しても何も変わらない)
-      if (isEmptyUpdate(diff)) this.emit({ t: "init", update: toBase64(diff) });
-      else this.sendUpdate(diff, "init");
+      // 既に同じ state vector なら、delete set だけの差分を送らない
+      const localVector = fromBase64(local.vector);
+      const sameVector = localVector !== null && stateVectorEquals(vector, localVector);
+      if (!sameVector) {
+        const diff = this.options.diffFor(vector);
+        // 差分が無くても init は返す (相手は適用しても何も変わらない)
+        if (isEmptyUpdate(diff)) this.emit({ t: "init", update: toBase64(diff) });
+        else this.sendUpdate(diff, "init");
+      }
     } catch (error) {
       this.options.onError?.(`差分を作れませんでした: ${describeError(error)}`);
     }
@@ -375,6 +405,15 @@ export class PeerSession {
   private onAck(vectorBase64: string): void {
     const vector = fromBase64(vectorBase64);
     if (vector === null) return;
+    let localVector: Uint8Array | null = null;
+    try {
+      localVector = fromBase64(this.options.getHello().vector);
+    } catch (error) {
+      this.options.onError?.(`state vector を読めませんでした: ${describeError(error)}`);
+      return;
+    }
+    // もう同じ state vector なら送るものは無い。delete set だけの差分で ack を往復させない
+    if (localVector !== null && stateVectorEquals(vector, localVector)) return;
     let diff: Uint8Array;
     try {
       diff = this.options.diffFor(vector);
@@ -394,7 +433,8 @@ export class PeerSession {
     this.options.onClaim?.({
       type: "claim",
       id: frame.id,
-      peerId: this.options.peerId,
+      // WS の peerId が分かるならそれを使う (WS と P2P の claim を同じ人として表示する)
+      peerId: frame.peerId ?? this.options.peerId,
       sessionId: frame.sessionId,
       seq: frame.seq,
       until: frame.until,
@@ -455,6 +495,22 @@ export class PeerSession {
     } catch (error) {
       this.fail(describeError(error));
       return false;
+    }
+  }
+
+  /** プロトコル違反: 相手に error を返してから、このリンクを閉じる。 */
+  private reject(message: string): void {
+    if (this.closed) return;
+    this.emit({ t: "error", message });
+    this.reportSyncError(message);
+    this.fail(message);
+  }
+
+  private reportSyncError(message: string): void {
+    try {
+      this.options.onSyncError?.(message);
+    } catch {
+      // 通知側の失敗でセッションを壊さない
     }
   }
 
@@ -604,9 +660,17 @@ const peerTransport: CrdtPeerTransport = {
   },
   sendEphemeral(msg: ClientMessage) {
     if (msg.type === "claim") {
+      // WS 側の peerId を載せる (未入室なら受信側が libp2p の ID にフォールバックする)
+      const wsPeerId = currentWorld()?.selfPeerId();
       for (const link of links.values()) {
         if (link.closed || !link.helloOk) continue;
-        link.session.sendClaim({ id: msg.id, sessionId: msg.sessionId, seq: msg.seq, until: msg.until });
+        link.session.sendClaim({
+          id: msg.id,
+          sessionId: msg.sessionId,
+          seq: msg.seq,
+          until: msg.until,
+          ...(wsPeerId ? { peerId: wsPeerId } : {}),
+        });
       }
     } else if (msg.type === "claim_release") {
       for (const link of links.values()) {
@@ -796,6 +860,10 @@ function adoptStream(peerId: string, stream: Libp2pStream, direction: "inbound" 
       updateStatus();
     },
     onError: (message) => log(`peer ${short(peerId)}: ${message}`),
+    onSyncError: (message) => {
+      log(`peer ${short(peerId)} sync error: ${message}`);
+      currentWorld()?.reportSyncError(message);
+    },
   });
 
   const link: PeerLink = {

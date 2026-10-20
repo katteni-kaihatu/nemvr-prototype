@@ -44,7 +44,7 @@ graph LR
 | `IPFS_PORT` | `8081` | libp2p の WebSocket |
 | `IPFS_PUBLIC_PORT` | `IPFS_PORT` と同じ | ブラウザから見た libp2p のポート (Caddy の 8443)。`welcome` でクライアントに伝える |
 | `CONTENT_MAX_TOTAL_MB` | `20480` (20 GiB) | サーバーが保持する画像・ファイルの合計サイズの上限 (MB)。ディスクに置くので、ディスクの空きより十分小さくすること |
-| `BLOCKSTORE_DIR` | 一時ディレクトリの `vr-sns-proto-blocks` | 画像・ファイルの中身を置くディレクトリ。起動のたびに空にする。本番は `/var/lib/proto/blocks` (systemd の `StateDirectory`) |
+| `BLOCKSTORE_DIR` | 一時ディレクトリの `vr-sns-proto-blocks` | 画像・ファイルの中身を置くディレクトリ。legacy では起動のたびに空にする。crdt-v1 では (`BLOCKSTORE_DIR` を指定しない限り) `CRDT_DATA_DIR/blocks` を使い、再起動後も保持する。本番は `/var/lib/proto/blocks` (systemd の `StateDirectory`) |
 | `TURN_HOST` | (なし) | TURN サーバーのホスト名。`TURN_SECRET` とあわせて設定したときだけ TURN を配る |
 | `TURN_PORT` | `3478` | TURN のポート |
 | `TURN_SECRET` | (なし) | coturn の `static-auth-secret` と同じ値。クライアントには渡らない |
@@ -118,7 +118,7 @@ VPS に coturn を入れてあり、サーバーが入室 (`welcome`) のたび�
 
 - **証明書の取得に失敗している間、Caddy は自動で再試行する** (Let's Encrypt のレート制限を避けるため、途中からステージング環境で試す)。
   ポートを開けた後に急ぐ場合は `systemctl restart caddy`。
-- サーバーを再起動すると、置かれた画像とワールドの状態は消える (メモリのみ)。
+- legacy では、サーバーを再起動すると、置かれた画像とワールドの状態は消える (メモリのみ、ブロックストアも起動時に空にする)。`crdt-v1` は `CRDT_DATA_DIR` と `blocks/` を保持するが、公開デプロイ向けのモードではない (信頼できる少人数の実験専用)。
 - 認証がなく、誰でも入室して画像・ファイルを置ける。オブジェクト数 (100)・画像サイズ (5MB)・ファイルサイズ (2 GiB)・保持する合計サイズ (20 GiB)・同時の取り込み数 (4) の上限があるだけで、内容の検査 (ウイルス、違法なコンテンツ) や、削除の権限管理は無い。公開範囲には注意すること。
 - Node / pnpm のバージョンは `deploy/setup-vps.sh` の `NODE_VERSION` / `PNPM_VERSION` で固定している (開発環境と同じ)。
 

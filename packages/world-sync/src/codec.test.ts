@@ -43,6 +43,14 @@ describe("base64", () => {
     expect(fromBase64("****")).toBeNull();
     expect(fromBase64("AAAA=")).toBeNull();
   });
+
+  it("rejects non-canonical trailing bits", () => {
+    expect(fromBase64("AA==")).toEqual(new Uint8Array([0]));
+    expect(fromBase64("AAA=")).toEqual(new Uint8Array([0, 0]));
+    expect(fromBase64("AB==")).toBeNull();
+    expect(fromBase64("AAB=")).toBeNull();
+    expect(fromBase64("//==")).toBeNull();
+  });
 });
 
 describe("encodeTransfer", () => {
@@ -146,6 +154,66 @@ describe("encodeTransfer", () => {
     expect(assembler.accept(first[0]!)).toBeNull();
     expect(assembler.accept(second[0]!)).toBeNull();
     expect(assembler.accept(third[0]!)).toBeNull();
+  });
+
+  it("evicts the oldest transfer when the transfer limit is reached", () => {
+    const assembler = new TransferAssembler({ maxTransfers: 2 });
+    const first = encodeTransfer(bytes(100, 20), "first", 60);
+    const second = encodeTransfer(bytes(100, 21), "second", 60);
+    const third = encodeTransfer(bytes(100, 22), "third", 60);
+
+    expect(assembler.accept(first[0]!, 0)).toBeNull();
+    expect(assembler.accept(second[0]!, 1)).toBeNull();
+    expect(assembler.accept(third[0]!, 2)).toBeNull();
+
+    expect(assembler.accept(first[1]!, 3)).toBeNull();
+    let assembled: Uint8Array | null = null;
+    for (const part of third.slice(1)) {
+      const result = assembler.accept(part, 4);
+      if (result !== null) assembled = result;
+    }
+    expect(assembled).not.toBeNull();
+    expect(Array.from(assembled!)).toEqual(Array.from(bytes(100, 22)));
+  });
+
+  it("caps total bytes across active transfers", () => {
+    const assembler = new TransferAssembler({ maxBytes: 100, maxTotalBytes: 50 });
+    const first = encodeTransfer(bytes(40, 30), "first", 20);
+    const second = encodeTransfer(bytes(40, 31), "second", 20);
+
+    expect(assembler.accept(first[0]!)).toBeNull();
+    expect(assembler.accept(second[0]!)).toBeNull();
+    expect(assembler.accept(first[1]!)).toBeNull();
+
+    const assembled = assembler.accept(second[1]!);
+    expect(assembled).not.toBeNull();
+    expect(Array.from(assembled!)).toEqual(Array.from(bytes(40, 31)));
+  });
+
+  it("does not refresh the TTL when a part is re-touched", () => {
+    const assembler = new TransferAssembler({ ttlMs: 1000 });
+    const parts = encodeTransfer(bytes(100, 32), "ttl", 60);
+    expect(assembler.accept(parts[0]!, 0)).toBeNull();
+    expect(assembler.accept(parts[0]!, 900)).toBeNull();
+    expect(assembler.accept(parts[1]!, 1001)).toBeNull();
+    expect(assembler.accept(parts[0]!, 1001)).not.toBeNull();
+  });
+
+  it("does not let a rewound clock reset the TTL", () => {
+    const assembler = new TransferAssembler({ ttlMs: 100 });
+    const parts = encodeTransfer(bytes(100, 33), "rewind", 60);
+    expect(assembler.accept(parts[0]!, 1000)).toBeNull();
+    expect(assembler.accept(parts[0]!, 0)).toBeNull();
+    expect(assembler.accept(parts[1]!, 1101)).toBeNull();
+    expect(assembler.accept(parts[0]!, 1101)).not.toBeNull();
+  });
+
+  it("rejects excessive part counts", () => {
+    const assembler = new TransferAssembler();
+    const part = encodeTransfer(bytes(10, 34), "parts")[0]!;
+    expect(assembler.accept({ ...part, count: 4097 })).toBeNull();
+    expect(assembler.accept({ ...part, count: 4096, index: 4095 })).toBeNull();
+    expect(assembler.accept({ ...part, count: 4096, index: 4096 })).toBeNull();
   });
 });
 

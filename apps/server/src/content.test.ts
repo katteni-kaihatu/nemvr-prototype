@@ -430,6 +430,23 @@ describe("content ledger", () => {
     expect(store.known("good")).toBeDefined();
   });
 
+  it("does not restore entries that would exceed the total capacity", async () => {
+    const { backend, store } = make(500);
+    backend.put("first", 300);
+    backend.put("too-big", 300);
+    backend.put("fits", 200);
+    await store.restore([
+      { cid: "first", size: 300, head: [...TEXT_HEAD], refs: 1 },
+      { cid: "too-big", size: 300, head: [...TEXT_HEAD], refs: 1 },
+      { cid: "fits", size: 200, head: [...TEXT_HEAD], refs: 1 },
+    ]);
+    expect(store.known("first")).toBeDefined();
+    expect(store.known("too-big")).toBeUndefined();
+    expect(store.known("fits")).toBeDefined();
+    expect(store.totalBytes).toBe(500);
+    expect(backend.pinned.has("too-big")).toBe(false);
+  });
+
   it("notifies onChange after add, retain and release", async () => {
     const backend = new FakeBackend();
     let changes = 0;

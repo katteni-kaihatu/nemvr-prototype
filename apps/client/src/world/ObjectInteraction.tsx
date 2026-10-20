@@ -4,13 +4,13 @@ import { Raycaster, Vector2 } from "three";
 import { TICK_RATE } from "@proto/protocol";
 import {
   applyLocalObjectPose,
+  isCrdtWorldAvailable,
   sendGrabObject,
   sendMoveObject,
   sendReleaseObject,
   showNotice,
   useNet,
 } from "../net/connection";
-import { isCrdtActive } from "../net/crdt";
 import { attach, liftedHeight, pulled, resolve, wrapAngle, type Attachment } from "./carry";
 import { CURSOR_VISIBLE_MS, carry, useInteraction } from "./interaction";
 import { objectMeshes } from "./registry";
@@ -79,7 +79,7 @@ export function ObjectInteraction() {
     if (!id) return;
     const object = useNet.getState().objects[id];
     if (!object) return;
-    if (object.heldBy && object.heldBy !== useNet.getState().self?.id && !isCrdtActive()) {
+    if (object.heldBy && object.heldBy !== useNet.getState().self?.id && !isCrdtWorldAvailable()) {
       showNotice("他の人がつかんでいます", 2500);
       return;
     }

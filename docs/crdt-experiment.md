@@ -1,6 +1,6 @@
 # CRDT 実験モード (crdt-v1)
 
-> **状態**: 実装は一通り完了している。`packages/world-sync`、サーバー / クライアントの永続化、WebSocket 同期、P2P トランスポート、コンテンツ台帳は実装済みで、単体テストと Node 上の smoke test は通っている。一方、実際のブラウザでの IndexedDB、サーバー / ネットワーク障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証。本文では「実装予定」「検証項目」「目標」を区別し、未検証の項目を実装済みとみなさない。検証の内訳は「15. 検証状況」を参照。
+> **状態**: 実装とレビュー指摘の修正は一通り完了している。`packages/world-sync`、サーバー / クライアントの永続化、WebSocket 同期、P2P トランスポート、コンテンツ台帳は実装済みで、単体テストと Node 上の smoke test は通っている。一方、実際のブラウザでの IndexedDB、サーバー / ネットワーク障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証。本文では「実装予定」「検証項目」「目標」を区別し、未検証の項目を実装済みとみなさない。検証の内訳は「15. 検証状況」を参照。
 
 ## 1. 目的
 
@@ -12,7 +12,7 @@
 
 | 障害 | 期待する動作 |
 |---|---|
-| ワールドサーバー停止 | シーンとローカル編集を維持する。接続が残っている P2P 経路で文書の変更と claim を共有する (姿勢は CRDT 文書に含めない) |
+| ワールドサーバー停止 | シーンとローカル編集を維持する。接続が残っている P2P 経路で文書の変更と claim を共有する (姿勢は CRDT 文書に含めない。claim は直接のリンク先にだけ届き、中継はしない) |
 | P2P 経路も消失 | 各端末の編集を保存し、再接続後に統合する。通信できない相手への即時反映は保証しない |
 | ピア切断・タブ終了 | 他の参加者は継続する。つかみ表示は失効し、保存・複製済みの変更は残る |
 | タブ再読み込み・再起動 | ページがロードでき、サーバーに接続できればローカル保存を復元して同期する。サーバーに到達できない間は Lobby のまま |
@@ -45,7 +45,7 @@ graph LR
     end
     subgraph Server
         S[server<br/>Yjs 文書]
-        P[(CRDT_DATA_DIR<br/>atomic snapshot)]
+        P[(CRDT_DATA_DIR<br/>meta.json / doc.bin<br/>content.json / blocks/)]
     end
     L[legacy モード<br/>既存 JSON プロトコル]
 
@@ -58,7 +58,8 @@ graph LR
     S -.-|モード排他・同一文書に混在させない| L
 ```
 
-- ブラウザは Yjs 文書をメモリに持ち、IndexedDB にバイナリ更新を保存する。サーバーも同じ文書をメモリに持ち、`CRDT_DATA_DIR` 配下に atomic snapshot として保存する。
+- `BLOCKSTORE_DIR` を指定すると `blocks/` の代わりにそのディレクトリを使う。`CRDT_DATA_DIR` の外を指すこともできるため、保存場所を分ける場合は両方のバックアップ対象を確認する。
+- ブラウザは Yjs 文書をメモリに持ち、IndexedDB にバイナリ更新を保存する。サーバーも同じ文書をメモリに持ち、`CRDT_DATA_DIR` 配下に `meta.json` (worldId・schemaVersion)、`doc.bin` (Yjs 文書)、`content.json` (コンテンツ台帳)、`blocks/` (ブロックストア) を保存する。書き込み中は `*.tmp-*` の一時ファイルが作られる。Helia の datastore・pin 情報・サーバーの libp2p identity は永続化しないため、サーバーの peerId は再起動のたびに変わる。クライアントは `welcome` で新しい peerId を受け取る。
 - 同期は WebSocket のリレーと、既存の libp2p 接続 (WebRTC / circuit relay) 上のカスタム stream `/proto/world-sync/1.0.0` の二経路で実装している。更新元の経路を origin として管理し、受信元への即時エコーを避けつつ他の経路へ中継する。
 - **P2P トランスポートは実装済み**。停止前に確立していた WebRTC / circuit relay のリンクがあれば、サーバー / リレー停止中もそのリンクで交換を続けられる。ただし、実際の障害中にリンクが生存し続けるかは未検証で、停止中に新規のリンクは確立できない。TURN / リレーを含むホスト停止時は孤立編集へ縮退する。
 - legacy モードとは設定・保存領域・メッセージ体系を分ける。同じ文書への旧メッセージと CRDT の二重書き込みは行わない。
@@ -72,21 +73,23 @@ Y.Doc
 │   └─ <objectId>
 │       ├─ id / kind / cid / name / size / category など (生成後不変)
 │       └─ transform: { position, yaw, pitch, updateId }
+├─ transforms: Y.Map<WorldTransform>
+│   └─ <objectId> (移動の最終値。同じ ID の並行 create で後続の move を失わない)
 └─ deleted: Y.Map<true>
 ```
 
-- `transform` は position / yaw / pitch と更新識別子を **一つの値** として置換する。座標の各軸を別々にマージしない。
+- `transform` は position / yaw / pitch と更新識別子を **一つの値** として置換する。座標の各軸を別々にマージしない。移動はオブジェクト直下の `transform` と、トップレベルの `transforms` の両方へ書く。同じ ID の create が並行しても、後から書かれた移動が `transforms` から読まれる。
 - 基本属性の ID・kind・CID は生成後不変とする。ファイルの検証結果は transform とは別の属性に反映し、位置変更でサイズ等を上書きしない。
 - 削除は `deleted[id]=true` の単調な tombstone。移動・検証完了・古い更新が後から届いても、その ID を表示・復活させない。同じ ID の再作成は禁止し、複製は必ず新しい UUID を使う。
 - tombstone と因果情報は実験ワールド中に破棄しない。JSON だけを書き戻す圧縮・初期化はしない。
 - pose、つかみ claim、ドラッグプレビュー、参加状態、転送進捗は永続 CRDT に入れない。WebSocket と P2P に載せる一時メッセージとして扱う。
-- つかみ claim は heartbeat で更新し、受信から **3 秒** で失効する。同時 claim は sessionId / dragId の決定的な順序で表示上の勝者を選び、敗者は操作を中止・補正する。分断をまたぐ厳密なロックではない。
+- つかみ claim は heartbeat で更新し、受信から **3 秒** で失効する。同時 claim の表示上の勝者は、`sessionId` が小さい方、同じセッションなら `seq` が大きい方、`seq` も同じなら `peerId` が小さい方。`dragId` は使わない。敗者の操作を中止・補正する仕組みはなく、分断をまたぐ厳密なロックでもない。claim は WS と直接の P2P リンクには載るが、P2P で他のピアへ転送 (中継) はしない。
 - ドラッグ中は変更がある場合に **最大 1Hz** で transform を確定し、離すときは即時確定する。停止時は最後の保存済みチェックポイントまで復元する。
-- `MAX_OBJECTS=100` は実験モードではローカルの新規作成抑止として扱う。分断後のマージで超過しても受信順に削除せず、全件を保持して超過表示し、新規作成を抑止する。厳密な分散上限は対象外。
+- `MAX_OBJECTS=100` は配置経路 (クライアントの新規作成・複製とサーバーの配置) で拒否する上限として扱う。分断後のマージで 100 個を超えることはあり、その場合も受信順に削除せず全件を保持する。超過を表示する専用の HUD はなく、新規作成は引き続き抑止する。サーバーはマージ後の文書が 1,000 オブジェクトを超えた場合、そのピアからの更新の適用と ACK を停止する (既存オブジェクトは削除しない)。厳密な分散上限は対象外。
 
 ## 6. 同期プロトコル
 
-制御メッセージは JSON、Yjs の更新は base64 のバイナリとして運ぶ。クライアントが `sync_hello` で state vector を送り、サーバーが差分を `sync_init` (大きければ `sync_part`) で返す。その後は `sync_update` の増分を双方向に配り、サーバーは保存完了後に `sync_ack` で state vector を返す。
+制御メッセージは JSON、Yjs の更新は base64 のバイナリとして運ぶ。クライアントが `sync_hello` で state vector を送り、サーバーが差分を `sync_init` (大きければ `sync_part`) で返す。その後は `sync_update` の増分を双方向に配り、サーバーはディスクへの保存が確定した state vector を `sync_ack` で返す。ACK は更新 ID やラウンドには紐づかない。
 
 | type | 方向 | 主なフィールド | 説明 |
 |---|---|---|---|
@@ -94,14 +97,14 @@ Y.Doc
 | `sync_init` | Server → Client | `update` | クライアントの vector に対するサーバーの差分。大きい場合は `sync_part` に分割する |
 | `sync_update` | 双方向 | `update` | 増分更新。重複・順序逆転を許容する |
 | `sync_part` | 双方向 | `transferId`, `index`, `count`, `data` | 大きな更新の分割転送。`data` は base64 |
-| `sync_ack` | Server → Client | `stateVector` | 保存完了後のサーバーの state vector。クライアントは比較し、サーバーが遅れていればローカル差分を送って次の ACK を待つ |
+| `sync_ack` | Server → Client | `stateVector` | ディスクに保存が確定したサーバーの state vector。クライアントは自分の vector と比較し、同じなら何も送らない。足りなければローカル差分を送って次の ACK を待つ |
 | `claim` | Client → Server / Server → Client | `id`, `peerId`, `sessionId`, `seq`, `until` | つかみの一時 claim。サーバーは受信時に送信元の `peerId` を付けて他へ配る |
 | `claim_release` | Client → Server / Server → Client | `id`, `sessionId` | claim の解放。サーバーは `until: 0` の `claim` としてブロードキャストする |
 
 - P2P は同じ論理メッセージを `/proto/world-sync/1.0.0` 上の独自フレームで運ぶ。フレームは 4 バイト big-endian の長さ + UTF-8 JSON で、`hello` / `init` / `update` / `part` / `ack` / `claim` / `claim_release` を使う。
-- 初期値: `sync_part` のチャンクは **48 KiB**、文書・再構成後の上限は **16 MiB**、接続ごとの送信待ちは **2 MiB**。base64 化で約 4/3 に増えるため、48 KiB のチャンクは概ね 64 KiB のフレームに収まる。
-- 経路切替で同じ操作を再生成しない。サーバーは 10 秒ごとにも `sync_ack` を送り、クライアントは ACK の state vector を比較して取りこぼしを回復する。キュー飽和時は文書から差分同期をやり直し、未反映更新を黙って捨てない。
-- 制限超過・未知スキーマ・不正な JSON は診断可能な同期エラー (`sync_error`) にし、収束済みと表示しない。
+- 初期値: `sync_part` のチャンクは **48 KiB**、再構成後の上限は **16 MiB**、接続ごとの送信待ちは **2 MiB**。base64 化で約 4/3 に増えるため、48 KiB のチャンクは概ね 64 KiB のフレームに収まる。サーバーは適用前の更新を **8 MiB** または **10,000 struct** で拒否し、適用後の文書が **1,000 オブジェクト** を超えたら、そのピアからの更新を停止する。
+- 経路切替で同じ操作を再生成しない。サーバーは 10 秒ごとにも `sync_ack` を送り、クライアントは ACK の state vector を比較して取りこぼしを回復する。ACK は保存の成功を待つため、保存に失敗した場合は `sync_error` になり、保存はバックオフで再試行される。キュー飽和時は文書から差分同期をやり直し、未反映更新を黙って捨てない。
+- 制限超過・未知スキーマ・不正な JSON は診断可能な同期エラー (`sync_error`) にし、収束済みと表示しない。クライアントの HUD は `同期エラー` を表示する。
 - 実装済みのメッセージ名・フィールドは上表のとおり。互換性のない変更は `schemaVersion` を上げ、自動移行しない。
 
 ## 7. 永続化と「保存済み」の意味
@@ -109,22 +112,23 @@ Y.Doc
 | 保存先 | 完了条件 | 呼び方 |
 |---|---|---|
 | ブラウザ | IndexedDB のトランザクションが完了した時点 | ローカル保存済み |
-| サーバー | 一時ファイルへの書込・flush・atomic rename が完了し、ACK を返した時点 | サーバー保存済み |
+| サーバー | 一時ファイルへの書込・file fsync・rename・親ディレクトリ fsync (best-effort) が完了した時点 | サーバー保存済み |
 
-- サーバーは受信した更新を直列化した保存キューで処理し、小規模検証向けの snapshot 方式で atomic に保存する。中途半端な状態を正本にしない。
-- サーバーは受信した更新の保存が確定してから、現在の state vector を `sync_ack` で返す。クライアントはその vector を自分の文書と比較し、サーバーが遅れていればローカル差分を送り直して次の ACK を待つ。「ローカル保存済み」「他ノードへ反映」「サーバー保存済み」を区別する。
-- IndexedDB の復元は接続後、CRDT の welcome を受けてから行う。welcome の objects で文書を全置換しない。サーバーは保存状態を読み終えてから接続受付・seed・コンテンツ回復を開始する。
-- 壊れた保存データや未知スキーマでは空ワールドを自動生成せず、起動失敗を明示する。
+- サーバーは受信した更新を直列化した保存キューで処理し、小規模検証向けの snapshot 方式 (`doc.bin`) で保存する。一時ファイル + file fsync + rename + 親ディレクトリの fsync (best-effort) を使うが、電源断に対する完全な保証ではない。中途半端な状態を正本にしないようにし、失敗した一時ファイルは削除する。
+- サーバーは、hello・更新受信・周期 ACK のどの経路でも、未保存の変更があれば保存を待ってから、**最後に保存が成功した state vector** を `sync_ack` で返す。ACK は更新 ID やラウンドには紐づかない。保存に失敗した場合は ACK を送らず `sync_error` を返し、保存をバックオフで再試行する。`flush()` は期限内に書けなければ reject する。クライアントはその vector を自分の文書と比較し、同じなら何も送らず、サーバーが遅れていればローカル差分を送り直して次の ACK を待つ。「ローカル保存済み」「他ノードへ反映」「サーバー保存済み」を区別する。
+- 保存対象は `meta.json`・`doc.bin`・`content.json`・`blocks/` で、書き込み中は `*.tmp-*` ができる。`BLOCKSTORE_DIR` を指定した場合は `blocks/` ではなくそのディレクトリを使う (`CRDT_DATA_DIR` の外でもよい)。Helia の datastore・pin 情報・サーバー identity は保存しない。
+- IndexedDB の復元は接続後、CRDT の welcome を受けてから行う。welcome の objects で文書を全置換しない。サーバーは保存状態を読み終えてから接続受付・seed・コンテンツ回復を開始する。`doc.bin` はあるが `meta.json` が無い場合は、seed 済みの文書なら `meta.json` を作り直す。`meta.json` はあるが `doc.bin` が無い場合は起動を中止する。
+- 壊れた保存データや未知スキーマでは空ワールドを自動生成せず、起動失敗を明示する。SIGINT / SIGTERM では保存と IPFS 停止に上限時間を設け、失敗しても終了コード 0 で終了する。
 - 失われ得るもの: 未完了の書き込み、ドラッグ途中の未確定プレビュー、元ファイルしかない未完了アップロード。ファイル本体がどこにも残っていない場合は CRDT でも復元できない。
 - 保存領域の消失・ブラウザによるストレージ削除・ディスク故障からの復旧は対象外。
 
 ## 8. コンテンツの扱い
 
-- 実験モードではブロックストアを起動時に削除しない。Helia の datastore・pin 情報・サーバー identity も `CRDT_DATA_DIR` 配下に永続化する。
+- 実験モードではブロックストア (`blocks/`、`BLOCKSTORE_DIR` で変更可) を起動時に削除しない。コンテンツ関連で永続化するのはブロックストアとコンテンツ台帳 (`content.json`) までで、Helia の datastore・pin 情報・サーバー identity は永続化しない (文書は `meta.json` / `doc.bin` に別途保存する)。
 - CID ごとの検証結果・実測サイズ・保持完了状態を **コンテンツ台帳** に保存する。取得・検証・pin・台帳保存が完了するまで「耐久保持済み」と通知しない。
 - 一度検証して保持した本体は、ワールドの **明示的リセットまで pin し続ける**。削除直後の unpin は行わない。分断先で作られた複製が後から届いても本体を失わないため。
 - 未参照分も容量台帳に含め、既存の **20 GiB** 上限を守る。自動期限 GC と分散 GC は対象外。
-- CRDT の変更回数を retain / release に換算しない。文書の生存オブジェクトから CID 参照集合を再計算して content adapter と整合させる。
+- CRDT の変更回数を retain / release に換算しない。現状はコンテンツ台帳の参照数をそのまま使い、文書の生存オブジェクトから CID 参照集合を再計算する処理は未実装。再送で参照数が増えても、crdt-v1 では削除時に unpin しないため、容量台帳は単調に増える点に注意する。
 - 取得できないコンテンツは「利用不可」と表示し、提供元の復帰後に再試行する。オブジェクト自体は削除しない。
 - 新規ファイル配置は requestId とクライアント生成 objectId を付け、サーバー復帰後に現在のサイズ・形式検証を通してから文書へ登録する。保留操作はタブが生きている間だけメモリに保持し、タブを閉じると失われる。任意サイズの File 本体は保存しない。
 
@@ -134,9 +138,12 @@ Y.Doc
 |---|---|---|
 | `SYNC_MODE` | `legacy` | サーバーの同期モード。`legacy` または `crdt-v1` |
 | `VITE_SYNC_MODE` | `legacy` | クライアントの同期モード。`legacy` または `crdt-v1` |
-| `CRDT_DATA_DIR` | なし | `crdt-v1` では必須。文書・コンテンツ台帳・Helia datastore・ブロックストアを隔離する専用ディレクトリ |
-| `worldId` | 初期化時に生成 | サーバーが生成・永続化する。クライアントの保存キーは接続先・worldId・schemaVersion の組 |
+| `CRDT_DATA_DIR` | なし | `crdt-v1` では必須。`meta.json`・`doc.bin`・`content.json`・`blocks/` を置く専用ディレクトリ |
+| `BLOCKSTORE_DIR` | `CRDT_DATA_DIR/blocks` | ブロックストアの保存先。指定すると `CRDT_DATA_DIR` の外にも置ける |
+| `worldId` | 初期化時に生成 | サーバーが生成し `meta.json` に永続化する。クライアントの保存キーは接続先・worldId・schemaVersion の組 |
 | `schemaVersion` | 実装時に固定 | handshake で照合する。不一致は明示エラーとし、自動移行しない |
+
+- `CRDT_DATA_DIR` の相対パスは、`pnpm dev:server` (`pnpm --filter @proto/server dev`) では `apps/server` を基準に解決される。リポジトリのルートから起動しても `./.crdt-data` は `apps/server/.crdt-data` になるため、絶対パスを推奨する。
 
 - サーバー一つにつき一つのモードとする。`crdt-v1` と legacy のメッセージを同じ文書に混在させない。
 - 別ワールド・別スキーマの文書をマージしない。互換性のない実験スキーマは黙って移行せず、新しい実験ワールドとして開始する。
@@ -148,13 +155,14 @@ Y.Doc
 実装済み。サーバーとクライアントのモードを揃えて起動する。既存の `pnpm dev` は legacy のまま使える。
 
 ```sh
-# サーバー (crdt-v1)
-SYNC_MODE=crdt-v1 CRDT_DATA_DIR=./.crdt-data pnpm dev:server
+# サーバー (crdt-v1)。CRDT_DATA_DIR は絶対パスを推奨 (相対パスは apps/server 基準)
+SYNC_MODE=crdt-v1 CRDT_DATA_DIR="$(pwd)/.crdt-data" pnpm dev:server
 
 # クライアント
 VITE_SYNC_MODE=crdt-v1 pnpm dev:client
 ```
 
+- `pnpm dev:server` は `apps/server` で実行されるため、`CRDT_DATA_DIR=./.crdt-data` は `apps/server/.crdt-data` を指す。リポジトリのルートに作りたい場合は絶対パスにする。
 - サーバーとクライアントのモードを揃える。片方だけ `crdt-v1` にしない。
 - 専用のテスト環境・専用データ領域でのみ動かす。稼働中のメモリ内ワールドを移行する機能は作らない。
 - 新しい実験ワールドとして開始し、初回のデモ生成はサーバーのみが行う。クライアントは独自 seed を作らない。
@@ -198,17 +206,20 @@ Page offline だけでは WebRTC 遮断の証明にしない。サーバーが�
 - 任意サイズのファイルのブラウザ永続複製。
 - 動画再生時刻の分散合意。crdt-v1 では動画同期自体が未対応。
 - Undo / 履歴 UI、複数ワールド UI。
-- 厳密な分散オブジェクト上限。分断後のマージで 100 個を超えることは許容する。
+- 厳密な分散オブジェクト上限。配置経路は 100 個で拒否するが、分断後のマージで 100 個を超えることは許容する。サーバーはマージ後 1,000 個を超えたピアの更新を停止する。超過を表示する専用の HUD はない。
 - 一時的な WS 切断では、クライアントは peer 一覧と姿勢バッファを消す。そのため他参加者の姿勢・アバターは再接続まで更新されない。P2P の claim と文書編集は続くが、姿勢は P2P で共有されない。
-- 姿勢の P2P 共有は未実装。
+- 姿勢・アバターの P2P 共有は未実装。claim は直接の P2P リンクには載るが、他のピアへ中継しない。
+- Helia の datastore・pin 情報・サーバー identity は永続化しない。再起動するとサーバーの libp2p peerId は変わり、クライアントは `welcome` で再学習する。
+- ACK は state vector で、更新 ID やラウンドには紐づかない。同じ vector ならクライアントは何も送らないが、どの更新が保存されたかを 1 件ずつ確認する仕組みではない。
+- クライアント側の WebSocket watchdog / heartbeat はない。サーバーが 30 秒ごとに ping し、claim はクライアントが 1 秒ごとに heartbeat を送る。
 
 ## 14. 実装状況
 
-**実装済み・E2E 未実施**。実装項目は完了しているが、障害試験と 3 browser contexts / 100 objects の E2E は未実施で、M6 の完了条件は満たしていない。
+**実装済み・E2E 未実施**。実装項目とレビュー指摘の修正は完了しているが、障害試験と 3 browser contexts / 100 objects の E2E は未実施で、M6 の完了条件は満たしていない。
 
 - [x] `packages/world-sync`: Yjs 文書・作成/移動/複製/削除・projection・共通フレーム
-- [x] サーバー永続化: `CRDT_DATA_DIR`・atomic snapshot・`worldId`・初回 seed・復元失敗の明示
-- [x] クライアント: IndexedDB 保存・初期復元・再接続/再同期・HUD 状態
+- [x] サーバー永続化: `CRDT_DATA_DIR` (`meta.json` / `doc.bin` / `content.json` / `blocks/`)・`worldId`・初回 seed・復元失敗の明示
+- [x] クライアント: IndexedDB 保存・初期復元・再接続/再同期・HUD 状態 (`接続中...` / `同期エラー` を含む)
 - [x] P2P transport: 既存 WebRTC / circuit relay 上の `/proto/world-sync/1.0.0` と停止中の交換 (実装。実際の障害中の生存は未検証)
 - [x] コンテンツ台帳: 検証結果・pin 方針・20 GiB 上限・取得不能表示と再試行
 - [ ] E2E: 障害試験・100 objects・legacy モードの回帰
@@ -218,11 +229,28 @@ Page offline だけでは WebRTC 遮断の証明にしない。サーバーが�
 ### Node / 単体テストで確認済み
 
 - `pnpm install --frozen-lockfile`、`pnpm typecheck`、`pnpm test`、`pnpm build` はすべて成功した。
-- テストは 26 ファイル / 395 件 (protocol 22、world-sync 31、client 153、server 189)。
-- `pnpm build` の Vite は既存の chunk-size 警告のみを出す。
+- テストは 27 ファイル / 443 件 (protocol 22、world-sync 50、client 165、server 206)。
+- `pnpm build` の Vite は既存の >500 kB の chunk-size 警告のみを出す。
 - Node 上の smoke test (ブラウザではない): 同じ `worldId` に 2 つの WebSocket クライアントを接続し、seed 済みの 5 ボックスをそれぞれが保持した。片方でボックスを 1 個作成し、別の 1 個を移動した結果、両者の canonical projection が一致した。
-- 同じ `CRDT_DATA_DIR` でサーバーを再起動すると、同じ `worldId` と 6 オブジェクト (seed 5 + 追加 1) が復元され、seed の重複はなかった。
+- 同じ smoke test で 22 秒間 (周期 ACK 3 回を含む) 観測し、各クライアントが送った `sync_update` / `sync_part` は **0 件** だった。ACK の state vector が一致した後に差分を送り直さない (ACK の ping-pong がない) ことを確認した。
+- 同じ `CRDT_DATA_DIR` でサーバーを再起動すると、同じ `worldId` と 6 オブジェクト (seed 5 + 追加 1) が復元され、seed の id に重複はなく、移動後の位置も保持されていた。SIGTERM では終了コード 0 で終了した。
+- legacy モードの smoke test では、5 オブジェクト・`sync_*` なし・4 KiB のメッセージ上限が従来どおりで、SIGTERM の終了コードは 0 だった。
 - コンテンツ台帳の snapshot / restore と、ブロックストアに残っている内容の再 pin、欠けている内容の除外は単体テストで確認済み。起動時の照合 (文書が `stored: true` でも台帳に無ければ `stored: false, offline: true` に戻す) は実装済み。
+
+### レビュー指摘の修正
+
+以下はレビュー後に修正し、単体テストまたは Node 上の smoke test で確認した。ブラウザ / 障害 E2E の代替にはしない。
+
+- **ACK ループ**: クライアントは ACK の state vector を自分の vector と先に比較し、同じなら何も送らない。delete set だけの差分を返して ACK が往復し続ける経路をなくした (P2P も同じ)。
+- **耐久 ACK**: hello・更新受信・周期 ACK のすべてで、未保存なら保存の成功を待ち、最後に保存が成功した state vector を返す。保存失敗はバックオフで再試行し、`flush()` は失敗を reject する。一時ファイルを片付け、親ディレクトリの fsync を best-effort で行う。終了処理は保存に失敗しても終了する。
+- **マルチタブの IndexedDB 圧縮**: 圧縮時に、同じ readwrite トランザクションで既存の行 (他のタブが書いたものを含む) を読み、スナップショットとマージしてから置き換える。他のタブの行を消さない。
+- **未保存ファイルの配布**: WS の一時切断で peer id が変わっても、サーバーがまだ保持していないファイルは配り続ける。取得中の大きなファイルを解放しない。
+- **`setMetadata` / `transforms`**: オブジェクトの種類に応じて許可するメタデータを限定し、トップレベルの `transforms` に移動の最終値を書く。同じ ID の並行 create で後続の move を失わない。
+- **終了処理**: SIGINT / SIGTERM で、ワールド保存・台帳保存・IPFS 停止に上限時間を設け、失敗しても終了する。
+- **初期化の復旧**: `doc.bin` があり `meta.json` が無い場合は、seed 済みの文書なら `meta.json` を作り直す。不完全な保存データを空のワールドで上書きしない。
+- **マージ上限**: サーバーは 8 MiB または 10,000 struct を超える更新を拒否し、適用後の文書が 1,000 オブジェクトを超えたピアの更新を停止する。claim の保持数にも上限を設けた。
+- **P2P / claim の識別**: P2P は hello が成立するまで hello 以外のフレームを受け付けない。claim は `sessionId` をキーにし、WS と P2P で同じ claim が届いても 1 つにまとめる。
+- あわせて、seed の固定 ID、tombstone の key 存在判定、転送 assembler の total-byte / TTL / part 上限、サイズ上限、小文字 UUID、canonical base64 を修正した。
 
 ### 実ブラウザ / 障害試験では未検証
 

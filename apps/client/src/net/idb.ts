@@ -3,7 +3,14 @@
 export interface UpdateStore {
   load(): Promise<Uint8Array[]>;
   append(update: Uint8Array): Promise<void>;
-  compact(snapshot: Uint8Array): Promise<void>;
+  /**
+   * ログをスナップショットに置き換える。merge を渡すと、同じ readwrite トランザクションで
+   * 既存の行を読み、同期でまとめてから clear + add する (他のタブの行を消さない)。
+   */
+  compact(
+    snapshot: Uint8Array,
+    merge?: (snapshot: Uint8Array, existing: Uint8Array[]) => Uint8Array,
+  ): Promise<void>;
   close(): void;
 }
 
@@ -84,10 +91,13 @@ export function createUpdateStore(db: IDBDatabase): UpdateStore {
       });
     },
 
-    compact(snapshot: Uint8Array): Promise<void> {
+    compact(
+      snapshot: Uint8Array,
+      merge?: (snapshot: Uint8Array, existing: Uint8Array[]) => Uint8Array,
+    ): Promise<void> {
       return new Promise((resolve, reject) => {
         let settled = false;
-        const fail = (error: DOMException | null) => {
+        const fail = (error: unknown) => {
           if (settled) return;
           settled = true;
           reject(error ?? new Error("IndexedDB の圧縮に失敗しました"));
@@ -103,12 +113,43 @@ export function createUpdateStore(db: IDBDatabase): UpdateStore {
           tx.onerror = () => fail(tx.error);
           tx.onabort = () => fail(tx.error);
           const store = tx.objectStore(STORE_NAME);
-          store.clear();
-          store.add(snapshot);
+
+          const replace = (value: Uint8Array): void => {
+            store.clear();
+            store.add(value);
+          };
+
+          if (merge === undefined) {
+            replace(snapshot);
+            return;
+          }
+
+          // 既存の行 (他のタブが書いたものを含む) を同じトランザクションで読み、
+          // 同期でマージする。on success の中で次の request を積むので、トランザクションは生きたまま。
+          const request = store.getAll();
+          request.onsuccess = () => {
+            let value: Uint8Array;
+            try {
+              const existing: Uint8Array[] = [];
+              const values = Array.isArray(request.result) ? request.result : [];
+              for (const row of values) {
+                const bytes = toBytes(row);
+                if (bytes) existing.push(bytes);
+              }
+              value = merge(snapshot, existing);
+            } catch (error) {
+              fail(error);
+              try {
+                tx.abort();
+              } catch {
+                // 既に終わっている
+              }
+              return;
+            }
+            replace(value);
+          };
         } catch (error) {
-          if (settled) return;
-          settled = true;
-          reject(error);
+          fail(error);
         }
       });
     },

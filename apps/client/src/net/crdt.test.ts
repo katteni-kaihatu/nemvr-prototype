@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientMessage, CrdtSyncInfo, WorldObject } from "@proto/protocol";
 import { WorldDoc, encodeTransfer, fromBase64, toBase64 } from "@proto/world-sync";
 import { CrdtWorld, openCrdtWorld, type CrdtStatus } from "./crdt";
+import { PeerSession, type PeerFrame } from "./crdtP2P";
 import type { UpdateStore } from "./idb";
 
 const info: CrdtSyncInfo = { mode: "crdt-v1", worldId: "world-1", schemaVersion: 1 };
@@ -13,7 +14,9 @@ interface Harness {
   statuses: CrdtStatus[];
 }
 
-async function makeWorld(overrides: { sessionId?: string; store?: UpdateStore; actorId?: string } = {}): Promise<Harness> {
+async function makeWorld(
+  overrides: { sessionId?: string; store?: UpdateStore; actorId?: string; compactEvery?: number } = {},
+): Promise<Harness> {
   const sent: ClientMessage[] = [];
   const projections: Record<string, WorldObject>[] = [];
   const statuses: CrdtStatus[] = [];
@@ -32,6 +35,7 @@ async function makeWorld(overrides: { sessionId?: string; store?: UpdateStore; a
       actorId: overrides.actorId ?? "actor",
       sessionId: overrides.sessionId ?? "session",
       store: overrides.store,
+      compactEvery: overrides.compactEvery,
       now: () => Date.now(),
     },
   );
@@ -57,6 +61,28 @@ function updatesOf(harness: Harness): string[] {
 
 function applyUpdates(target: CrdtWorld, harness: Harness): void {
   for (const update of updatesOf(harness)) target.handleServerMessage({ type: "sync_update", update });
+}
+
+/** 48 KiB を超える更新 (分割転送の確認用)。名前の長さ制限に依存せず、更新を重ねて大きくする。 */
+function makeLargeSource(): { source: WorldDoc; id: string } {
+  const source = new WorldDoc({ actorId: "source" });
+  const id = crypto.randomUUID();
+  expect(
+    source.createObject({
+      id,
+      kind: "file",
+      cid: "bafy-large",
+      name: "large.bin",
+      size: 1_000_000,
+      stored: false,
+      category: "file",
+      position: [0, 0, 0],
+      yaw: 0,
+    }),
+  ).toBe(true);
+  for (let i = 0; i < 5_000; i++) source.moveObject(id, [i % 50, 0, 0], 0);
+  expect(source.encodeUpdate().length).toBeGreaterThan(60 * 1024);
+  return { source, id };
 }
 
 function shuffle<T>(items: readonly T[], seed: number): T[] {
@@ -187,26 +213,13 @@ describe("CrdtWorld throttled commits", () => {
 describe("CrdtWorld server messages", () => {
   it("reassembles a large update from sync_part", async () => {
     const receiver = await makeWorld();
-    const source = new WorldDoc({ actorId: "source", now: () => 1 });
-    const id = crypto.randomUUID();
-    expect(
-      source.createObject({
-        id,
-        kind: "image",
-        cid: "bafy-large",
-        position: [0, 0, 0],
-        yaw: 0,
-        width: 2,
-        height: 1,
-        name: "x".repeat(60_000),
-      }),
-    ).toBe(true);
+    const { source, id } = makeLargeSource();
 
     const parts = encodeTransfer(source.encodeUpdate(), "update:big");
     expect(parts.length).toBeGreaterThan(1);
     for (const part of parts) receiver.world.handleServerMessage({ type: "sync_part", ...part });
 
-    expect(lastObjects(receiver)[id]?.kind).toBe("image");
+    expect(lastObjects(receiver)[id]?.kind).toBe("file");
   });
 
   it("sets serverSaved only when the ack state vector matches", async () => {
@@ -228,18 +241,7 @@ describe("CrdtWorld server messages", () => {
 
   it("chunks a large local diff when the acked server vector is empty", async () => {
     const h = await makeWorld();
-    const source = new WorldDoc({ actorId: "source" });
-    const id = crypto.randomUUID();
-    source.createObject({
-      id,
-      kind: "image",
-      cid: "bafy-large",
-      position: [0, 0, 0],
-      yaw: 0,
-      width: 2,
-      height: 1,
-      name: "x".repeat(60_000),
-    });
+    const { source, id } = makeLargeSource();
     h.world.applyPeerUpdate(source.encodeUpdate(), "peer-source");
     h.sent.length = 0;
 
@@ -250,7 +252,7 @@ describe("CrdtWorld server messages", () => {
 
     const server = await makeWorld();
     for (const part of parts) server.world.handleServerMessage(part);
-    expect(lastObjects(server)[id]?.kind).toBe("image");
+    expect(lastObjects(server)[id]?.kind).toBe("file");
   });
 
   it("sends the local diff when a stale server vector is acknowledged", async () => {
@@ -281,6 +283,114 @@ describe("CrdtWorld server messages", () => {
     h.world.handleServerMessage({ type: "sync_ack", stateVector: h.world.getStateVectorBase64() });
     expect(h.sent.filter((msg) => msg.type === "sync_update" || msg.type === "sync_part")).toHaveLength(0);
     expect(lastStatus(h).serverSaved).toBe(true);
+  });
+
+  it("does not answer an ack when the vectors already match (delete-set-only diff)", async () => {
+    const h = await makeWorld();
+    const keep = h.world.createBox([0, 0, 0])!;
+    const removed = h.world.createBox([2, 0, 0])!;
+    h.world.commitMove(keep.id, [1, 0, 0], 0);
+    h.world.deleteObject(removed.id);
+    await h.world.flush();
+    h.sent.length = 0;
+
+    // 削除は state vector を進めない。同じ vector の ack で delete set を送り返してはいけない
+    const vector = h.world.getStateVectorBase64();
+    for (let i = 0; i < 5; i++) h.world.handleServerMessage({ type: "sync_ack", stateVector: vector });
+
+    expect(h.sent.filter((msg) => msg.type === "sync_update" || msg.type === "sync_part")).toHaveLength(0);
+    expect(lastStatus(h).serverSaved).toBe(true);
+  });
+
+  it("reports a fatal sync error in the status", async () => {
+    const h = await makeWorld();
+    h.world.handleServerMessage({ type: "sync_error", message: "worldId mismatch" });
+    expect(lastStatus(h).sync).toBe("sync-error");
+  });
+});
+
+describe("CrdtWorld remote deletes", () => {
+  it("stops a local grab and heartbeat when the object is deleted remotely", async () => {
+    const h = await makeWorld({ sessionId: "self-session" });
+    const remote = await makeWorld({ sessionId: "remote-session", actorId: "remote-actor" });
+    const box = remote.world.createBox([0, 0, 0])!;
+    applyUpdates(h.world, remote);
+    expect(lastObjects(h)[box.id]).toBeDefined();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    h.sent.length = 0;
+    h.world.startGrab(box.id);
+    expect(h.sent.filter((msg) => msg.type === "claim")).toHaveLength(1);
+
+    remote.world.deleteObject(box.id);
+    const deleted = updatesOf(remote).at(-1)!;
+    h.world.handleServerMessage({ type: "sync_update", update: deleted });
+    expect(lastObjects(h)[box.id]).toBeUndefined();
+
+    // 消えた ID への claim を送り続けない
+    h.sent.length = 0;
+    vi.advanceTimersByTime(3_000);
+    expect(h.sent.filter((msg) => msg.type === "claim")).toHaveLength(0);
+  });
+});
+
+describe("CrdtWorld claims", () => {
+  it("deduplicates the same claim arriving over WS and P2P", async () => {
+    const h = await makeWorld({ sessionId: "self-session" });
+    const box = h.world.createBox([0, 0, 0])!;
+    const until = Date.now() + 10_000;
+
+    h.world.handleServerMessage({
+      type: "claim",
+      id: box.id,
+      peerId: "ws-peer",
+      sessionId: "remote-session",
+      seq: 1,
+      until,
+    });
+    expect(lastObjects(h)[box.id]?.heldBy).toBe("ws-peer");
+
+    // 同じ session の claim が P2P からも届く (peerId は libp2p の ID)
+    const frames: PeerFrame[] = [];
+    const session = new PeerSession({
+      peerId: "p2p-peer",
+      sendFrame: (frame) => frames.push(frame),
+      applyUpdate: () => {},
+      getHello: () => ({
+        worldId: info.worldId,
+        schemaVersion: info.schemaVersion,
+        vector: h.world.getStateVectorBase64(),
+      }),
+      diffFor: () => new Uint8Array(0),
+      onClaim: (msg) => h.world.handleServerMessage(msg),
+    });
+    session.sendClaim({ id: box.id, sessionId: "remote-session", seq: 1, until });
+
+    // 片方の経路の release で消える (二重に登録されていれば残ってしまう)
+    h.world.handleServerMessage({
+      type: "claim",
+      id: box.id,
+      peerId: "ws-peer",
+      sessionId: "remote-session",
+      seq: 2,
+      until: 0,
+    });
+    expect(lastObjects(h)[box.id]?.heldBy).toBeUndefined();
+  });
+
+  it("ignores claims from its own session", async () => {
+    const h = await makeWorld({ sessionId: "self-session" });
+    const box = h.world.createBox([0, 0, 0])!;
+    h.world.handleServerMessage({
+      type: "claim",
+      id: box.id,
+      peerId: "someone-else",
+      sessionId: "self-session",
+      seq: 1,
+      until: Date.now() + 10_000,
+    });
+    expect(lastObjects(h)[box.id]?.heldBy).toBeUndefined();
   });
 });
 
@@ -449,4 +559,84 @@ describe("CrdtWorld persistence", () => {
     expect((await world.flush(), store.compacts[0]?.length ?? 0)).toBeGreaterThan(0);
     expect(statuses[statuses.length - 1]?.localSaved).toBe(true);
   });
+
+  it("recovers from a failed append with a full snapshot", async () => {
+    const store = new ScriptedStore();
+    store.appendError = new Error("append failed");
+    const h = await makeWorld({ store });
+    h.world.createBox([0, 0, 0]);
+    await h.world.flush();
+
+    expect(store.compacts).toHaveLength(1);
+    expect(store.appends).toHaveLength(0);
+    expect(lastStatus(h).sync).not.toBe("save-failed");
+    expect(lastStatus(h).localSaved).toBe(true);
+  });
+
+  it("does not treat a compaction failure as a permanent save failure", async () => {
+    const store = new ScriptedStore();
+    store.compactError = new Error("compact failed");
+    const h = await makeWorld({ store, compactEvery: 1 });
+    const before = h.sent.length;
+    h.world.createBox([0, 0, 0]);
+    await h.world.flush();
+
+    expect(store.appends).toHaveLength(1);
+    expect(lastStatus(h).sync).not.toBe("save-failed");
+    expect(lastStatus(h).localSaved).toBe(true);
+    expect(h.sent.length).toBeGreaterThanOrEqual(before);
+  });
+
+  it("skips a corrupt row and keeps loading later valid rows", async () => {
+    const first = new WorldDoc({ actorId: "first" });
+    const second = new WorldDoc({ actorId: "second" });
+    const firstId = crypto.randomUUID();
+    const secondId = crypto.randomUUID();
+    expect(
+      first.createObject({ id: firstId, kind: "box", position: [0, 0, 0], yaw: 0, size: 1, color: "#d9534f" }),
+    ).toBe(true);
+    expect(
+      second.createObject({ id: secondId, kind: "box", position: [1, 0, 0], yaw: 0, size: 1, color: "#5bc0de" }),
+    ).toBe(true);
+
+    const store = new ScriptedStore();
+    store.loaded = [first.encodeUpdate(), new Uint8Array([255, 255, 255]), second.encodeUpdate()];
+    const h = await makeWorld({ store });
+
+    expect(lastObjects(h)[firstId]).toBeDefined();
+    expect(lastObjects(h)[secondId]).toBeDefined();
+    expect(lastStatus(h).sync).not.toBe("save-failed");
+    expect(lastStatus(h).localSaved).toBe(true);
+    // 壊れた行を飛ばした直後は圧縮しない (残りの行を消さない)
+    expect(store.compacts).toHaveLength(0);
+  });
 });
+
+class ScriptedStore implements UpdateStore {
+  loaded: Uint8Array[] = [];
+  appends: Uint8Array[] = [];
+  compacts: Uint8Array[] = [];
+  appendError: Error | null = null;
+  compactError: Error | null = null;
+
+  async load(): Promise<Uint8Array[]> {
+    return this.loaded.map((update) => new Uint8Array(update));
+  }
+
+  async append(update: Uint8Array): Promise<void> {
+    if (this.appendError) throw this.appendError;
+    this.appends.push(new Uint8Array(update));
+  }
+
+  async compact(
+    snapshot: Uint8Array,
+    merge?: (snapshot: Uint8Array, existing: Uint8Array[]) => Uint8Array,
+  ): Promise<void> {
+    if (this.compactError) throw this.compactError;
+    this.compacts.push(merge ? merge(snapshot, this.appends) : new Uint8Array(snapshot));
+  }
+
+  close(): void {
+    // 何もしない
+  }
+}

@@ -155,7 +155,7 @@ sequenceDiagram
 ```
 
 - **サーバーの Helia ノード**: libp2p の WebSocket (`IPFS_PORT`, 既定 8081) で待ち受ける。ブラウザの接続先、circuit relay、pin 済み画像の提供元を兼ねる。
-  ブロックストアはディスク (`BLOCKSTORE_DIR`、既定は一時ディレクトリ)。起動のたびに空にする (再起動でワールドの状態が消えるので、残しても参照されない)。
+  ブロックストアはディスク (`BLOCKSTORE_DIR`。legacy の既定は一時ディレクトリ、crdt-v1 の既定は `CRDT_DATA_DIR/blocks`)。legacy では起動のたびに空にする (再起動でワールドの状態が消えるので、残しても参照されない)。
 - **ブラウザの Helia ノード**: 入室 (`welcome`) 後に起動し、`welcome.ipfs` とページのホスト名から組み立てた
   `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` でサーバーに接続する。
   トランスポートは WebSocket / WebRTC / circuit relay。ルーティング (DHT・公開ゲートウェイ) は使わない。
@@ -430,7 +430,7 @@ validate.ts  受信メッセージの検証・正規化
 | `PORT` | `8080` | WebSocket (ワールド同期) の待受ポート |
 | `IPFS_PORT` | `8081` | libp2p の WebSocket の待受ポート。ブラウザから到達できる必要がある |
 | `CONTENT_MAX_TOTAL_MB` | `20480` (20 GiB) | サーバーが保持する画像・ファイルの合計サイズの上限 (MB)。ディスクに置くので、ディスクの空きより十分小さくする |
-| `BLOCKSTORE_DIR` | 一時ディレクトリの `vr-sns-proto-blocks` | 画像・ファイルの中身 (ブロック) を置くディレクトリ。起動のたびに空にする |
+| `BLOCKSTORE_DIR` | 一時ディレクトリの `vr-sns-proto-blocks` | 画像・ファイルの中身 (ブロック) を置くディレクトリ。legacy では起動のたびに空にする。crdt-v1 では `CRDT_DATA_DIR/blocks` が既定で、再起動後も保持する |
 
 ### 色の割り当て
 
@@ -471,7 +471,7 @@ validate.ts  受信メッセージの検証・正規化
 
 ### プロトコル
 
-制御メッセージは JSON、Yjs の更新は base64 で運ぶ。クライアントが `sync_hello` で state vector を送り、サーバーが `sync_init` で差分を返す。その後は `sync_update` の増分を双方向に配り、サーバーは保存完了後に `sync_ack` で state vector を返す。
+制御メッセージは JSON、Yjs の更新は base64 で運ぶ。クライアントが `sync_hello` で state vector を送り、サーバーが `sync_init` で差分を返す。その後は `sync_update` の増分を双方向に配り、サーバーはディスクへの保存が確定した state vector を `sync_ack` で返す。ACK は更新 ID やラウンドには紐づかない。
 
 | type | 方向 | 主なフィールド | 説明 |
 |---|---|---|---|
@@ -479,11 +479,11 @@ validate.ts  受信メッセージの検証・正規化
 | `sync_init` | Server → Client | `update` | クライアントの vector に対する差分。大きい場合は `sync_part` に分割 |
 | `sync_update` | 双方向 | `update` | 増分更新。重複・順序逆転を許容する |
 | `sync_part` | 双方向 | `transferId`, `index`, `count`, `data` | 大きな更新の分割転送 (48 KiB/チャンク、`data` は base64) |
-| `sync_ack` | Server → Client | `stateVector` | 保存完了後のサーバーの state vector。クライアントは比較し、遅れていればローカル差分を送って次の ACK を待つ |
+| `sync_ack` | Server → Client | `stateVector` | ディスクに保存が確定したサーバーの state vector。クライアントは自分の vector と比較し、同じなら何も送らない。足りなければローカル差分を送って次の ACK を待つ |
 | `claim` | Client → Server / Server → Client | `id`, `peerId`, `sessionId`, `seq`, `until` | つかみの一時 claim。サーバーは送信元の `peerId` を付けて他へ配る |
 | `claim_release` | Client → Server / Server → Client | `id`, `sessionId` | claim の解放。サーバーは `until: 0` の `claim` としてブロードキャストする |
 
-- 初期上限は文書 16 MiB、接続ごとの送信待ち 2 MiB。超過は診断可能な同期エラーにし、収束済みと表示しない。
+- 初期上限は再構成後の文書 16 MiB、接続ごとの送信待ち 2 MiB。サーバーは適用前の更新を 8 MiB または 10,000 struct で拒否し、適用後の文書が 1,000 オブジェクトを超えたピアの更新を停止する。超過は診断可能な同期エラーにし、収束済みと表示しない。
 - P2P は既存の libp2p 接続 (WebRTC / circuit relay) 上の `/proto/world-sync/1.0.0` を使う。同じ論理メッセージを 4 バイト big-endian の長さ + UTF-8 JSON で運ぶ。実装済みだが、実際の障害中にリンクが生存するかは未検証で、停止中の新規接続は確立できない。
 - legacy のメッセージと同じ文書に書き込まない。モード・スキーマ不一致は明示エラーにする。
 
@@ -505,16 +505,18 @@ Y.Doc
 
 ### 永続化
 
-- ブラウザは IndexedDB のトランザクション完了を「ローカル保存済み」とする。使用不可・容量超過は警告し、保存済みと偽らない。
-- サーバーは保存キューで Yjs の全状態を直列化し、一時ファイル書込・flush・atomic rename の完了後に ACK を返す。ACK の state vector は保存完了後に取得する。
-- IndexedDB の復元は接続後、CRDT の welcome を受けてから行う。welcome で objects を全置換しない。壊れた snapshot・未知スキーマでは空ワールドを作らず起動失敗を明示する。
+- ブラウザは IndexedDB のトランザクション完了を「ローカル保存済み」とする。使用不可・容量超過は警告し、保存済みと偽らない。複数タブの圧縮は、同じ readwrite トランザクションで既存の行を読み、スナップショットとマージしてから置き換える。
+- サーバーは保存キューで Yjs の全状態を直列化し、一時ファイル書込・file fsync・rename・親ディレクトリ fsync (best-effort) の完了後に保存済みとする。電源断に対する完全な保証ではない。失敗した一時ファイルは削除する。
+- 保存するのは `meta.json` (worldId・schemaVersion)、`doc.bin` (Yjs 文書)、`content.json` (コンテンツ台帳)、`blocks/` (ブロックストア)。`BLOCKSTORE_DIR` を指定すると `blocks/` の代わりにそのディレクトリを使う。Helia の datastore・pin 情報・サーバー identity は保存しない。
+- `sync_ack` は、hello・更新受信・周期 ACK のどの経路でも、未保存の変更があれば保存の成功を待ち、最後に保存が成功した state vector を返す。ACK は更新 ID やラウンドには紐づかない。保存に失敗した場合は `sync_error` を返し、バックオフで再試行する。`flush()` は期限内に書けなければ reject する。
+- IndexedDB の復元は接続後、CRDT の welcome を受けてから行う。welcome で objects を全置換しない。`doc.bin` はあるが `meta.json` が無い場合は、seed 済みの文書なら `meta.json` を作り直す。壊れた snapshot・未知スキーマでは空ワールドを作らず起動失敗を明示する。
 - 「ローカル保存済み」「他ノードへ反映」「サーバー保存済み」を HUD とログで区別する。
 
 ### 再接続とバックオフ
 
 - WebSocket の切断では transport の状態だけを変え、シーン・文書・Helia の寿命を分離する。切断時に文書を消さない。
-- 指数バックオフ (1s, 2s, 4s, 8s, 10s + jitter) と WebSocket の ping / pong、claim の heartbeat を使う。明示的な退出では再接続を停止するが、保存済み文書は消さない。
-- 復旧時はクライアントが `sync_hello` を送り、サーバーが `sync_init` で差分を返す。クライアントは `sync_ack` の state vector を比較し、不足があれば `sync_update` で送る。サーバーは 10 秒ごとにも ACK を送り、定期的な差分再同期で取りこぼしを回復する。経路切替で同じ操作を再生成しない。
+- クライアントは指数バックオフ (1s, 2s, 4s, 8s, 10s + jitter) で再接続し、claim は 1 秒ごとに heartbeat を送る。クライアント側の WebSocket watchdog / heartbeat はなく、無応答の接続はサーバーが 30 秒間隔の ping / pong で切断する。明示的な退出では再接続を停止するが、保存済み文書は消さない。
+- 復旧時はクライアントが `sync_hello` を送り、サーバーが `sync_init` で差分を返す。クライアントは `sync_ack` の state vector を比較し、同じなら何も送らず、不足があれば `sync_update` で送る。サーバーは 10 秒ごとにも ACK を送り、定期的な差分再同期で取りこぼしを回復する。経路切替で同じ操作を再生成しない。
 - 送信キューが飽和したら文書から差分同期をやり直す。未反映更新を黙って捨てない。
 
 ### 競合規則
@@ -522,17 +524,19 @@ Y.Doc
 - 同じ transform への同時更新は Yjs の決定的な解決に従う。実時刻の最後の操作や端末時計で勝者を決めない。
 - 削除は単調な tombstone。移動・検証完了・複製・古い更新が後から届いても削除済み ID を表示しない。
 - 削除と複製が競合した場合は複製を残す。削除と検証完了が競合しても復活させない。
-- つかみ claim は分断をまたぐロックではない。同時 claim は sessionId / dragId の順序で表示上の勝者を決め、敗者は操作を中止・補正する。
-- `MAX_OBJECTS=100` はローカルの新規作成抑止。マージ後の超過は保持したまま超過表示する。
+- つかみ claim は分断をまたぐロックではない。同時 claim の表示上の勝者は、`sessionId` が小さい方、同じセッションなら `seq` が大きい方、`seq` も同じなら `peerId` が小さい方。`dragId` は使わず、敗者の操作を中止・補正する仕組みもない。claim は直接の P2P リンクには載るが、他のピアへ中継しない。
+- `MAX_OBJECTS=100` は配置経路 (新規作成・複製・サーバーの配置) で拒否する上限。分断後のマージで 100 個を超えることはあり、全件を保持する。専用の超過 HUD はない。サーバーは適用後の文書が 1,000 オブジェクトを超えたピアの更新を停止する。
 
 ### クライアント HUD
 
 | 表示 | 意味 |
 |---|---|
+| 接続中... | 接続処理中。まだ同期を確立していない |
 | オンライン | WebSocket 接続済み。サーバーと同期している |
 | P2P のみ | サーバーには未接続だが、P2P 経路で文書の変更を同期している (他参加者の姿勢・アバターは WS 再接続まで更新されない) |
-| 孤立 | どの経路も未接続。ローカル編集を続け、保存済みとして扱う |
+| 孤立 (ローカル保存) | どの経路も未接続。ローカル編集を続け、保存済みとして扱う |
 | 再同期中 | 再接続後に state vector と差分を交換している |
-| 保存失敗 | IndexedDB の保存に失敗した。保存済みと表示しない |
+| 保存失敗 (メモリのみ) | IndexedDB の保存に失敗した。保存済みと表示しない |
+| 同期エラー | `sync_error` を受信した。制限超過・スキーマ不一致・保存失敗など |
 
 P2P のみ・孤立でも編集は継続する。新規ファイル検証・URL のメディア取り込み・新規参加はサーバー復帰待ちとし、動画同期は crdt-v1 では未対応とする。WS が切れるとクライアントは peer 一覧と姿勢バッファを消すため、他参加者の姿勢・アバターは再接続まで更新されない。P2P で継続するのは文書編集と claim で、姿勢の P2P 共有は未実装。実験用の「実験: ボックスを置く」「実験: リンクを置く」ボタンは、この状態でも文書へ直接配置できる (リンクは URL のメディア取り込みをしない)。

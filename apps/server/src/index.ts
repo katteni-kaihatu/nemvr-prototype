@@ -18,6 +18,7 @@ import {
   type WorldObject,
 } from "@proto/protocol";
 import { ContentStore } from "./content.js";
+import { ContentLedger } from "./contentLedger.js";
 import { ContentRejected, startIpfs } from "./ipfs.js";
 import { mediaType, parseRange } from "./media.js";
 import { PlacementQueue } from "./queue.js";
@@ -26,7 +27,7 @@ import { SyncHub, CRDT_MAX_MESSAGE_BYTES } from "./syncHub.js";
 import { iceServersFor, turnConfigFromEnv } from "./turn.js";
 import { parseClientMessage } from "./validate.js";
 import { fetchUrl } from "./urlFetch.js";
-import { WorldStore, writeFileAtomic } from "./worldStore.js";
+import { WorldStore } from "./worldStore.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const IPFS_PORT = Number(process.env.IPFS_PORT ?? 8081);
@@ -89,58 +90,25 @@ if (!store) room.seedDemoBoxes(); // legacy: デモ空間のボックス (つか
 const content = new ContentStore(ipfs, {
   maxTotalBytes: MAX_TOTAL_MB * 1024 * 1024,
   log: (message) => console.log(`[content] ${message}`),
-  ...(CONTENT_LEDGER_PATH ? { onChange: () => scheduleContentSave() } : {}),
+  ...(CONTENT_LEDGER_PATH ? { onChange: () => contentLedger.schedule() } : {}),
 });
 
-let contentSaveTimer: ReturnType<typeof setTimeout> | null = null;
-let contentSavePromise: Promise<void> | null = null;
-let contentSaveDirty = false;
-const CONTENT_SAVE_DEBOUNCE_MS = 500;
+/** content.json の保存。500ms の debounce と、明示的な flush を提供する。 */
+const contentLedger = new ContentLedger({
+  path: CONTENT_LEDGER_PATH,
+  snapshot: () => content.snapshot(),
+  log: (message) => console.warn(`[content] ${message}`),
+});
 
-/** 台帳の保存を debounce する。連続する add / release / retain は 1 回の書き込みにまとめる。 */
-function scheduleContentSave(): void {
-  if (!CONTENT_LEDGER_PATH) return;
-  contentSaveDirty = true;
-  if (contentSaveTimer || contentSavePromise) return;
-  contentSaveTimer = setTimeout(() => {
-    contentSaveTimer = null;
-    void saveContentLedger();
-  }, CONTENT_SAVE_DEBOUNCE_MS);
-}
-
-/** いまの台帳を atomic に保存する。保存中に変わったら、終わってからもう一度書く。 */
-function saveContentLedger(): Promise<void> {
-  if (!CONTENT_LEDGER_PATH) return Promise.resolve();
-  if (contentSavePromise) {
-    contentSaveDirty = true;
-    return contentSavePromise;
+/** 台帳を確定させる。失敗したらエラーを返す (呼び出し側で stored にしない)。 */
+async function ensureContentLedger(peerId: string): Promise<boolean> {
+  try {
+    await contentLedger.flush();
+    return true;
+  } catch {
+    room.sendError(peerId, "コンテンツ台帳を保存できませんでした");
+    return false;
   }
-  contentSavePromise = (async () => {
-    do {
-      contentSaveDirty = false;
-      const data = `${JSON.stringify({ version: 1, entries: content.snapshot() }, null, 2)}\n`;
-      await writeFileAtomic(CONTENT_LEDGER_PATH, data);
-    } while (contentSaveDirty);
-  })()
-    .catch((err: unknown) => {
-      console.warn("[content] 台帳を保存できませんでした:", err instanceof Error ? err.message : err);
-    })
-    .finally(() => {
-      contentSavePromise = null;
-      if (contentSaveDirty) scheduleContentSave();
-    });
-  return contentSavePromise;
-}
-
-/** 終了時に、予約中の台帳保存も含めて確定させる。 */
-async function flushContentLedger(): Promise<void> {
-  if (!CONTENT_LEDGER_PATH) return;
-  if (contentSaveTimer) {
-    clearTimeout(contentSaveTimer);
-    contentSaveTimer = null;
-  }
-  if (contentSavePromise) await contentSavePromise;
-  if (contentSaveDirty || !contentSavePromise) await saveContentLedger();
 }
 
 /** 保存済みのコンテンツ台帳を復元する。壊れていれば黙って空にせず、起動を失敗させる。 */
@@ -181,6 +149,9 @@ function reconcileStoredFiles(): void {
   }
 }
 
+/** crdt-v1 で、まだ保持していないファイルを取得している最中の内容 (CID ごとに共有する)。 */
+const crdtStaging = new Map<string, Set<string>>();
+
 if (store) {
   try {
     await restoreContentLedger();
@@ -189,11 +160,13 @@ if (store) {
     process.exit(1);
   }
   reconcileStoredFiles();
+  // 前回のプロセスが落ちたときの owner は、もう配れない。取得中の job が無ければ offline にする
+  store.normalizeStaleFiles(crdtStaging);
   // reconcile で文書を書き換えた可能性があるので、台帳と文書の両方を確定させる
   void store.scheduleSave().catch((err: unknown) => {
     console.warn("[world-store] 起動時の保存に失敗しました:", err instanceof Error ? err.message : err);
   });
-  scheduleContentSave();
+  contentLedger.schedule();
 }
 
 const hub = store ? new SyncHub(store, { log: (message) => console.log(`[sync] ${message}`) }) : null;
@@ -264,6 +237,8 @@ function placeFromUrl(peerId: string, url: string, position: Vec3, yaw: number, 
         if (!fetched.bytes) throw new Error("URL の内容を取得できませんでした");
         const cid = await ipfs.addBytes(fetched.bytes);
         await content.add(cid, fetched.kind === "image" ? "image" : "file");
+        // 文書が stored と言う前に、台帳の entry をディスクへ確定させる
+        if (!(await ensureContentLedger(peerId))) return;
         if (fetched.kind === "image") {
           if (store) {
             const result = insertCrdtObject({
@@ -532,6 +507,7 @@ function placeImageCrdt(peerId: string, place: PlaceImage): void {
         const fetched = await content.add(cid, "image", {
           onProgress: throttled((loaded, declared) => room.sendPlaceProgress(peerId, cid, loaded, declared)),
         });
+        if (!(await ensureContentLedger(peerId))) return;
         const object: WorldObject = {
           id,
           kind: "image",
@@ -662,6 +638,8 @@ function placeFileCrdt(peerId: string, place: PlaceFile): void {
         const fetched = await content.add(cid, "file", {
           onProgress: throttled((loaded, declared) => room.sendPlaceProgress(peerId, cid, loaded, declared)),
         });
+        // 文書が stored と言う前に、台帳の entry をディスクへ確定させる
+        if (!(await ensureContentLedger(peerId))) return;
         // 種類 (アイコン) とサイズは、クライアントの申告ではなく、取得した中身から決める
         const object: WorldObject = {
           id,
@@ -762,9 +740,6 @@ function describeSenders(senders: Map<string, number>, ownerId: string): string 
     .join(", ");
 }
 
-/** crdt-v1 で、まだ保持していないファイルを取得している最中の内容 (CID ごとに共有する)。 */
-const crdtStaging = new Map<string, Set<string>>();
-
 /**
  * crdt-v1 の背景取得。置いた人 (owner) から取得して pin し、文書の stored / size / category を更新する。
  * 失敗してもオブジェクトは削除せず、offline にして所有者に知らせる。同じ CID の取得は 1 回だけ。
@@ -809,6 +784,12 @@ function stageFileCrdt(requesterId: string | null, object: FileObject): void {
         const fetched = await content.add(cid, "file", {
           onProgress: throttled((loaded, declared) => progressTo(loaded, declared)),
         });
+        // 台帳に残ってから stored にする (失敗したら offline のまま)
+        try {
+          await contentLedger.flush();
+        } catch {
+          throw new ContentRejected("コンテンツ台帳を保存できませんでした");
+        }
         let updated = 0;
         for (const file of current()) {
           store!.world.setMetadata(file.id, {
@@ -886,15 +867,16 @@ wss.on("connection", (ws) => {
   }
 
   ws.on("message", (data, isBinary) => {
-    if (isBinary) return;
-    const text = data.toString();
-    const msg = parseClientMessage(text);
-    if (!msg) {
-      // crdt の同期メッセージが不正なら、黙って捨てずに診断できるエラーを返す
-      hub?.reportMalformed(ws, text);
-      return;
-    }
-    if (hub?.handleMessage(ws, msg)) return;
+    try {
+      if (isBinary) return;
+      const text = data.toString();
+      const msg = parseClientMessage(text);
+      if (!msg) {
+        // crdt の同期メッセージが不正なら、黙って捨てずに診断できるエラーを返す
+        hub?.reportMalformed(ws, text);
+        return;
+      }
+      if (hub?.handleMessage(ws, msg)) return;
 
     if (msg.type === "join") {
       if (peerId) return; // 二重 join は無視
@@ -1004,6 +986,10 @@ wss.on("connection", (ws) => {
         if (object?.kind === "file") stageFile(peerId, object);
       }
     }
+    } catch (err) {
+      // 不正なメッセージでプロセスを落とさない
+      console.warn("[ws] message handling failed:", err instanceof Error ? err.message : err);
+    }
   });
 
   ws.on("close", () => {
@@ -1013,12 +999,9 @@ wss.on("connection", (ws) => {
     placements.cancelPending(peerId); // 順番待ちのものは、取りに行かない (取得できない)
     if (store) {
       hub?.detach(ws);
-      // 配っていたファイルは取得できなくなる。オブジェクトは削除せず、offline にする (文書更新として配る)
-      for (const object of store.fileObjects()) {
-        if (!object.stored && object.owner === peerId) {
-          store.world.setMetadata(object.id, { offline: true, owner: undefined });
-        }
-      }
+      // 配っていたファイルは取得できなくなる。オブジェクトは削除せず、offline にする (文書更新として配る)。
+      // ただし背景取得 (crdtStaging) 中の CID は、まだ成功する可能性があるので触らない
+      store.markPeerFilesOffline(peerId, crdtStaging);
     }
     for (const [id, cid] of avatarCids) releaseAvatar(id, cid);
     avatarCids.clear();
@@ -1052,6 +1035,19 @@ httpServer.on("listening", () => {
 });
 
 let shuttingDown = false;
+/** 終了処理が固まらないよう、各ステップに設ける上限。 */
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+
+function withTimeout<T>(task: Promise<T>, label: string, timeoutMs = SHUTDOWN_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([task, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
@@ -1061,16 +1057,31 @@ async function shutdown(): Promise<void> {
   room.close();
   wss.close();
   httpServer.close();
+  const warn = (message: string, err?: unknown) =>
+    console.warn(`[shutdown] ${message}:`, err instanceof Error ? err.message : err);
   try {
     if (store) {
-      await store.flush();
-      await flushContentLedger();
+      try {
+        await withTimeout(store.flush(), "world store flush");
+      } catch (err) {
+        warn("ワールドの保存に失敗しました", err);
+      }
+      try {
+        await withTimeout(contentLedger.flush(), "content ledger flush");
+      } catch (err) {
+        warn("コンテンツ台帳の保存に失敗しました", err);
+      }
       store.close();
     }
+    // legacy / crdt のどちらでも、IPFS の停止が失敗・固まっても終了する
+    try {
+      await withTimeout(ipfs.stop(), "IPFS stop");
+    } catch (err) {
+      warn("IPFS の停止に失敗しました", err);
+    }
   } catch (err) {
-    console.warn("[shutdown] 保存に失敗しました:", err instanceof Error ? err.message : err);
+    warn("終了処理に失敗しました", err);
   } finally {
-    await ipfs.stop();
     process.exit(0);
   }
 }

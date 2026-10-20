@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import type { BoxObject, FileObject, Vec3, WorldObject } from "@proto/protocol";
+import {
+  MAX_ABS_POSITION,
+  MAX_FILE_NAME_LENGTH,
+  MAX_URL_LENGTH,
+} from "@proto/protocol";
+import type { BoxObject, FileObject, ImageObject, LinkObject, Vec3, WorldObject } from "@proto/protocol";
 import { DEMO_BOXES, WorldDoc, seedDemoBoxes } from "./doc.js";
-import { isValidTransform } from "./validate.js";
+import type { ObjectMetadataPatch, WorldTransform } from "./types.js";
+import { MAX_CID_LENGTH, isValidObjectId, isValidTransform } from "./validate.js";
 
 function uuid(value: number): string {
   return `00000000-0000-4000-8000-${value.toString(16).padStart(12, "0")}`;
@@ -24,6 +30,22 @@ function makeFile(id: string): FileObject {
     stored: false,
     category: "file",
   };
+}
+
+function makeImage(id: string, position: Vec3 = [0, 0, 0]): ImageObject {
+  return {
+    id,
+    kind: "image",
+    position,
+    yaw: 0,
+    cid: "bafybeigdyrztimage",
+    width: 1,
+    height: 1,
+  };
+}
+
+function makeLink(id: string, url = "https://example.com/"): LinkObject {
+  return { id, kind: "link", position: [0, 0, 0], yaw: 0, url };
 }
 
 function makeWorld(actorId = "actor-a"): WorldDoc {
@@ -136,6 +158,73 @@ describe("WorldDoc basics", () => {
   });
 });
 
+describe("metadata by object kind", () => {
+  it("rejects every patch on boxes and keeps them visible", () => {
+    const world = makeWorld();
+    const id = uuid(80);
+    expect(world.createObject(makeBox(id))).toBe(true);
+
+    expect(world.setMetadata(id, { size: 0 })).toBe(false);
+    expect(world.setMetadata(id, { size: 42 })).toBe(false);
+    expect(world.setMetadata(id, {})).toBe(false);
+
+    const box = world.getObject(id);
+    expect(box).toBeDefined();
+    expect((box as BoxObject).size).toBe(1);
+    expect(world.count()).toBe(1);
+  });
+
+  it("rejects every patch on links", () => {
+    const world = makeWorld();
+    const id = uuid(81);
+    expect(world.createObject(makeLink(id))).toBe(true);
+    expect(world.setMetadata(id, { name: "renamed" })).toBe(false);
+    expect(world.getObject(id)).toBeDefined();
+  });
+
+  it("only allows name on images", () => {
+    const world = makeWorld();
+    const id = uuid(82);
+    expect(world.createObject(makeImage(id))).toBe(true);
+
+    expect(world.setMetadata(id, { stored: true })).toBe(false);
+    expect(world.setMetadata(id, { name: "picture.png" })).toBe(true);
+    expect((world.getObject(id) as ImageObject).name).toBe("picture.png");
+  });
+
+  it("validates file metadata and deletes empty owner/offline", () => {
+    const world = makeWorld();
+    const id = uuid(83);
+    expect(world.createObject(makeFile(id))).toBe(true);
+
+    expect(world.setMetadata(id, { unknown: 1 } as unknown as ObjectMetadataPatch)).toBe(false);
+    expect(world.setMetadata(id, { size: -1 })).toBe(false);
+    expect(world.setMetadata(id, { stored: "yes" } as unknown as ObjectMetadataPatch)).toBe(false);
+    expect(world.setMetadata(id, { owner: "o".repeat(257) })).toBe(false);
+    expect(world.setMetadata(id, { name: "n".repeat(MAX_FILE_NAME_LENGTH + 1) })).toBe(false);
+
+    expect(
+      world.setMetadata(id, {
+        stored: true,
+        size: 0,
+        category: "audio",
+        owner: "bob",
+        offline: true,
+        name: "renamed.mp3",
+      }),
+    ).toBe(true);
+    expect(world.setMetadata(id, { owner: "", offline: false })).toBe(true);
+
+    const file = world.getObject(id) as FileObject;
+    expect(file.stored).toBe(true);
+    expect(file.size).toBe(0);
+    expect(file.category).toBe("audio");
+    expect(file.name).toBe("renamed.mp3");
+    expect(file.owner).toBeUndefined();
+    expect(file.offline).toBeUndefined();
+  });
+});
+
 describe("tombstones", () => {
   it("deletes idempotently and never resurrects", () => {
     const world = makeWorld();
@@ -159,6 +248,22 @@ describe("tombstones", () => {
     const id = uuid(11);
     expect(world.deleteObject(id)).toBe(true);
     expect(world.createObject(makeBox(id))).toBe(false);
+  });
+
+  it("cannot be bypassed by writing false to the deleted map", () => {
+    const world = makeWorld();
+    const id = uuid(12);
+    expect(world.createObject(makeBox(id))).toBe(true);
+    expect(world.deleteObject(id)).toBe(true);
+
+    world.doc.getMap<boolean>("deleted").set(id, false);
+
+    expect(world.isDeleted(id)).toBe(true);
+    expect(world.getObject(id)).toBeUndefined();
+    expect(world.count()).toBe(0);
+    expect(world.createObject(makeBox(id))).toBe(false);
+    expect(world.moveObject(id, [1, 0, 0], 0)).toBe(false);
+    expect(world.setMetadata(id, { size: 1 })).toBe(false);
   });
 
   it("duplicates with a new id without touching the source", () => {
@@ -219,6 +324,20 @@ describe("snapshot import", () => {
     world.mergeFromSnapshot([makeBox(uuid(36))]);
     expect(world.getObject(uuid(36))).toBeUndefined();
   });
+
+  it("does not move an existing object when a snapshot entry changes kind", () => {
+    const world = makeWorld();
+    const id = uuid(37);
+    expect(world.createObject(makeBox(id, [0, 0, 0]))).toBe(true);
+
+    const conflicting: FileObject = { ...makeFile(id), position: [9, 9, 9] };
+    world.mergeFromSnapshot([conflicting]);
+
+    const object = world.getObject(id);
+    expect(object).toBeDefined();
+    expect(object!.kind).toBe("box");
+    expect(object!.position).toEqual([0, 0, 0]);
+  });
 });
 
 describe("seeding", () => {
@@ -243,6 +362,28 @@ describe("seeding", () => {
     });
     seedDemoBoxes(loaded);
     expect(loaded.count()).toBe(5);
+  });
+
+  it("seeds fixed ids so independent replicas converge to five boxes", () => {
+    const first = makeWorld("replica-a");
+    const second = makeWorld("replica-b");
+    seedDemoBoxes(first);
+    seedDemoBoxes(second);
+    expect(first.count()).toBe(5);
+    expect(second.count()).toBe(5);
+
+    const firstUpdate = first.encodeUpdate();
+    const secondUpdate = second.encodeUpdate();
+    first.applyUpdate(secondUpdate);
+    second.applyUpdate(firstUpdate);
+
+    expect(first.count()).toBe(5);
+    expect(second.count()).toBe(5);
+    expect(first.getObjects().map((object) => object.id)).toEqual(
+      second.getObjects().map((object) => object.id),
+    );
+    expect(first.doc.getMap<unknown>("meta").get("seeded")).toBe("v1");
+    expect(second.doc.getMap<unknown>("meta").get("seeded")).toBe("v1");
   });
 });
 
@@ -301,10 +442,133 @@ describe("projection hardening", () => {
     expect(
       isValidTransform({ position: [0, Number.NaN, 0], yaw: 0, updateId: "u", actorId: "a", at: 1 }),
     ).toBe(false);
+    expect(
+      isValidTransform({
+        position: [MAX_ABS_POSITION + 1, 0, 0],
+        yaw: 0,
+        updateId: "u",
+        actorId: "a",
+        at: 1,
+      }),
+    ).toBe(false);
     expect(isValidTransform(new Y.Map())).toBe(false);
     expect(isValidTransform({ position: [0, 0, 0], yaw: 0, updateId: "", actorId: "a", at: 1 })).toBe(
       false,
     );
+  });
+
+  it("rejects oversized fields and out-of-range positions", () => {
+    const world = makeWorld();
+    const longUrl = `https://example.com/${"a".repeat(MAX_URL_LENGTH)}`;
+    const longName = "n".repeat(MAX_FILE_NAME_LENGTH + 1);
+    const longCid = "c".repeat(MAX_CID_LENGTH + 1);
+
+    expect(world.createObject(makeLink(uuid(46), longUrl))).toBe(false);
+    expect(world.createObject({ ...makeFile(uuid(47)), name: longName })).toBe(false);
+    expect(world.createObject({ ...makeFile(uuid(48)), cid: longCid })).toBe(false);
+    expect(world.createObject({ ...makeImage(uuid(49)), cid: longCid })).toBe(false);
+    expect(world.createObject(makeBox(uuid(50), [MAX_ABS_POSITION + 1, 0, 0]))).toBe(false);
+    expect(world.createObject(makeBox(uuid(51), [0, 0, 0]))).toBe(true);
+    expect(world.moveObject(uuid(51), [0, -MAX_ABS_POSITION - 1, 0], 0)).toBe(false);
+  });
+
+  it("applies the same caps to peer-written records", () => {
+    const world = makeWorld();
+    const objects = world.doc.getMap<Y.Map<unknown>>("objects");
+    const transform = { position: [0, 0, 0], yaw: 0, updateId: "u", actorId: "a", at: 1 };
+
+    const outOfRange = new Y.Map<unknown>();
+    outOfRange.set("kind", "box");
+    outOfRange.set("transform", { ...transform, position: [0, MAX_ABS_POSITION + 1, 0] });
+    outOfRange.set("size", 1);
+    outOfRange.set("color", "#ffffff");
+    objects.set(uuid(52), outOfRange);
+
+    const longUrl = new Y.Map<unknown>();
+    longUrl.set("kind", "link");
+    longUrl.set("transform", transform);
+    longUrl.set("url", `https://example.com/${"a".repeat(MAX_URL_LENGTH)}`);
+    objects.set(uuid(53), longUrl);
+
+    expect(world.getObject(uuid(52))).toBeUndefined();
+    expect(world.getObject(uuid(53))).toBeUndefined();
+  });
+
+  it("requires lowercase UUIDs", () => {
+    const world = makeWorld();
+    const lower = uuid(0xabcdef);
+    const upper = lower.toUpperCase();
+    expect(lower).not.toBe(upper);
+    expect(isValidObjectId(lower)).toBe(true);
+    expect(isValidObjectId(upper)).toBe(false);
+    expect(world.createObject(makeBox(upper))).toBe(false);
+  });
+});
+
+describe("same-id concurrent creates", () => {
+  it("converges and keeps moves made after the merge", () => {
+    const id = uuid(70);
+    const first = makeWorld("replica-1");
+    const second = makeWorld("replica-2");
+    const left = { ...makeBox(id, [1, 0, 0]), size: 2, color: "#111111" };
+    const right = { ...makeBox(id, [2, 0, 0]), size: 3, color: "#222222" };
+
+    expect(first.createObject(left)).toBe(true);
+    expect(second.createObject(right)).toBe(true);
+
+    const firstUpdate = first.encodeUpdate();
+    const secondUpdate = second.encodeUpdate();
+    first.applyUpdate(secondUpdate);
+    second.applyUpdate(firstUpdate);
+
+    const firstProjection = first.getObject(id);
+    const secondProjection = second.getObject(id);
+    expect(firstProjection).toBeDefined();
+    expect(secondProjection).toBeDefined();
+    expect(JSON.stringify(firstProjection)).toBe(JSON.stringify(secondProjection));
+
+    const firstMove = capture(first, () => {
+      expect(first.moveObject(id, [7, 8, 9], 0.4, 0.2)).toBe(true);
+    });
+    for (const update of firstMove) second.applyUpdate(update);
+    expect(second.getObject(id)!.position).toEqual([7, 8, 9]);
+    expect(second.getObject(id)!.pitch).toBe(0.2);
+
+    const secondMove = capture(second, () => {
+      expect(second.moveObject(id, [-1, -2, -3], 0.6)).toBe(true);
+    });
+    for (const update of secondMove) first.applyUpdate(update);
+    expect(first.getObject(id)!.position).toEqual([-1, -2, -3]);
+    expect(JSON.stringify(first.getObject(id))).toBe(JSON.stringify(second.getObject(id)));
+  });
+
+  it("falls back to the record transform for documents without the transforms map", () => {
+    const world = makeWorld();
+    const id = uuid(71);
+    expect(world.createObject(makeBox(id, [1, 2, 3]))).toBe(true);
+
+    world.doc.getMap("transforms").delete(id);
+
+    expect(world.getObject(id)!.position).toEqual([1, 2, 3]);
+  });
+
+  it("prefers a valid shared transform over the record transform", () => {
+    const world = makeWorld();
+    const id = uuid(72);
+    expect(world.createObject(makeBox(id, [1, 2, 3]))).toBe(true);
+
+    const shared: WorldTransform = {
+      position: [4, 5, 6],
+      yaw: 0.5,
+      updateId: "shared",
+      actorId: "peer",
+      at: 2,
+    };
+    world.doc.getMap<WorldTransform>("transforms").set(id, shared);
+
+    const object = world.getObject(id)!;
+    expect(object.position).toEqual([4, 5, 6]);
+    expect(object.yaw).toBe(0.5);
   });
 });
 

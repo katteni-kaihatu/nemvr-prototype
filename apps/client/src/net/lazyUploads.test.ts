@@ -89,8 +89,15 @@ describe("uploadsToRelease", () => {
     expect(uploadsToRelease(world(video), "me", servingAll)).toEqual([]);
   });
 
-  it("releases an unstored file that someone else placed", () => {
-    expect(uploadsToRelease(world(file("1", { owner: "someone-else" })), "me", servingAll)).toEqual(["cid-a"]);
+  it("keeps an unstored file even when its owner differs or is missing", () => {
+    expect(uploadsToRelease(world(file("1", { owner: "someone-else" })), "me", servingAll)).toEqual([]);
+    expect(uploadsToRelease(world(file("1", { owner: undefined })), "me", servingAll)).toEqual([]);
+  });
+
+  it("still releases a stored file", () => {
+    expect(uploadsToRelease(world(file("1", { stored: true, owner: undefined })), "me", servingAll)).toEqual([
+      "cid-a",
+    ]);
   });
 
   it("deduplicates CIDs and returns them in a deterministic order", () => {

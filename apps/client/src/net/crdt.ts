@@ -18,7 +18,14 @@ import {
 } from "@proto/world-sync";
 import { openUpdateStore, type UpdateStore } from "./idb";
 
-export type CrdtSyncStatus = "connecting" | "online" | "p2p" | "offline" | "resyncing" | "save-failed";
+export type CrdtSyncStatus =
+  | "connecting"
+  | "online"
+  | "p2p"
+  | "offline"
+  | "resyncing"
+  | "save-failed"
+  | "sync-error";
 
 export interface CrdtStatus {
   sync: CrdtSyncStatus;
@@ -92,6 +99,32 @@ function isEmptyUpdate(update: Uint8Array): boolean {
   return update.length === 0 || (update.length === 2 && update[0] === 0 && update[1] === 0);
 }
 
+/**
+ * 圧縮時に、このタブのスナップショットと、他のタブが書いた既存の行を 1 つにまとめる。
+ * IndexedDB の readwrite トランザクションの中から同期で呼ばれる (await しない)。
+ * クライアントに yjs の直接依存を増やさないため、Y.mergeUpdates の代わりに一時的な
+ * WorldDoc へ全部適用して 1 つの更新にエンコードする (結果は同じ)。
+ * 壊れた行はスキップし、読めた更新だけを残す。
+ */
+export function mergeUpdatesForCompaction(snapshot: Uint8Array, existing: Uint8Array[]): Uint8Array {
+  if (existing.length === 0) return snapshot;
+  const merged = new WorldDoc({ actorId: "compact" });
+  try {
+    for (const update of existing) {
+      if (update.length === 0) continue;
+      try {
+        merged.applyUpdate(update);
+      } catch {
+        // 壊れた行は捨てる (残りの行とスナップショットは失わない)
+      }
+    }
+    merged.applyUpdate(snapshot);
+    return merged.encodeUpdate();
+  } finally {
+    merged.destroy();
+  }
+}
+
 const ACTOR_KEY = "proto-crdt:actor";
 const BASE64_UPDATE_LIMIT = 48 * 1024;
 const MOVE_COMMIT_INTERVAL_MS = 1000;
@@ -154,8 +187,13 @@ class MemoryUpdateStore implements UpdateStore {
     this.updates.push(new Uint8Array(update));
   }
 
-  async compact(snapshot: Uint8Array): Promise<void> {
-    this.updates = [new Uint8Array(snapshot)];
+  async compact(
+    snapshot: Uint8Array,
+    merge?: (snapshot: Uint8Array, existing: Uint8Array[]) => Uint8Array,
+  ): Promise<void> {
+    const existing = this.updates.map((update) => new Uint8Array(update));
+    const next = merge ? merge(snapshot, existing) : snapshot;
+    this.updates = [new Uint8Array(next)];
   }
 
   close(): void {
@@ -189,7 +227,11 @@ export class CrdtWorld {
   private p2pAvailable = false;
   private peerTransport: CrdtPeerTransport | null = null;
   private saveFailed = false;
+  /** 致命的な同期エラー (worldId / schema の不一致など)。再接続しても消さない。 */
+  private syncError: string | null = null;
   private warnedStorage = false;
+  private warnedCorrupt = false;
+  private warnedCompaction = false;
   private closed = false;
   private closing = false;
 
@@ -199,6 +241,11 @@ export class CrdtWorld {
   private updatesSinceCompact = 0;
   private bytesSinceCompact = 0;
   private compactScheduled = false;
+  /** append に失敗した更新がある (スナップショットで埋め直す必要がある)。 */
+  private appendDirty = false;
+  private snapshotRetryScheduled = false;
+  /** 読み込みで壊れた行を飛ばした。直後の圧縮は 1 回見送る。 */
+  private deferCompaction = false;
 
   private readonly previews = new Map<string, Preview>();
   private previewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -238,8 +285,23 @@ export class CrdtWorld {
   async init(): Promise<void> {
     try {
       const updates = await this.store.load();
+      let skipped = 0;
       for (const update of updates) {
-        if (update.length > 0) this.world.applyUpdate(update, "load");
+        if (update.length === 0) continue;
+        try {
+          this.world.applyUpdate(update, "load");
+        } catch {
+          // 壊れた行だけを飛ばし、残りの有効な行は読み込み続ける
+          skipped++;
+        }
+      }
+      if (skipped > 0) {
+        // 有効な行を消さないように、直後の圧縮は見送る (次の機会にまとめる)
+        this.deferCompaction = true;
+        if (!this.warnedCorrupt) {
+          this.warnedCorrupt = true;
+          console.warn(`[crdt] skipped ${skipped} corrupt local update(s) while loading`);
+        }
       }
     } catch (error) {
       this.markSaveFailed(error);
@@ -257,6 +319,17 @@ export class CrdtWorld {
 
   getSessionId(): string {
     return this.sessionId;
+  }
+
+  /** P2P の claim に載せる、WebSocket 側の自分の peerId (未入室なら undefined)。 */
+  selfPeerId(): string | undefined {
+    return this.selfId();
+  }
+
+  /** P2P の handshake などで見つかった、致命的な同期エラーを HUD に出す。 */
+  reportSyncError(message: string): void {
+    this.syncError = message;
+    this.emitStatus();
   }
 
   stateVector(): Uint8Array {
@@ -462,6 +535,14 @@ export class CrdtWorld {
       case "sync_ack": {
         const vector = fromBase64(msg.stateVector);
         if (!vector) return;
+        // 既に同じ state vector なら、サーバーは追い付いている。ここで差分を作ると
+        // delete set だけの更新を返して ack が往復し続けるので、何も送らない。
+        if (stateVectorEquals(vector, this.world.encodeStateVector())) {
+          this.serverSaved = true;
+          this.markOnline();
+          this.emitStatus();
+          break;
+        }
         // サーバーの vector に足りないローカルの更新 (オフライン中の編集) を送り返す。
         // ここで初めて再接続後のギャップが埋まる。
         let diff: Uint8Array;
@@ -475,7 +556,7 @@ export class CrdtWorld {
           this.serverSaved = false;
           this.sendToServer(diff);
         } else {
-          this.serverSaved = stateVectorEquals(vector, this.world.encodeStateVector());
+          this.serverSaved = false;
         }
         this.markOnline();
         this.emitStatus();
@@ -483,6 +564,8 @@ export class CrdtWorld {
       }
       case "sync_error":
         console.warn(`[crdt] sync error: ${msg.message}`);
+        this.syncError = msg.message;
+        this.emitStatus();
         break;
       case "claim":
         this.acceptRemoteClaim(msg);
@@ -565,7 +648,16 @@ export class CrdtWorld {
   }
 
   flush(): Promise<void> {
-    return this.persistence;
+    // 保存の途中でスナップショット再試行が積まれることがある。それが終わるまで待つ
+    const settle = async (): Promise<void> => {
+      let current = this.persistence;
+      for (;;) {
+        await current;
+        if (current === this.persistence) return;
+        current = this.persistence;
+      }
+    };
+    return settle();
   }
 
   private onDocUpdate(update: Uint8Array, origin: unknown): void {
@@ -598,35 +690,78 @@ export class CrdtWorld {
       try {
         await this.store.append(update);
         this.pendingWrites--;
+        // 以前の append が失敗していたら、スナップショットで欠けた更新を埋め直す
+        if (this.appendDirty) this.scheduleSnapshotRetry();
         if (!this.memoryOnly && !this.saveFailed && this.pendingWrites === 0) this.localSaved = true;
         this.emitStatus();
       } catch (error) {
         this.pendingWrites--;
+        this.appendDirty = true;
         this.markSaveFailed(error);
+        // append の失敗は、その後の append が成功しても穴が残る。全文スナップショットで回復を試す
+        this.scheduleSnapshotRetry();
       }
     });
     this.maybeCompact(update.length);
+  }
+
+  /** append の失敗で欠けた更新を、全文スナップショットの compact で埋め直す。 */
+  private scheduleSnapshotRetry(): void {
+    if (this.snapshotRetryScheduled || this.closed || this.closing) return;
+    this.snapshotRetryScheduled = true;
+    void this.enqueue(async () => {
+      const snapshot = this.world.encodeUpdate();
+      await this.store.compact(snapshot, mergeUpdatesForCompaction);
+      this.appendDirty = false;
+      this.saveFailed = false;
+      this.localSaved = true;
+      this.updatesSinceCompact = 0;
+      this.bytesSinceCompact = snapshot.length;
+      this.emitStatus();
+    })
+      .catch((error: unknown) => {
+        // まだ回復していない。saveFailed は維持し、次の append でもう一度試す
+        this.warnCompaction(error);
+      })
+      .finally(() => {
+        this.snapshotRetryScheduled = false;
+      });
   }
 
   private maybeCompact(updateBytes: number): void {
     this.updatesSinceCompact++;
     this.bytesSinceCompact += updateBytes;
     if (this.updatesSinceCompact < this.compactEvery && this.bytesSinceCompact <= this.compactBytes) return;
+    if (this.deferCompaction) {
+      // 壊れた行を読み飛ばした直後は、まだ圧縮しない (残りの行を消さない)
+      this.deferCompaction = false;
+      this.updatesSinceCompact = 0;
+      this.bytesSinceCompact = 0;
+      return;
+    }
     if (this.compactScheduled) return;
     this.compactScheduled = true;
     void this.enqueue(async () => {
       // 直前までの append が終わった後にスナップショットを作る
       const snapshot = this.world.encodeUpdate();
-      await this.store.compact(snapshot);
+      await this.store.compact(snapshot, mergeUpdatesForCompaction);
       this.updatesSinceCompact = 0;
       this.bytesSinceCompact = snapshot.length;
+      this.appendDirty = false;
+      // スナップショットが書けたら、append 失敗による欠けも回復している
+      if (this.saveFailed && !this.memoryOnly) {
+        this.saveFailed = false;
+        this.localSaved = true;
+        this.emitStatus();
+      }
     }).then(
       () => {
         this.compactScheduled = false;
       },
       (error: unknown) => {
         this.compactScheduled = false;
-        this.markSaveFailed(error);
+        // 圧縮の失敗は一時的なものとして扱う。append は残っているので、次の更新で再試行する
+        this.warnCompaction(error);
       },
     );
   }
@@ -667,6 +802,8 @@ export class CrdtWorld {
 
   private markOnline(): void {
     if (this.transport === "offline") return;
+    // 正常な同期メッセージが届いたら、回復したものとしてエラー表示を消す
+    this.syncError = null;
     this.transport = "online";
     this.emitStatus();
   }
@@ -675,6 +812,19 @@ export class CrdtWorld {
     if (this.closing || this.closed) return;
     const objects: Record<string, WorldObject> = {};
     for (const object of this.world.getObjects()) objects[object.id] = object;
+
+    // リモートで消えたオブジェクトに紐づく、ローカルの一時状態を掃除する。
+    // これを残すと、消えた ID への claim を送り続けたり、プレビューが残ったりする。
+    const present = new Set(Object.keys(objects));
+    for (const id of [...this.previews.keys()]) if (!present.has(id)) this.clearPreview(id);
+    for (const id of [...this.throttles.keys()]) if (!present.has(id)) this.clearThrottle(id);
+    for (const id of [...this.remoteClaims.keys()]) if (!present.has(id)) this.remoteClaims.delete(id);
+    for (const id of [...this.localClaims]) if (!present.has(id)) this.localClaims.delete(id);
+    if (this.localClaims.size === 0) this.stopHeartbeat();
+    if (this.previews.size === 0 && this.previewTimer !== undefined) {
+      clearTimeout(this.previewTimer);
+      this.previewTimer = undefined;
+    }
 
     for (const [id, preview] of this.previews) {
       const object = objects[id];
@@ -710,7 +860,9 @@ export class CrdtWorld {
         winner = claim;
         continue;
       }
-      // 表示上の勝者を決定的に選ぶ (厳密なロックではない)
+      // 表示上の勝者を決定的に選ぶ (厳密なロックではない)。sessionId が小さい方、
+      // 同じ session なら seq が大きい方、seq も同じなら peerId が小さい方を勝者にする。
+      // claims は sessionId をキーにしているので、WS と P2P の同じ claim は 1 つにまとまる。
       if (
         claim.sessionId < winner.sessionId ||
         (claim.sessionId === winner.sessionId &&
@@ -727,14 +879,17 @@ export class CrdtWorld {
       typeof msg.id !== "string" ||
       typeof msg.peerId !== "string" ||
       typeof msg.sessionId !== "string" ||
+      msg.sessionId.length === 0 ||
       !Number.isFinite(msg.seq) ||
-      !Number.isFinite(msg.until) ||
-      msg.peerId === this.selfId()
+      !Number.isFinite(msg.until)
     ) {
       return;
     }
+    // 自分のセッションの claim は、WS / P2P のどちらから戻ってきても無視する
+    if (msg.sessionId === this.sessionId) return;
     let claims = this.remoteClaims.get(msg.id);
-    const key = `${msg.peerId}:${msg.sessionId}`;
+    // sessionId をキーにする: WS と P2P で同じ claim が二重に届いても 1 つにまとめる
+    const key = msg.sessionId;
     const existing = claims?.get(key);
     // 古い claim / release は捨てる
     if (existing && existing.seq > msg.seq) return;
@@ -856,12 +1011,22 @@ export class CrdtWorld {
     this.callbacks.onWarning?.("ローカル保存を利用できません。変更はメモリのみに保持されます");
   }
 
+  /** 圧縮の失敗は一時的な警告。append 済みの更新は残したまま、次の機会に再試行する。 */
+  private warnCompaction(error: unknown): void {
+    if (!this.warnedCompaction) {
+      this.warnedCompaction = true;
+      console.warn("[crdt] local compaction failed; will retry later:", error);
+    }
+  }
+
   private emitStatus(force = false): void {
-    const sync: CrdtSyncStatus = this.saveFailed
-      ? "save-failed"
-      : this.transport === "offline" && (this.p2pAvailable || this.peerCount > 0)
-        ? "p2p"
-        : this.transport;
+    const sync: CrdtSyncStatus = this.syncError !== null
+      ? "sync-error"
+      : this.saveFailed
+        ? "save-failed"
+        : this.transport === "offline" && (this.p2pAvailable || this.peerCount > 0)
+          ? "p2p"
+          : this.transport;
     const status: CrdtStatus = {
       sync,
       localSaved: this.localSaved,

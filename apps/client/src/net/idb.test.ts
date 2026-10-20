@@ -149,6 +149,28 @@ describe("UpdateStore", () => {
     expect((await store.load()).map((update) => update[0])).toEqual([9, 10]);
   });
 
+  it("merges existing rows from other tabs when compacting", async () => {
+    const { store: tabA, db } = fakeStore();
+    const tabB = createUpdateStore(db as unknown as IDBDatabase);
+
+    // タブ A と B が同じ DB に書き、A が圧縮する
+    await tabA.append(bytes(1));
+    await tabB.append(bytes(2));
+
+    const seen: { snapshot: number; existing: number[] }[] = [];
+    await tabA.compact(bytes(9), (snapshot, existing) => {
+      seen.push({ snapshot: snapshot[0]!, existing: existing.map((update) => update[0]!) });
+      return new Uint8Array([snapshot[0]!, ...existing.map((update) => update[0]!)]);
+    });
+
+    expect(seen).toEqual([{ snapshot: 9, existing: [1, 2] }]);
+    // タブ B の更新 (2) も、A のスナップショット (9) も 1 つの更新にまとまって残る (更新は失われない)
+    const reloaded = createUpdateStore(db as unknown as IDBDatabase);
+    const loaded = await reloaded.load();
+    expect(loaded).toHaveLength(1);
+    expect([...loaded[0]!]).toEqual([9, 1, 2]);
+  });
+
   it("returns null when IndexedDB is unavailable", async () => {
     vi.stubGlobal("indexedDB", undefined);
     await expect(openUpdateStore("proto-crdt:test")).resolves.toBeNull();

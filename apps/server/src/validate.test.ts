@@ -278,6 +278,11 @@ describe("crdt-v1 messages", () => {
       expect(parseClientMessage(JSON.stringify({ type: "sync_update", update: "***" }))).toBeNull();
       expect(parseClientMessage(JSON.stringify({ type: "sync_update", update: 5 }))).toBeNull();
     });
+    it("does not overflow the stack on a large invalid base64 string", () => {
+      const update = `${"A".repeat(199_999)}!`; // 長さ 200000 (4 の倍数) で、最後が不正
+      expect(() => parseClientMessage(JSON.stringify({ type: "sync_update", update }))).not.toThrow();
+      expect(parseClientMessage(JSON.stringify({ type: "sync_update", update }))).toBeNull();
+    });
   });
 
   describe("sync_part", () => {

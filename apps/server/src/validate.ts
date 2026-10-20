@@ -89,11 +89,38 @@ const CLAIM_SESSION_RE = /^[A-Za-z0-9:_-]{8,128}$/;
 const MAX_SYNC_FIELD_LENGTH = 16 * 1024 * 1024;
 /** sync_part の 1 片の base64 文字列の上限。 */
 const MAX_SYNC_PART_LENGTH = 1024 * 1024;
-const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/**
+ * base64 かどうかを、文字ごとに調べる。
+ * 巨大な文字列に正規表現をかけるとスタックを消費する環境があるため、正規表現は使わない。
+ */
+function isBase64String(value: string): boolean {
+  if (value.length % 4 !== 0) return false;
+  let padding = 0;
+  if (value.length > 0 && value.charCodeAt(value.length - 1) === 61 /* = */) {
+    padding = value.charCodeAt(value.length - 2) === 61 ? 2 : 1;
+  }
+  const paddingStart = value.length - padding;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (
+      (code >= 65 && code <= 90) || // A-Z
+      (code >= 97 && code <= 122) || // a-z
+      (code >= 48 && code <= 57) || // 0-9
+      code === 43 || // +
+      code === 47 // /
+    ) {
+      continue;
+    }
+    if (code === 61 && i >= paddingStart) continue; // =
+    return false;
+  }
+  return true;
+}
 
 /** 明らかに base64 でない文字列を、デコードする前に早めに弾く。 */
 function parseBase64String(v: unknown, maxLength: number): string | null {
-  return typeof v === "string" && v.length <= maxLength && BASE64_RE.test(v) ? v : null;
+  return typeof v === "string" && v.length <= maxLength && isBase64String(v) ? v : null;
 }
 
 /** objectId (クライアント生成 UUID) は任意。ある場合だけ検証して返す。 */

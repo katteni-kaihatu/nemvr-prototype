@@ -37,7 +37,14 @@ export function uploadsToRelease(
   for (const object of Object.values(objects)) {
     if ("cid" in object && isServing(object.cid)) serving.add(object.cid);
   }
+  const all = Object.values(objects);
   return [...serving]
-    .filter((cid) => !needsLocalFile(objects, cid, selfId, true))
+    .filter((cid) => {
+      // サーバーがまだ保持していないファイルは、所有者が変わって見えても (WS の切断で
+      // peer id が変わっても) 配り続ける。ここで解放すると、取得中の大きなファイルが消える。
+      const unstored = all.some((object) => object.kind === "file" && object.cid === cid && !object.stored);
+      if (unstored) return false;
+      return !needsLocalFile(objects, cid, selfId, true);
+    })
     .sort();
 }

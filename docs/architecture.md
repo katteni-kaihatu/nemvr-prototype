@@ -172,7 +172,7 @@ graph LR
 
 サーバー停止や通信分断中も基本編集を続け、復旧後に統合する `crdt-v1` を実験的に用意する (**実装済み・障害検証は未完了**)。既定は legacy で、設定・保存領域・メッセージ体系を分離する。設計・保証範囲・障害試験は [CRDT 実験モード](crdt-experiment.md) を参照。
 
-Node / 単体テスト (`pnpm typecheck` / `pnpm test` / `pnpm build`、26 ファイル / 395 件) と、Node 上の 2 クライアント smoke test (同じ `worldId` の収束、再起動後の復元、seed の非重複) は確認済み。実ブラウザの IndexedDB、実際のサーバー / ネットワーク障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証で、実際の障害を耐えることはまだ主張しない。
+Node / 単体テスト (`pnpm typecheck` / `pnpm test` / `pnpm build`、27 ファイル / 443 件) と、Node 上の 2 クライアント smoke test (同じ `worldId` の収束、周期 ACK 3 回を含む 22 秒間で `sync_update` / `sync_part` の再送 0 件、再起動後の復元、seed の非重複) は確認済み。実ブラウザの IndexedDB、実際のサーバー / ネットワーク障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証で、実際の障害を耐えることはまだ主張しない。
 
 ```mermaid
 graph LR
@@ -186,7 +186,7 @@ graph LR
     end
     subgraph SV[Server]
         S[server<br/>Yjs 文書]
-        P[(CRDT_DATA_DIR<br/>atomic snapshot)]
+        P[(CRDT_DATA_DIR<br/>meta.json / doc.bin<br/>content.json / blocks/)]
     end
     L[legacy モード<br/>既存 JSON プロトコル]
 
@@ -199,9 +199,11 @@ graph LR
     S -.-|モード排他・混在禁止| L
 ```
 
-- ブラウザとサーバーが同じ Yjs 文書の replica を持ち、ブラウザは IndexedDB、サーバーは atomic snapshot で永続化する。
+- ブラウザとサーバーが同じ Yjs 文書の replica を持ち、ブラウザは IndexedDB、サーバーは `meta.json`・`doc.bin`・`content.json`・`blocks/` (書き込み中は `*.tmp-*`) を保存する。`BLOCKSTORE_DIR` を指定すると `blocks/` の代わりにそのディレクトリを使い、`CRDT_DATA_DIR` の外にも置ける。Helia の datastore・pin 情報・サーバー identity は永続化せず、再起動で libp2p peerId は変わる (クライアントは `welcome` で再学習する)。
 - WebSocket のリレーに加え、既存の libp2p 接続 (WebRTC / circuit relay) 上のカスタム stream `/proto/world-sync/1.0.0` で同期する。P2P トランスポートは実装済みだが、実際の障害中にリンクが生存するかは未検証で、停止中の新規接続は確立できない。
 - サーバーが停止していても、クライアントはローカル文書への編集を続ける。復旧後に state vector と差分を交換して統合する。
+- `sync_ack` は、hello・更新受信・周期 ACK のどの経路でも、ディスクへの保存が確定した state vector を返す。ACK は更新 ID やラウンドには紐づかない。クライアントは自分の vector と同じなら何も送らない。保存失敗はバックオフで再試行し、終了時の `flush()` は失敗を reject する。
+- サーバーは適用前の更新を 8 MiB または 10,000 struct で拒否し、適用後の文書が 1,000 オブジェクトを超えたピアの更新を停止する (既存オブジェクトは削除しない)。配置経路は `MAX_OBJECTS=100` で拒否するが、マージ後の超過は許容し、専用の HUD 表示はない。
 - legacy の `/ws` と 4 KiB 制限はそのまま残す。`crdt-v1` のサーバーは専用の `CRDT_DATA_DIR` を必須とし、legacy と同一文書を共有しない。
 
 | 設計判断 | 内容 | 理由 / トレードオフ |

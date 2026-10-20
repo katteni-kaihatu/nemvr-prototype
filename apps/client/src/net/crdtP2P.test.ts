@@ -81,9 +81,17 @@ function connect(
 ): { aSession: PeerSession; bSession: PeerSession; wireA: Wire; wireB: Wire } {
   const wireA = wire();
   const wireB = wire();
+  // 実際のストリームは非同期なので、両側の hello を送り終えてからフレームを届ける。
+  // (同期配信だと、片側の init が相手の hello より先に着いてしまう)
+  const toA: PeerFrame[] = [];
+  const toB: PeerFrame[] = [];
+  let buffering = options.start !== false;
   const aSession = new PeerSession({
     peerId: "peer-b",
-    sendFrame: (frame) => wireB.receive(frame),
+    sendFrame: (frame) => {
+      if (buffering) toB.push(frame);
+      else wireB.receive(frame);
+    },
     applyUpdate: (update) => a.world.applyPeerUpdate(update, "peer-b"),
     getHello: () => hello(a),
     diffFor: (vector) => a.world.encodeLocalDiffForRemote(vector),
@@ -91,7 +99,10 @@ function connect(
   });
   const bSession = new PeerSession({
     peerId: "peer-a",
-    sendFrame: (frame) => wireA.receive(frame),
+    sendFrame: (frame) => {
+      if (buffering) toA.push(frame);
+      else wireA.receive(frame);
+    },
     applyUpdate: (update) => b.world.applyPeerUpdate(update, "peer-a"),
     getHello: () => hello(b),
     diffFor: (vector) => b.world.encodeLocalDiffForRemote(vector),
@@ -102,6 +113,12 @@ function connect(
   if (options.start !== false) {
     aSession.start();
     bSession.start();
+    // 両方向のキューが空になるまで、届いた順に処理する
+    while (toA.length > 0 || toB.length > 0) {
+      while (toA.length > 0) wireA.receive(toA.shift()!);
+      while (toB.length > 0) wireB.receive(toB.shift()!);
+    }
+    buffering = false;
   }
   return { aSession, bSession, wireA, wireB };
 }
@@ -176,20 +193,23 @@ describe("PeerSession", () => {
     expect(
       source.createObject({
         id,
-        kind: "image",
+        kind: "file",
         cid: "bafy-large",
+        name: "large.bin",
+        size: 1_000_000,
+        stored: false,
+        category: "file",
         position: [0, 0, 0],
         yaw: 0,
-        width: 2,
-        height: 1,
-        name: "x".repeat(60_000),
       }),
     ).toBe(true);
+    for (let i = 0; i < 5_000; i++) source.moveObject(id, [i % 50, 0, 0], 0);
+    expect(source.encodeUpdate().length).toBeGreaterThan(60 * 1024);
     a.world.applyPeerUpdate(source.encodeUpdate(), "peer-source");
 
     const { wireB } = connect(a, b);
     expect(wireB.frames.some((frame) => frame.t === "part")).toBe(true);
-    expect(lastObjects(b)[id]?.kind).toBe("image");
+    expect(lastObjects(b)[id]?.kind).toBe("file");
   });
 
   it("converges two replicas in both directions after hello/init/ack", async () => {
@@ -241,10 +261,74 @@ describe("PeerSession", () => {
       diffFor: (vector) => b.world.encodeLocalDiffForRemote(vector),
     });
 
+    // hello が成立してからでないと、update は適用されない
+    const aHello = hello(a);
+    session.receive({ t: "hello", ...aHello });
     session.receive({ t: "update", update: deleteUpdate });
     session.receive({ t: "update", update: createUpdate });
     session.receive({ t: "update", update: createUpdate });
     expect(lastObjects(b)[box.id]).toBeUndefined();
+  });
+
+  it("does not send a delete-set-only diff in response to an equal ack", async () => {
+    const a = await makeWorld("a");
+    const b = await makeWorld("b");
+    const keep = a.world.createBox([0, 0, 0])!;
+    const removed = a.world.createBox([2, 0, 0])!;
+    a.world.commitMove(keep.id, [1, 0, 0], 0);
+    a.world.deleteObject(removed.id);
+
+    const wireA = wire();
+    const session = new PeerSession({
+      peerId: "peer-a",
+      sendFrame: (frame) => wireA.receive(frame),
+      applyUpdate: (update) => b.world.applyPeerUpdate(update, "peer-a"),
+      getHello: () => hello(b),
+      diffFor: (vector) => b.world.encodeLocalDiffForRemote(vector),
+    });
+    session.receive({ t: "hello", ...hello(a) });
+
+    const before = wireA.frames.length;
+    // state vector は削除では進まない。同じ vector の ack に delete set を返してはいけない
+    for (let i = 0; i < 5; i++) session.receive({ t: "ack", vector: b.world.getStateVectorBase64() });
+    expect(wireA.frames.slice(before).filter((frame) => frame.t === "update" || frame.t === "init")).toHaveLength(0);
+  });
+
+  it("requires hello before applying any other frame", async () => {
+    const a = await makeWorld("a");
+    const b = await makeWorld("b");
+    const box = a.world.createBox([0, 0, 0])!;
+    const errors: string[] = [];
+    const frames: PeerFrame[] = [];
+    let applied = 0;
+    const session = new PeerSession({
+      peerId: "peer-a",
+      sendFrame: (frame) => frames.push(frame),
+      applyUpdate: () => {
+        applied++;
+      },
+      getHello: () => hello(b),
+      diffFor: (vector) => b.world.encodeLocalDiffForRemote(vector),
+      onError: (message) => errors.push(message),
+    });
+
+    session.receive({ t: "update", update: toBase64(a.world.encodeLocalDiffForRemote(new Uint8Array(0))) });
+    expect(applied).toBe(0);
+    expect(errors).toHaveLength(1);
+    expect(session.isClosed).toBe(true);
+    expect(frames.some((frame) => frame.t === "error")).toBe(true);
+
+    // 有効な hello の後なら適用される
+    const good = new PeerSession({
+      peerId: "peer-a",
+      sendFrame: () => {},
+      applyUpdate: (update) => b.world.applyPeerUpdate(update, "peer-a"),
+      getHello: () => hello(b),
+      diffFor: (vector) => b.world.encodeLocalDiffForRemote(vector),
+    });
+    good.receive({ t: "hello", ...hello(a) });
+    good.receive({ t: "update", update: toBase64(a.world.encodeLocalDiffForRemote(new Uint8Array(0))) });
+    expect(lastObjects(b)[box.id]).toBeDefined();
   });
 
   it("delivers claims and releases with expiration semantics", async () => {

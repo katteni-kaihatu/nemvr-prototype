@@ -108,6 +108,11 @@ let crdtWorld: CrdtWorld | null = null;
 let crdtInfo: CrdtSyncInfo | null = null;
 /** 入室したサーバーが crdt-v1 だった (再接続でも維持する)。 */
 let crdtMode = false;
+
+/** 実際に使える CRDT ワールドがあるか (module global の crdtActive に依存しない)。 */
+export function isCrdtWorldAvailable(): boolean {
+  return crdtMode && crdtWorld !== null;
+}
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let reconnectAttempt = 0;
 let explicitExit = false;
@@ -370,6 +375,9 @@ export function connect(name: string, avatarFile?: File): void {
 function crdtCallbacks(): CrdtCallbacks {
   return {
     onObjects: (objects) => {
+      // リモートで消えたオブジェクトをつかんだままにしない (ドラッグを止める)
+      const grabbed = useInteraction.getState().grabbedId;
+      if (grabbed !== null && objects[grabbed] === undefined) resetInteraction();
       useNet.setState({ objects });
       // サーバーが保持した (CRDT の文書に反映された) ファイル・画像は、もう配る必要がない
       for (const cid of uploadsToRelease(objects, useNet.getState().self?.id, isServing)) releaseUpload(cid);

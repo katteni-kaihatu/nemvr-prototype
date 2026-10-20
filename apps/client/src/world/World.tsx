@@ -26,6 +26,7 @@ const SYNC_LABELS: Record<CrdtSyncStatus, string> = {
   offline: "孤立 (ローカル保存)",
   resyncing: "再同期中",
   "save-failed": "保存失敗 (メモリのみ)",
+  "sync-error": "同期エラー",
 };
 
 export function World() {
