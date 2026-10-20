@@ -133,6 +133,7 @@ export function RemoteAvatar({ peer }: { peer: PeerInfo }) {
         <VrmAvatar
           ref={vrmRef}
           cid={cid}
+          peerId={peer.id}
           poseRef={poseRef}
           onLoadedChange={handleLoadedChange}
           onError={handleVrmError}

@@ -23,6 +23,23 @@ const ELBOW_BEND = 0.18;
  */
 const CROUCH_HIP_FACTOR = 0.7;
 
+/** 歩行の 1 周期 (2 歩) の距離 (m)。この距離ごとに、脚の振りが 1 周する。 */
+const STRIDE_LENGTH = 1.4;
+/** 歩行の脚の振り (rad)。 */
+const WALK_THIGH = 0.45;
+/** 歩行の膝の曲げ (rad)。 */
+const WALK_KNEE = 0.5;
+/** 歩行の腕の振り (rad)。 */
+const WALK_ARM = 0.28;
+/** 歩行の上下動 (m)。 */
+const WALK_BOB = 0.02;
+/** 歩行の背骨のひねり (rad)。 */
+const WALK_SPINE_YAW = 0.05;
+/** 待機中の呼吸 (背骨の前後の傾き, rad)。 */
+const IDLE_BREATH = 0.018;
+/** 待機中の頭の微動 (rad)。 */
+const IDLE_HEAD = 0.035;
+
 const HEAD_QUATERNION = new Quaternion();
 const HEAD_EULER = new Euler(0, 0, 0, "YXZ");
 const HEAD_LOCAL_EULER = new Euler(0, 0, 0, "YXZ");
@@ -59,6 +76,32 @@ interface Rig {
    * (VRM 0.x はシーンを 180 度回して向きをそろえるが、ボーンのローカル軸は元のまま)
    */
   facing: number;
+}
+
+/** 待機 / 歩行のアニメーションの状態 (ピアごと)。 */
+interface Motion {
+  idleTime: number;
+  phase: number;
+  /** 平滑化した移動速度 (m/s) */
+  speed: number;
+  /** 歩行の混ぜ具合 (0 = 待機、1 = 歩行) */
+  walk: number;
+  lastX: number;
+  lastZ: number;
+  hasLast: boolean;
+}
+
+function createMotion(): Motion {
+  return { idleTime: 0, phase: 0, speed: 0, walk: 0, lastX: 0, lastZ: 0, hasLast: false };
+}
+
+function addLegMotion(leg: Leg, thigh: number, knee: number): void {
+  if (leg.upper) leg.upper.rotation.x += thigh;
+  if (leg.lower) leg.lower.rotation.x += knee;
+}
+
+function addArmMotion(arm: Arm, angle: number): void {
+  if (arm.upper) arm.upper.rotation.x += angle;
 }
 
 function getBone(vrm: VRM, name: VRMHumanBoneName): Object3D | null {
@@ -150,7 +193,25 @@ function applyArm(arm: Arm, facing: number): void {
   arm.lower?.rotation.set(0, -facing * arm.side * ELBOW_BEND, 0);
 }
 
-function applyPoseToVrm(vrm: VRM, group: Group, rig: Rig, pose: Pose, delta: number): void {
+function applyPoseToVrm(vrm: VRM, group: Group, rig: Rig, pose: Pose, delta: number, motion: Motion): void {
+  const dt = Math.min(0.05, Math.max(0.001, delta));
+  // 姿勢の位置変化から、移動速度を推定する (テレポートのように大きく飛んだフレームは除く)
+  const x = pose.position[0];
+  const z = pose.position[2];
+  let distance = 0;
+  if (motion.hasLast) {
+    const d = Math.hypot(x - motion.lastX, z - motion.lastZ);
+    if (d < 0.5) distance = d;
+  }
+  motion.lastX = x;
+  motion.lastZ = z;
+  motion.hasLast = true;
+  motion.speed += (distance / dt - motion.speed) * (1 - Math.exp(-10 * dt));
+  const targetWalk = clamp((motion.speed - 0.25) / 2, 0, 1);
+  motion.walk += (targetWalk - motion.walk) * (1 - Math.exp(-8 * dt));
+  motion.phase += (distance / STRIDE_LENGTH) * Math.PI * 2;
+  motion.idleTime += dt;
+
   group.position.set(...pose.position);
 
   const [qx, qy, qz, qw] = pose.head;
@@ -163,7 +224,11 @@ function applyPoseToVrm(vrm: VRM, group: Group, rig: Rig, pose: Pose, delta: num
   const pitch = clamp(HEAD_EULER.x, -MAX_HEAD_PITCH, MAX_HEAD_PITCH);
   if (rig.head) {
     // モデルの正面が +Z か -Z かで、首を振る向きが逆になる
-    HEAD_LOCAL_EULER.set(-rig.facing * pitch, 0, -rig.facing * HEAD_EULER.z, "YXZ");
+    // 待機中は、頭をわずかに揺らす
+    const idle = 1 - motion.walk;
+    const idlePitch = Math.sin(motion.idleTime * 1.3) * IDLE_HEAD * 0.5 * idle;
+    const idleYaw = Math.sin(motion.idleTime * 0.7) * IDLE_HEAD * idle;
+    HEAD_LOCAL_EULER.set(-rig.facing * pitch + idlePitch, idleYaw, -rig.facing * HEAD_EULER.z, "YXZ");
     rig.head.quaternion.setFromEuler(HEAD_LOCAL_EULER);
   }
 
@@ -201,6 +266,22 @@ function applyPoseToVrm(vrm: VRM, group: Group, rig: Rig, pose: Pose, delta: num
   applyArm(rig.leftArm, rig.facing);
   applyArm(rig.rightArm, rig.facing);
 
+  // 歩行: 脚と腕を交互に振り、体を少し上下させる。脚が後ろに振れている間は膝を曲げる
+  const w = motion.walk;
+  const f = rig.facing;
+  const swing = Math.sin(motion.phase);
+  addLegMotion(rig.leftLeg, -f * swing * WALK_THIGH * w, f * Math.max(0, -swing) * WALK_KNEE * w);
+  addLegMotion(rig.rightLeg, f * swing * WALK_THIGH * w, f * Math.max(0, swing) * WALK_KNEE * w);
+  addArmMotion(rig.leftArm, f * swing * WALK_ARM * w);
+  addArmMotion(rig.rightArm, -f * swing * WALK_ARM * w);
+  group.position.y += Math.abs(Math.sin(motion.phase)) * WALK_BOB * w;
+  if (rig.spine) rig.spine.rotation.y = f * Math.sin(motion.phase) * WALK_SPINE_YAW * w;
+
+  // 待機: 呼吸で背骨をわずかに動かし、体重を左右に移す
+  const idle = 1 - w;
+  if (rig.spine) rig.spine.rotation.x = Math.sin(motion.idleTime * 1.6) * IDLE_BREATH * idle;
+  if (rig.hips) rig.hips.rotation.z = Math.sin(motion.idleTime * 0.6) * 0.012 * idle;
+
   vrm.update(delta);
   group.visible = true;
 }
@@ -211,6 +292,8 @@ export interface VrmAvatarHandle {
 
 interface VrmAvatarProps {
   cid: string;
+  /** 開発時の確認 (window.__vrmMotion) に使う、このアバターのピア ID */
+  peerId?: string;
   /** 直近の姿勢。読み込みが終わった瞬間に、原点に一瞬出ないよう使う。 */
   poseRef: RefObject<Pose | null>;
   onLoadedChange?: (loaded: boolean) => void;
@@ -222,12 +305,13 @@ interface VrmAvatarProps {
  * (補間のタイミングを RemoteAvatar と合わせるため)。
  */
 export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function VrmAvatar(
-  { cid, poseRef, onLoadedChange, onError },
+  { cid, peerId, poseRef, onLoadedChange, onError },
   ref,
 ) {
   const groupRef = useRef<Group>(null);
   const vrmRef = useRef<VRM | null>(null);
   const rigRef = useRef<Rig | null>(null);
+  const motionRef = useRef<Motion>(createMotion());
   const loadedChangeRef = useRef(onLoadedChange);
   const errorRef = useRef(onError);
   loadedChangeRef.current = onLoadedChange;
@@ -238,8 +322,21 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
     const rig = rigRef.current;
     const group = groupRef.current;
     if (!vrm || !rig || !group) return;
-    applyPoseToVrm(vrm, group, rig, pose, delta);
-  }, []);
+    applyPoseToVrm(vrm, group, rig, pose, delta, motionRef.current);
+    if (import.meta.env.DEV && peerId) {
+      const motion = motionRef.current;
+      const debug = ((window as unknown as { __vrmMotion?: Record<string, unknown> }).__vrmMotion ??= {});
+      debug[peerId] = {
+        walk: motion.walk,
+        phase: motion.phase,
+        speed: motion.speed,
+        idleTime: motion.idleTime,
+        headYaw: HEAD_LOCAL_EULER.y,
+        spineX: rig.spine?.rotation.x ?? 0,
+        thighX: rig.leftLeg.upper?.rotation.x ?? 0,
+      };
+    }
+  }, [peerId]);
 
   useImperativeHandle(ref, () => ({ applyPose }), [applyPose]);
 
@@ -248,6 +345,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
     if (!group) return;
     let cancelled = false;
     group.visible = false;
+    motionRef.current = createMotion();
     loadedChangeRef.current?.(false);
 
     void loadVrm(cid)
@@ -283,9 +381,12 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
       }
       // このピアの表示をやめた。最後の 1 人なら、ダウンロードした VRM のバイト列も捨てる
       releaseVrm(cid);
+      if (import.meta.env.DEV && peerId) {
+        delete (window as unknown as { __vrmMotion?: Record<string, unknown> }).__vrmMotion?.[peerId];
+      }
       loadedChangeRef.current?.(false);
     };
-  }, [cid, poseRef, applyPose]);
+  }, [cid, peerId, poseRef, applyPose]);
 
   return <group ref={groupRef} visible={false} />;
 });
