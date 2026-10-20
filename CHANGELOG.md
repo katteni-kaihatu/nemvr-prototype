@@ -7,6 +7,16 @@
 
 ### Added
 
+- **Shift + ホイールで、つかんだオブジェクトの大きさを変えられるようにした。**
+  - つかんでいる間、Shift を押しながらホイールを回すと、上で大きく・下で小さくなる (1 目盛りで 1.12 倍、0.1〜10 倍で止まる)。
+    Shift 無しのホイールは従来どおり遠近。移動モード・回転モードのどちらでも使える。変更中は案内に倍率 (%) を出す。
+  - 拡大・縮小は、下辺 (底面) の中央を基準にする (床に置いたまま、上と横に大きくなる)。倍率は `ObjectBase.scale` として位置・向きと一緒に同期し、
+    `move_object` に `scale?` を追加した。CRDT では `transform` に含め、後から `scale` 無しの移動をしても倍率は保たれる。
+    当たり判定と、複製したときのずらし量にも倍率を掛ける。
+  - テスト: 単体テスト (`scaled` の倍率と範囲、倍率付きのコライダー、`WorldDoc` の transform の保持と範囲外の拒否、`move_object` の検証、`Room` の配信)。
+    ヘッドレス Firefox の E2E (`scale.mjs`、2 ブラウザ): Shift+ホイール 3 目盛りで 1.12^3 倍になり bob に同期され、距離は変わらないこと、
+    Shift 無しでは従来どおり遠ざかること、10 倍・0.1 倍で止まること、離しても倍率が残り、つかみ直しても前の倍率から変えられることを確認した。
+    スクリーンショット (`scale_large.png`) で、10 倍にしたボックスと輪郭、案内の「大きさ: 1000%」を確認した。
 - **CRDT 実験モード (`crdt-v1`) を追加した**。`SYNC_MODE=crdt-v1` / `VITE_SYNC_MODE=crdt-v1` を指定したときだけ有効で、既定の legacy は変更しない。
   - **文書**: `packages/world-sync` に Yjs の文書モデル (作成・移動・複製・削除・tombstone・projection) と転送 codec を追加した。移動は `transform` とトップレベルの `transforms` の両方に書き、同じ ID の並行 create で後続の move を失わない。デモボックスは再起動や並行 seed で重複しない固定 ID を使う。
   - **永続化**: サーバーは `CRDT_DATA_DIR` に `meta.json` (worldId・schemaVersion)、`doc.bin` (Yjs 文書)、`content.json` (コンテンツ台帳)、`blocks/` (ブロックストア) を保存する。書き込みは一時ファイル + file fsync + rename + 親ディレクトリ fsync (best-effort)。`BLOCKSTORE_DIR` でブロックストアの場所を変更できる。Helia の datastore・pin 情報・サーバー identity は永続化しない (再起動で libp2p peerId は変わる)。

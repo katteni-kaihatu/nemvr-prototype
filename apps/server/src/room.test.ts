@@ -134,6 +134,22 @@ describe("pitch (vertical rotation)", () => {
   });
 });
 
+describe("scale", () => {
+  it("stores and broadcasts the scale with the move, and clears it when the move has none", () => {
+    const { room, a, b, aId, objectId } = setup();
+    room.grabObject(aId, objectId);
+    a.clear();
+    b.clear();
+    room.moveObject(aId, objectId, [1, 0, 2], 0, undefined, 2.5);
+    expect(b.of("object_updated")[0]!.object.scale).toBe(2.5);
+    expect(a.sent).toEqual([]);
+    expect(room.getObject(objectId)).toMatchObject({ scale: 2.5 });
+    b.clear();
+    room.moveObject(aId, objectId, [1, 0, 2], 0);
+    expect(b.of("object_updated")[0]!.object.scale).toBeUndefined();
+  });
+});
+
 describe("demo boxes", () => {
   it("seeds the demo boxes, which late joiners get in welcome and can grab and move", () => {
     const room = new Room({ peerId: "p", wsPort: 1 });

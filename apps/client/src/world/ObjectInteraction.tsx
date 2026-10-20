@@ -11,7 +11,7 @@ import {
   showNotice,
   useNet,
 } from "../net/connection";
-import { attach, liftedHeight, pulled, resolve, wrapAngle, type Attachment } from "./carry";
+import { attach, liftedHeight, pulled, resolve, scaled, wrapAngle, type Attachment } from "./carry";
 import { CURSOR_VISIBLE_MS, carry, useInteraction } from "./interaction";
 import { objectMeshes } from "./registry";
 
@@ -22,12 +22,15 @@ const MOTION_EPSILON = 1e-4;
 const MAX_HEIGHT = 20; // m。つかんだオブジェクトを上げられる高さの上限 (下は床)
 const ROTATE_SENSITIVITY = 0.0022; // rad/px。視点操作と同じ
 const WHEEL_PULL_FACTOR = 1.12; // ホイール 1 目盛りあたりの、つかんだものとの距離の倍率
+const WHEEL_SCALE_FACTOR = 1.12; // Shift + ホイール 1 目盛りあたりの、つかんだものの大きさの倍率
 
 interface Grab {
   id: string;
   attachment: Attachment;
   /** X 軸回りの傾き (rad)。回転モードで変える。 */
   pitch: number;
+  /** 大きさの倍率。Shift + ホイールで変える。 */
+  scale: number;
   /** 前のフレームのカメラの上下の向き (rad)。視点を上下させた量から、高さの変化を求める。 */
   lastCameraPitch: number;
   /** 前のフレームのカメラの高さ (m)。ジャンプ・しゃがみで目の高さが変わった分だけ、つかんだものも上下させる。 */
@@ -42,6 +45,7 @@ const clamp = (v: number) => Math.max(-WORLD_HALF_SIZE, Math.min(WORLD_HALF_SIZE
  * - 右ボタンを押している間、狙っているオブジェクトをつかんで運ぶ (離すと置く)
  *   - 移動モード (既定): 視点に合わせて動く。マウスを上下に動かして視点を上げ下げすると、つかんだものも、視線の先に付いたまま上がる・下がる (高さ Y)
  *   - ホイール (どちらのモードでも): つかんだものを、視線に沿って遠ざける (上に回す) / 引き寄せる (下に回す)
+ *   - Shift + ホイール (どちらのモードでも): ホイールの代わりに、つかんだものの大きさを変える (上に回すと大きく)
  *   - 回転モード (E キーで切り替え): 視点を固定し、マウスの動きでオブジェクトを回す (左右 = 水平、上下 = 垂直)
  * - 中ボタンで、狙っている (つかんでいればそれ) オブジェクトのリングメニューを開く
  * - 視点・位置が動いている間と、止まってから数秒間だけ、中央の白い点を表示する
@@ -87,6 +91,7 @@ export function ObjectInteraction() {
       id,
       lastSentAt: 0,
       pitch: object.pitch ?? 0,
+      scale: object.scale ?? 1,
       lastCameraPitch: camera.rotation.x,
       lastCameraY: camera.position.y,
       attachment: attach(
@@ -100,6 +105,7 @@ export function ObjectInteraction() {
     carry.z = object.position[2];
     carry.yaw = object.yaw;
     carry.pitch = object.pitch ?? 0;
+    carry.scale = object.scale ?? 1;
     useInteraction.setState({ grabbedId: id, grabMode: "move" });
     sendGrabObject(id); // 先に始めて、他の人に先を越されていたらサーバーの応答で取り消す
   };
@@ -109,9 +115,9 @@ export function ObjectInteraction() {
     if (!g) return;
     grab.current = null;
     const position: [number, number, number] = [carry.x, carry.y, carry.z];
-    sendMoveObject(g.id, position, carry.yaw, carry.pitch);
+    sendMoveObject(g.id, position, carry.yaw, carry.pitch, carry.scale);
     sendReleaseObject(g.id);
-    applyLocalObjectPose(g.id, position, carry.yaw, carry.pitch);
+    applyLocalObjectPose(g.id, position, carry.yaw, carry.pitch, carry.scale);
     carry.id = null;
     useInteraction.setState({ grabbedId: null, grabMode: "move" });
   };
@@ -147,16 +153,23 @@ export function ObjectInteraction() {
       if (!grab.current || useInteraction.getState().menuTargetId) return;
       const next = useInteraction.getState().grabMode === "move" ? "rotate" : "move";
       useInteraction.setState({ grabMode: next });
-      showNotice(next === "rotate" ? "回転モード: マウスで回す。ホイールで遠近 (E で移動に戻る)" : "移動モード: マウスの上下で持ち上げ、ホイールで遠近 (E で回転)", 2500);
+      showNotice(next === "rotate" ? "回転モード: マウスで回す。ホイールで遠近、Shift+ホイールで大きさ (E で移動に戻る)" : "移動モード: マウスの上下で持ち上げ、ホイールで遠近、Shift+ホイールで大きさ (E で回転)", 2500);
     };
     // ホイール: つかんでいるものを、視線に沿って遠ざける (上に回す) / 引き寄せる (下に回す)。どちらのモードでも
+    // Shift + ホイール: 引き寄せ・遠ざけの代わりに、大きさを変える (上に回すと大きく)
     const onWheel = (e: WheelEvent) => {
       const g = grab.current;
       if (!g) return;
       e.preventDefault();
       if (useInteraction.getState().menuTargetId || e.deltaY === 0) return;
       const notches = Math.min(3, Math.max(1, Math.round(Math.abs(e.deltaY) / 100)));
-      const factor = WHEEL_PULL_FACTOR ** (notches * Math.sign(-e.deltaY));
+      const factor = (e.shiftKey ? WHEEL_SCALE_FACTOR : WHEEL_PULL_FACTOR) ** (notches * Math.sign(-e.deltaY));
+      if (e.shiftKey) {
+        g.scale = scaled(g.scale, factor);
+        carry.scale = g.scale;
+        showNotice(`大きさ: ${Math.round(g.scale * 100)}%`, 1200);
+        return;
+      }
       Object.assign(g.attachment, pulled(g.attachment, factor, camera.position.y, MAX_HEIGHT));
     };
     // 回転モード: マウスの動きで回す。視点は固定されている (LocalPlayer は回転モードの間、視点を動かさない)
@@ -226,9 +239,10 @@ export function ObjectInteraction() {
       carry.z = clamp(o.z);
       carry.yaw = o.yaw;
       carry.pitch = grab.current.pitch;
+      carry.scale = grab.current.scale;
       if (now - grab.current.lastSentAt >= MOVE_INTERVAL_MS) {
         grab.current.lastSentAt = now;
-        sendMoveObject(grab.current.id, [carry.x, carry.y, carry.z], carry.yaw, carry.pitch);
+        sendMoveObject(grab.current.id, [carry.x, carry.y, carry.z], carry.yaw, carry.pitch, carry.scale);
       }
     }
 

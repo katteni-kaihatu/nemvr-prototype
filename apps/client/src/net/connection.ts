@@ -299,13 +299,19 @@ export const sendDuplicateObject = (id: string): void => {
   }
   send({ type: "duplicate_object", id });
 };
-export function sendMoveObject(id: string, position: [number, number, number], yaw: number, pitch = 0): void {
+export function sendMoveObject(
+  id: string,
+  position: [number, number, number],
+  yaw: number,
+  pitch = 0,
+  scale = 1,
+): void {
   if (crdtMode) {
-    crdtWorld?.movePreview(id, position, yaw, pitch);
-    crdtWorld?.moveThrottled(id, position, yaw, pitch);
+    crdtWorld?.movePreview(id, position, yaw, pitch, scale);
+    crdtWorld?.moveThrottled(id, position, yaw, pitch, scale);
     return;
   }
-  send({ type: "move_object", id, position, yaw, pitch });
+  send({ type: "move_object", id, position, yaw, pitch, scale });
 }
 
 /** 実験用: ボックスを 1 個作る (CRDT が有効なときだけ)。 */
@@ -323,10 +329,16 @@ export function placeLinkLocal(url: string, position: Vec3, yaw: number): boolea
  * 自分が動かしたオブジェクトの位置を、手元の状態にも反映する。
  * 移動中の自分への配信 (echo) は無いので、離したときに古い位置へ戻って見えないようにする。
  */
-export function applyLocalObjectPose(id: string, position: [number, number, number], yaw: number, pitch = 0): void {
+export function applyLocalObjectPose(
+  id: string,
+  position: [number, number, number],
+  yaw: number,
+  pitch = 0,
+  scale = 1,
+): void {
   useNet.setState((s) => {
     const object = s.objects[id];
-    return object ? { objects: { ...s.objects, [id]: { ...object, position, yaw, pitch } } } : s;
+    return object ? { objects: { ...s.objects, [id]: { ...object, position, yaw, pitch, scale } } } : s;
   });
 }
 

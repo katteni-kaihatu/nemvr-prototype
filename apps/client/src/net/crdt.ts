@@ -68,6 +68,7 @@ interface Preview {
   position: Vec3;
   yaw: number;
   pitch: number;
+  scale: number;
 }
 
 interface RemoteClaim {
@@ -409,8 +410,8 @@ export class CrdtWorld {
   }
 
   /** ドラッグ中の見た目だけを更新する (永続化しない)。描画へは最大 20Hz で流す。 */
-  movePreview(id: string, position: Vec3, yaw: number, pitch = 0): void {
-    this.previews.set(id, { position: [position[0], position[1], position[2]], yaw, pitch });
+  movePreview(id: string, position: Vec3, yaw: number, pitch = 0, scale = 1): void {
+    this.previews.set(id, { position: [position[0], position[1], position[2]], yaw, pitch, scale });
     const now = this.now();
     if (now - this.lastPreviewAt >= PREVIEW_INTERVAL_MS) {
       this.lastPreviewAt = now;
@@ -427,21 +428,21 @@ export class CrdtWorld {
   }
 
   /** 確定を書き込む (離したとき・スロットル経過時)。 */
-  commitMove(id: string, position: Vec3, yaw: number, pitch = 0): void {
+  commitMove(id: string, position: Vec3, yaw: number, pitch = 0, scale = 1): void {
     this.clearThrottle(id);
     this.previews.delete(id);
-    this.world.moveObject(id, position, yaw, pitch);
+    this.world.moveObject(id, position, yaw, pitch, { scale });
     this.publishProjection();
   }
 
   /** 自動の確定は最大 1Hz。最初の変更だけはすぐに確定し、以後は 1 秒ごとに最新値へ。 */
-  moveThrottled(id: string, position: Vec3, yaw: number, pitch = 0): void {
-    this.movePreview(id, position, yaw, pitch);
+  moveThrottled(id: string, position: Vec3, yaw: number, pitch = 0, scale = 1): void {
+    this.movePreview(id, position, yaw, pitch, scale);
     const state = this.throttles.get(id);
     const now = this.now();
     if (state?.timer !== undefined) return;
     if (state === undefined || now - state.lastAt >= MOVE_COMMIT_INTERVAL_MS) {
-      this.commitMove(id, position, yaw, pitch);
+      this.commitMove(id, position, yaw, pitch, scale);
       this.throttles.set(id, { lastAt: now });
       return;
     }
@@ -452,7 +453,7 @@ export class CrdtWorld {
       this.throttles.delete(id);
       const preview = this.previews.get(id);
       if (!preview) return;
-      this.commitMove(id, preview.position, preview.yaw, preview.pitch);
+      this.commitMove(id, preview.position, preview.yaw, preview.pitch, preview.scale);
       this.throttles.set(id, { lastAt: this.now() });
     }, delay);
     this.throttles.set(id, { lastAt: state.lastAt, timer });
@@ -470,7 +471,8 @@ export class CrdtWorld {
     const source = this.world.getObject(id);
     if (!source) return undefined;
     const side =
-      source.kind === "box" ? source.size + 0.2 : source.kind === "file" ? FILE_ICON_WIDTH + 0.15 : 0.6;
+      (source.kind === "box" ? source.size + 0.2 : source.kind === "file" ? FILE_ICON_WIDTH + 0.15 : 0.6) *
+      (source.scale ?? 1);
     const normal = 0.05;
     const copy: WorldObject = {
       ...source,
@@ -507,7 +509,7 @@ export class CrdtWorld {
 
   endGrab(id: string): void {
     const preview = this.previews.get(id);
-    if (preview) this.commitMove(id, preview.position, preview.yaw, preview.pitch);
+    if (preview) this.commitMove(id, preview.position, preview.yaw, preview.pitch, preview.scale);
     if (this.localClaims.delete(id)) {
       this.sendEphemeral({ type: "claim_release", id, sessionId: this.sessionId });
     }
@@ -829,7 +831,7 @@ export class CrdtWorld {
     for (const [id, preview] of this.previews) {
       const object = objects[id];
       if (!object) continue;
-      objects[id] = { ...object, position: [...preview.position], yaw: preview.yaw, pitch: preview.pitch };
+      objects[id] = { ...object, position: [...preview.position], yaw: preview.yaw, pitch: preview.pitch, scale: preview.scale };
     }
 
     const now = this.now();

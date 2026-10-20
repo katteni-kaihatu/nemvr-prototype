@@ -18,6 +18,7 @@ import {
   isValidHttpUrl,
   isValidObjectId,
   isValidObjectName,
+  isValidObjectScale,
   isValidOwner,
   isValidPosition,
   isValidTransform,
@@ -65,6 +66,7 @@ function projectObject(
     position,
     yaw: transform.yaw,
     ...(isFiniteNumber(transform.pitch) ? { pitch: transform.pitch } : {}),
+    ...(isFiniteNumber(transform.scale) ? { scale: transform.scale } : {}),
   };
 
   switch (kind) {
@@ -245,11 +247,12 @@ export class WorldDoc {
     position: Vec3,
     yaw: number,
     pitch?: number,
-    extra?: { updateId?: string },
+    extra?: { updateId?: string; scale?: number },
   ): boolean {
     if (!isValidObjectId(id)) return false;
     if (!isValidPosition(position) || !isFiniteNumber(yaw)) return false;
     if (pitch !== undefined && !isFiniteNumber(pitch)) return false;
+    if (extra?.scale !== undefined && !isValidObjectScale(extra.scale)) return false;
     if (this.deleted.has(id)) return false;
     const record = this.objects.get(id);
     if (!(record instanceof Y.Map)) return false;
@@ -258,11 +261,12 @@ export class WorldDoc {
     if (!isValidTransform(current)) return false;
 
     const effectivePitch = pitch !== undefined ? pitch : current.pitch;
+    const effectiveScale = extra?.scale !== undefined ? extra.scale : current.scale;
     const updateId =
       extra !== undefined && typeof extra.updateId === "string" && extra.updateId.length > 0
         ? extra.updateId
         : this.idFactory();
-    const next = this.makeTransform(position, yaw, effectivePitch, updateId);
+    const next = this.makeTransform(position, yaw, effectivePitch, effectiveScale, updateId);
     this.doc.transact(() => {
       this.transforms.set(id, next);
       record.set("transform", next);
@@ -380,6 +384,7 @@ export class WorldDoc {
     position: Vec3,
     yaw: number,
     pitch: number | undefined,
+    scale: number | undefined,
     updateId?: string,
   ): WorldTransform {
     const transform: WorldTransform = {
@@ -390,13 +395,14 @@ export class WorldDoc {
       at: this.now(),
     };
     if (pitch !== undefined) transform.pitch = pitch;
+    if (scale !== undefined) transform.scale = scale;
     return transform;
   }
 
   private writeObject(object: WorldObject): void {
     const record = new Y.Map<unknown>();
     record.set("kind", object.kind);
-    const transform = this.makeTransform(object.position, object.yaw, object.pitch);
+    const transform = this.makeTransform(object.position, object.yaw, object.pitch, object.scale);
     record.set("transform", transform);
     this.transforms.set(object.id, transform);
 
@@ -443,7 +449,7 @@ export class WorldDoc {
 
     if (existing.get("kind") !== object.kind) return;
 
-    const transform = this.makeTransform(object.position, object.yaw, object.pitch);
+    const transform = this.makeTransform(object.position, object.yaw, object.pitch, object.scale);
     existing.set("transform", transform);
     this.transforms.set(object.id, transform);
 

@@ -38,17 +38,30 @@ export interface Collider {
 export function colliderFor(object: WorldObject): Collider | null {
   if (object.heldBy) return null;
   const base = { position: object.position, yaw: object.yaw, pitch: object.pitch ?? 0 };
+  const scale = object.scale ?? 1;
   switch (object.kind) {
     case "box": {
-      const h = object.size / 2;
+      const h = (object.size * scale) / 2;
       return { ...base, center: [0, h, 0], half: [h, h, h] };
     }
     case "image":
-      return { ...base, center: [0, object.height / 2, 0], half: [object.width / 2, object.height / 2, PLATE_THICKNESS / 2] };
+      return {
+        ...base,
+        center: [0, (object.height * scale) / 2, 0],
+        half: [(object.width * scale) / 2, (object.height * scale) / 2, (PLATE_THICKNESS * scale) / 2],
+      };
     case "file":
-      return { ...base, center: [0, FILE_ICON_HEIGHT / 2, 0], half: [FILE_ICON_WIDTH / 2, FILE_ICON_HEIGHT / 2, PLATE_THICKNESS / 2] };
+      return {
+        ...base,
+        center: [0, (FILE_ICON_HEIGHT * scale) / 2, 0],
+        half: [(FILE_ICON_WIDTH * scale) / 2, (FILE_ICON_HEIGHT * scale) / 2, (PLATE_THICKNESS * scale) / 2],
+      };
     case "link":
-      return { ...base, center: [0, FILE_ICON_HEIGHT / 2, 0], half: [FILE_ICON_WIDTH / 2, FILE_ICON_HEIGHT / 2, PLATE_THICKNESS / 2] };
+      return {
+        ...base,
+        center: [0, (FILE_ICON_HEIGHT * scale) / 2, 0],
+        half: [(FILE_ICON_WIDTH * scale) / 2, (FILE_ICON_HEIGHT * scale) / 2, (PLATE_THICKNESS * scale) / 2],
+      };
   }
 }
 

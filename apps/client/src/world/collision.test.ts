@@ -57,6 +57,17 @@ describe("colliderFor", () => {
   it("誰かがつかんでいるものは、当たり判定を外す", () => {
     expect(colliderFor({ ...base, kind: "box", size: 1, color: "#fff", heldBy: "someone" })).toBeNull();
   });
+
+  it("倍率 (scale) を、当たり判定の大きさに掛ける", () => {
+    const box = colliderFor({ ...base, kind: "box", size: 2, color: "#fff", scale: 3 })!;
+    expect(box.half).toEqual([3, 3, 3]);
+    expect(box.center).toEqual([0, 3, 0]);
+    const image = colliderFor({ ...base, kind: "image", cid: "c", width: 4, height: 2, scale: 0.5 })!;
+    expect(image.half).toEqual([1, 0.5, PLATE_THICKNESS / 4]);
+    expect(image.center).toEqual([0, 0.5, 0]);
+    // 指定が無ければ 1 倍 (従来どおり)
+    expect(colliderFor({ ...base, kind: "box", size: 2, color: "#fff" })!.half).toEqual([1, 1, 1]);
+  });
 });
 
 describe("sphereVsCollider", () => {

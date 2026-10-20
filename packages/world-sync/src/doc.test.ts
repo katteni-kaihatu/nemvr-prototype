@@ -98,6 +98,21 @@ describe("WorldDoc basics", () => {
     expect(world.moveObject(uuid(999), [0, 0, 0], 0)).toBe(false);
   });
 
+  it("stores a scale with the transform, and keeps it when a later move does not set one", () => {
+    const world = makeWorld();
+    expect(world.createObject(makeBox(uuid(7)))).toBe(true);
+    expect(world.moveObject(uuid(7), [1, 0, 2], 0.3, 0.1, { scale: 2.5 })).toBe(true);
+    expect(world.getObject(uuid(7))).toMatchObject({ scale: 2.5, pitch: 0.1 });
+
+    expect(world.moveObject(uuid(7), [2, 0, 3], 0.4)).toBe(true);
+    expect(world.getObject(uuid(7))).toMatchObject({ scale: 2.5, position: [2, 0, 3] });
+
+    // 範囲外の倍率は受け付けない (文書は変えない)
+    expect(world.moveObject(uuid(7), [9, 9, 9], 0, undefined, { scale: 0 })).toBe(false);
+    expect(world.moveObject(uuid(7), [9, 9, 9], 0, undefined, { scale: 11 })).toBe(false);
+    expect(world.getObject(uuid(7))!.position).toEqual([2, 0, 3]);
+  });
+
   it("clones positions so callers cannot mutate the document", () => {
     const world = makeWorld();
     const input = makeBox(uuid(1), [7, 8, 9]);

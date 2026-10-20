@@ -167,13 +167,15 @@ export class Room {
   }
 
   /** つかんでいる本人からの移動だけを受け付け、本人以外に配る (本人は手元で動かしている)。 */
-  moveObject(peerId: string, id: string, position: Vec3, yaw: number, pitch?: number): void {
+  moveObject(peerId: string, id: string, position: Vec3, yaw: number, pitch?: number, scale?: number): void {
     const object = this.objects.get(id);
     if (!object || object.heldBy !== peerId) return;
     object.position = position;
     object.yaw = yaw;
     if (pitch === undefined) delete object.pitch;
     else object.pitch = pitch;
+    if (scale === undefined) delete object.scale;
+    else object.scale = scale;
     this.broadcast({ type: "object_updated", object }, peerId);
   }
 
@@ -208,7 +210,8 @@ export class Room {
     }
     const { yaw } = object;
     const [x, y, z] = object.position;
-    const side = object.kind === "box" ? object.size + 0.2 : DUPLICATE_SIDE_OFFSET[object.kind]; // ボックスは重ならない距離
+    const scale = object.scale ?? 1;
+    const side = object.kind === "box" ? object.size * scale + 0.2 : DUPLICATE_SIDE_OFFSET[object.kind] * scale; // ボックスは重ならない距離
     const copy: WorldObject = {
       ...object,
       id: randomUUID(),

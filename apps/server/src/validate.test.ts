@@ -194,6 +194,17 @@ describe("parseClientMessage", () => {
       expect(bad("1")).toBeNull();
       expect(bad(null)).toBeNull();
     });
+    it("accepts an optional scale within the range in move_object", () => {
+      const withScale = { type: "move_object", id, position: [1, 2, -2], yaw: 0.5, scale: 2.5 };
+      expect(parseClientMessage(JSON.stringify(withScale))).toEqual(withScale);
+      const bad = (scale: unknown) => parseClientMessage(JSON.stringify({ ...withScale, scale }));
+      expect(bad(0)).toBeNull();
+      expect(bad(0.05)).toBeNull();
+      expect(bad(10.5)).toBeNull();
+      expect(bad("2")).toBeNull();
+      expect(bad(null)).toBeNull();
+      expect(bad(NaN)).toBeNull();
+    });
     it("parses video_control and validates playing / time", () => {
       const ok = { type: "video_control", id, playing: true, time: 12.5 };
       expect(parseClientMessage(JSON.stringify(ok))).toEqual(ok);

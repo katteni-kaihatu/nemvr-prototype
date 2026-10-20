@@ -2,8 +2,10 @@ import {
   MAX_ABS_POSITION,
   MAX_FILE_BYTES,
   MAX_FILE_NAME_LENGTH,
+  MAX_OBJECT_SCALE,
   MAX_OBJECT_SIZE,
   MAX_URL_LENGTH,
+  MIN_OBJECT_SCALE,
   MIN_OBJECT_SIZE,
 } from "@proto/protocol";
 import type { FileCategory, Vec3, WorldObject } from "@proto/protocol";
@@ -67,6 +69,11 @@ export function isValidBoxSize(value: unknown): value is number {
   return isFiniteNumber(value) && value >= MIN_OBJECT_SIZE && value <= MAX_OBJECT_SIZE;
 }
 
+/** オブジェクトの倍率。1 は元の大きさ。 */
+export function isValidObjectScale(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= MIN_OBJECT_SCALE && value <= MAX_OBJECT_SCALE;
+}
+
 export function isValidFileSize(value: unknown): value is number {
   return isFiniteNumber(value) && value >= 0 && value <= MAX_FILE_BYTES;
 }
@@ -77,6 +84,7 @@ export function isValidTransform(value: unknown): value is WorldTransform {
     isValidPosition(value["position"]) &&
     isFiniteNumber(value["yaw"]) &&
     (value["pitch"] === undefined || isFiniteNumber(value["pitch"])) &&
+    (value["scale"] === undefined || isValidObjectScale(value["scale"])) &&
     isNonEmptyString(value["updateId"]) &&
     isNonEmptyString(value["actorId"]) &&
     isFiniteNumber(value["at"])
@@ -108,6 +116,7 @@ export function isValidWorldObjectRecord(value: unknown): value is WorldObject {
   if (!isValidPosition(value["position"])) return false;
   if (!isFiniteNumber(value["yaw"])) return false;
   if (value["pitch"] !== undefined && !isFiniteNumber(value["pitch"])) return false;
+  if (value["scale"] !== undefined && !isValidObjectScale(value["scale"])) return false;
 
   switch (value["kind"]) {
     case "image": {

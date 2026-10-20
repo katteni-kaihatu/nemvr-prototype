@@ -44,6 +44,9 @@ export const EAGER_FILE_MAX_BYTES = 16 * 1024 * 1024;
 export const MAX_OBJECTS = 100; // ワールドに置けるオブジェクトの最大数
 export const MIN_OBJECT_SIZE = 0.1; // m
 export const MAX_OBJECT_SIZE = 20; // m
+/** つかんだオブジェクトを拡大・縮小できる倍率の範囲。無い場合は 1。 */
+export const MIN_OBJECT_SCALE = 0.1;
+export const MAX_OBJECT_SCALE = 10;
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
@@ -91,6 +94,8 @@ interface ObjectBase {
   yaw: number;
   /** X 軸回りの向き (rad, 上向きが正)。回転順序は YXZ。未指定なら 0。 */
   pitch?: number;
+  /** 大きさの倍率 (1 = 元の大きさ)。未指定なら 1。下辺 (底面) の中央を中心に拡大・縮小する。 */
+  scale?: number;
   /** 今このオブジェクトをつかんでいる人 (PeerInfo.id)。つかまれていなければ無い。 */
   heldBy?: string;
 }
@@ -213,7 +218,7 @@ export type ClientMessage =
   | { type: "set_avatar"; cid: string | null }
   // オブジェクトの操作。つかんでいる間は、つかんだ本人だけが move できる (排他)
   | { type: "grab_object"; id: string }
-  | { type: "move_object"; id: string; position: Vec3; yaw: number; pitch?: number }
+  | { type: "move_object"; id: string; position: Vec3; yaw: number; pitch?: number; scale?: number }
   | { type: "release_object"; id: string }
   | { type: "video_control"; id: string; playing: boolean; time: number }
   | { type: "delete_object"; id: string }

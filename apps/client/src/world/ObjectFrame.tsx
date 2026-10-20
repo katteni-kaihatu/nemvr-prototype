@@ -51,6 +51,7 @@ export function ObjectFrame({ object, width, height, depth, children }: ObjectFr
     group.position.set(...o.position);
     group.rotation.y = o.yaw;
     group.rotation.x = o.pitch ?? 0;
+    group.scale.setScalar(o.scale ?? 1);
   }, []);
 
   // 画面中央のレイとの当たり判定用に登録する
@@ -71,15 +72,19 @@ export function ObjectFrame({ object, width, height, depth, children }: ObjectFr
       group.position.set(carry.x, carry.y, carry.z);
       group.rotation.y = carry.yaw;
       group.rotation.x = carry.pitch;
+      group.scale.setScalar(carry.scale);
       return;
     }
-    const { position, yaw, pitch = 0 } = latest.current;
+    const { position, yaw, pitch = 0, scale = 1 } = latest.current;
     const t = 1 - Math.exp(-FOLLOW_RATE * delta);
     group.position.x += (position[0] - group.position.x) * t;
     group.position.y += (position[1] - group.position.y) * t;
     group.position.z += (position[2] - group.position.z) * t;
     group.rotation.y += wrapAngle(yaw - group.rotation.y) * t;
     group.rotation.x += wrapAngle(pitch - group.rotation.x) * t;
+    group.scale.x += (scale - group.scale.x) * t;
+    group.scale.y = group.scale.x;
+    group.scale.z = group.scale.x;
   });
 
   const outlineColor = heldByOther ? HELD_BY_OTHER_COLOR : hovered ? HOVER_COLOR : null;

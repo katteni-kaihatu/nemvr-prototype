@@ -7,6 +7,7 @@
  *
  * 座標系は three.js (Y 軸回りの回転 θ で、(x, z) は (x cosθ + z sinθ, -x sinθ + z cosθ) に動く)。
  */
+import { MAX_OBJECT_SCALE, MIN_OBJECT_SCALE } from "@proto/protocol";
 
 export interface CameraState {
   x: number;
@@ -79,6 +80,15 @@ export function liftedHeight(y: number, distance: number, dPitch: number, eyeHei
 /** つかんだものとの水平距離の範囲 (m)。近すぎると視界を塞ぐ。 */
 export const MIN_PULL_DISTANCE = 1;
 export const MAX_PULL_DISTANCE = 30;
+
+/**
+ * つかんだものの倍率を factor 倍して、MIN_OBJECT_SCALE〜MAX_OBJECT_SCALE に丸める。
+ * 範囲の端では、それ以上回しても大きさは変わらない。
+ */
+export function scaled(current: number, factor: number): number {
+  const base = Number.isFinite(current) && current > 0 ? current : 1;
+  return Math.max(MIN_OBJECT_SCALE, Math.min(MAX_OBJECT_SCALE, base * factor));
+}
 
 /**
  * つかんだものを、視線の方向に沿って遠ざける (factor > 1) / 引き寄せる (factor < 1)。

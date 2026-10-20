@@ -11,6 +11,8 @@ export interface WorldTransform {
   position: Vec3;
   yaw: number;
   pitch?: number;
+  /** 大きさの倍率。無ければ 1。 */
+  scale?: number;
   updateId: string;
   actorId: string;
   at: number;

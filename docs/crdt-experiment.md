@@ -72,13 +72,13 @@ Y.Doc
 ├─ objects: Y.Map<Y.Map>
 │   └─ <objectId>
 │       ├─ id / kind / cid / name / size / category など (生成後不変)
-│       └─ transform: { position, yaw, pitch, updateId }
+│       └─ transform: { position, yaw, pitch, scale, updateId }
 ├─ transforms: Y.Map<WorldTransform>
 │   └─ <objectId> (移動の最終値。同じ ID の並行 create で後続の move を失わない)
 └─ deleted: Y.Map<true>
 ```
 
-- `transform` は position / yaw / pitch と更新識別子を **一つの値** として置換する。座標の各軸を別々にマージしない。移動はオブジェクト直下の `transform` と、トップレベルの `transforms` の両方へ書く。同じ ID の create が並行しても、後から書かれた移動が `transforms` から読まれる。
+- `transform` は position / yaw / pitch / scale と更新識別子を **一つの値** として置換する。座標の各軸を別々にマージしない。移動はオブジェクト直下の `transform` と、トップレベルの `transforms` の両方へ書く。同じ ID の create が並行しても、後から書かれた移動が `transforms` から読まれる。
 - 基本属性の ID・kind・CID は生成後不変とする。ファイルの検証結果は transform とは別の属性に反映し、位置変更でサイズ等を上書きしない。
 - 削除は `deleted[id]=true` の単調な tombstone。移動・検証完了・古い更新が後から届いても、その ID を表示・復活させない。同じ ID の再作成は禁止し、複製は必ず新しい UUID を使う。
 - tombstone と因果情報は実験ワールド中に破棄しない。JSON だけを書き戻す圧縮・初期化はしない。

@@ -3,7 +3,9 @@ import {
   MAX_ABS_POSITION,
   MAX_NAME_LENGTH,
   MAX_URL_LENGTH,
+  MAX_OBJECT_SCALE,
   MAX_OBJECT_SIZE,
+  MIN_OBJECT_SCALE,
   MIN_OBJECT_SIZE,
   sanitizeFileName,
   type ClientMessage,
@@ -234,10 +236,16 @@ export function parseClientMessage(text: string): ClientMessage | null {
     }
     case "move_object": {
       const id = parseObjectId(msg.id);
-      const { position } = msg;
+      const { position, scale } = msg;
       const angles = parseAngles(msg);
       if (!id || !isFiniteArray(position, 3) || position.some((n) => Math.abs(n) > MAX_ABS_POSITION) || !angles) return null;
-      return { type: "move_object", id, position: position as Vec3, ...angles };
+      if (
+        scale !== undefined &&
+        (typeof scale !== "number" || !Number.isFinite(scale) || scale < MIN_OBJECT_SCALE || scale > MAX_OBJECT_SCALE)
+      ) {
+        return null;
+      }
+      return { type: "move_object", id, position: position as Vec3, ...angles, ...(scale === undefined ? {} : { scale }) };
     }
     case "place_url": {
       const place = parsePlaceUrl(msg);

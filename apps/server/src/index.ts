@@ -912,7 +912,7 @@ wss.on("connection", (ws) => {
       if (hub) {
         hub.requireReady(ws);
       } else {
-        room.moveObject(peerId, msg.id, msg.position, msg.yaw, msg.pitch);
+        room.moveObject(peerId, msg.id, msg.position, msg.yaw, msg.pitch, msg.scale);
       }
     } else if (msg.type === "release_object") {
       if (!peerId) return;

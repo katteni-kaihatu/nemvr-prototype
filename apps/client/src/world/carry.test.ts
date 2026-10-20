@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attach, liftedHeight, MAX_PULL_DISTANCE, MIN_PULL_DISTANCE, pulled, resolve, wrapAngle } from "./carry";
+import { attach, liftedHeight, MAX_PULL_DISTANCE, MIN_PULL_DISTANCE, pulled, resolve, scaled, wrapAngle } from "./carry";
 
 const near = (a: number, b: number) => expect(a).toBeCloseTo(b, 6);
 
@@ -160,5 +160,26 @@ describe("pulled (ホイールで、つかんだものを遠ざける / 引き�
     const after = pulled({ dx: 0, dz: 0, y: EYE }, 2, EYE, MAX);
     expect(after.dx).toBeCloseTo(0);
     expect(after.dz).toBeLessThan(0);
+  });
+});
+
+describe("scaled (Shift + ホイールで、つかんだものの大きさを変える)", () => {
+  it("倍率を掛ける (上に回すと大きく、下に回すと小さく)", () => {
+    expect(scaled(1, 1.12)).toBeCloseTo(1.12);
+    expect(scaled(2, 0.5)).toBeCloseTo(1);
+    expect(scaled(1, 1 / 1.12)).toBeCloseTo(1 / 1.12);
+  });
+
+  it("範囲 (0.1〜10 倍) を超えない", () => {
+    expect(scaled(9.9, 2)).toBe(10);
+    expect(scaled(0.11, 0.5)).toBeCloseTo(0.1);
+    expect(scaled(0.1, 0.5)).toBe(0.1);
+    expect(scaled(10, 2)).toBe(10);
+  });
+
+  it("不正な現在値は 1 倍として扱う", () => {
+    expect(scaled(Number.NaN, 2)).toBe(2);
+    expect(scaled(0, 2)).toBe(2);
+    expect(scaled(-1, 0.5)).toBe(0.5);
   });
 });

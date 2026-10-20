@@ -36,7 +36,7 @@ export function resetInteraction(): void {
  * つかんでいるオブジェクトの、このクライアントでの現在位置。
  * 毎フレーム更新されるので store (React の state) には載せず、描画側が直接読む。
  */
-export const carry = { id: null as string | null, x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+export const carry = { id: null as string | null, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, scale: 1 };
 
 // 開発時のみ、E2E テストやコンソールから状態を確認できるようにする
 if (import.meta.env.DEV) {
