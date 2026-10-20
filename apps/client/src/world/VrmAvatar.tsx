@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, type RefObject } from "react";
+import { useThree } from "@react-three/fiber";
 import { Euler, Quaternion, Vector3, type Group, type Object3D } from "three";
 import {
   VRMUtils,
@@ -7,7 +8,7 @@ import {
 } from "@pixiv/three-vrm";
 import type { Pose } from "@proto/protocol";
 import { EYE_HEIGHT, LEAN_ANGLE, eyeHeightFor } from "./movement";
-import { loadVrm, releaseVrm } from "./vrmModels";
+import { loadVrm, prepareVrm, releaseVrm } from "./vrmModels";
 
 /** VRM 1.0 は +Z 向き。このアプリのアバターは -Z 向きなので、180 度回す。 */
 const MODEL_YAW_OFFSET = Math.PI;
@@ -310,9 +311,14 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
   { cid, layer, peerId, poseRef, onLoadedChange, onError },
   ref,
 ) {
+  const renderer = useThree((state) => state.gl);
+  const camera = useThree((state) => state.camera);
+  const scene = useThree((state) => state.scene);
   const groupRef = useRef<Group>(null);
   const vrmRef = useRef<VRM | null>(null);
   const rigRef = useRef<Rig | null>(null);
+  /** シェーダーの準備が終わり、表示してよいか。準備中は姿勢の適用 (と表示) を止める。 */
+  const readyRef = useRef(false);
   const motionRef = useRef<Motion>(createMotion());
   const loadedChangeRef = useRef(onLoadedChange);
   const errorRef = useRef(onError);
@@ -323,7 +329,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
     const vrm = vrmRef.current;
     const rig = rigRef.current;
     const group = groupRef.current;
-    if (!vrm || !rig || !group) return;
+    if (!vrm || !rig || !group || !readyRef.current) return;
     applyPoseToVrm(vrm, group, rig, pose, delta, motionRef.current);
     if (import.meta.env.DEV && peerId) {
       const motion = motionRef.current;
@@ -346,6 +352,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
     const group = groupRef.current;
     if (!group) return;
     let cancelled = false;
+    readyRef.current = false;
     group.visible = false;
     motionRef.current = createMotion();
     loadedChangeRef.current?.(false);
@@ -360,9 +367,18 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
         rigRef.current = buildRig(vrm);
         if (layer !== undefined) vrm.scene.traverse((object) => object.layers.set(layer));
         group.add(vrm.scene);
-        const pose = poseRef.current;
-        if (pose) applyPose(pose, 0);
-        loadedChangeRef.current?.(true);
+        // 準備が終わるまでは描かない (最初の描画でシェーダーがまとめてコンパイルされないように)
+        group.visible = false;
+        // シェーダーを 1 マテリアルずつコンパイルしてから表示する (最初のフレームで固まらないように)
+        void prepareVrm(vrm, renderer, camera, scene, group, () => cancelled).then(() => {
+          if (cancelled) return;
+          readyRef.current = true;
+          const pose = poseRef.current;
+          // 姿勢がまだ無ければ、最初の useFrame で姿勢を受けるまで出さない
+          if (pose) applyPose(pose, 0);
+          else group.visible = false;
+          loadedChangeRef.current?.(true);
+        });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -374,6 +390,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
 
     return () => {
       cancelled = true;
+      readyRef.current = false;
       const vrm = vrmRef.current;
       vrmRef.current = null;
       rigRef.current = null;
@@ -389,7 +406,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
       }
       loadedChangeRef.current?.(false);
     };
-  }, [cid, layer, peerId, poseRef, applyPose]);
+  }, [cid, layer, peerId, poseRef, applyPose, renderer, camera, scene]);
 
   return <group ref={groupRef} visible={false} />;
 });
