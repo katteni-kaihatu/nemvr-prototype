@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_FILE_BYTES, MAX_IMAGE_BYTES } from "@proto/protocol";
+import { MAX_AVATAR_BYTES, MAX_FILE_BYTES, MAX_IMAGE_BYTES } from "@proto/protocol";
 import { ContentStore, type ContentBackend } from "./content.js";
 import { ContentRejected, type Fetched, type FetchLimits } from "./ipfs.js";
 
@@ -98,6 +98,15 @@ describe("add", () => {
     backend.put("img-as-file", MAX_IMAGE_BYTES + 1, PNG_HEAD);
     await expect(store.add("img-as-file", "file")).resolves.toBeDefined();
     await expect(store.add("ok-file", "file")).resolves.toBeDefined();
+  });
+
+  it("applies the avatar size limit (64MB) without the image format check", async () => {
+    const { backend, store } = make(4 * MAX_AVATAR_BYTES); // 合計の上限は、種類ごとの上限に影響しないよう大きくしておく
+    backend.put("big-avatar", MAX_AVATAR_BYTES + 1);
+    backend.put("ok-avatar", MAX_AVATAR_BYTES, TEXT_HEAD);
+    await expect(store.add("big-avatar", "avatar")).rejects.toThrow(/アバターが大きすぎます/);
+    await expect(store.add("ok-avatar", "avatar")).resolves.toBeDefined();
+    expect(backend.pinned.has("big-avatar")).toBe(false);
   });
 
   it("re-checks the image policy when the content is already held as a file", async () => {

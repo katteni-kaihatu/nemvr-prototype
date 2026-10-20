@@ -120,6 +120,37 @@ describe("parseClientMessage", () => {
     });
   });
 
+  describe("set_avatar", () => {
+    it("accepts a valid CID (and normalizes it)", () => {
+      expect(parseClientMessage(JSON.stringify({ type: "set_avatar", cid: dagPbCid }))).toEqual({
+        type: "set_avatar",
+        cid: dagPbCid,
+      });
+      expect(parseClientMessage(JSON.stringify({ type: "set_avatar", cid: rawCid }))).toEqual({
+        type: "set_avatar",
+        cid: rawCid,
+      });
+      const v0 = CID.createV0(CID.parse(dagPbCid).multihash as never).toString();
+      expect(parseClientMessage(JSON.stringify({ type: "set_avatar", cid: v0 }))).toEqual({ type: "set_avatar", cid: v0 });
+    });
+    it("accepts null to clear the avatar", () => {
+      expect(parseClientMessage(JSON.stringify({ type: "set_avatar", cid: null }))).toEqual({
+        type: "set_avatar",
+        cid: null,
+      });
+    });
+    it("rejects non-string / invalid / non-file CIDs", async () => {
+      const bad = (cid: unknown) => parseClientMessage(JSON.stringify({ type: "set_avatar", cid }));
+      expect(bad(5)).toBeNull();
+      expect(bad(undefined)).toBeNull(); // cid が無い
+      expect(bad("nope")).toBeNull();
+      expect(bad("../etc/passwd")).toBeNull();
+      expect(bad("123e4567-e89b-12d3-a456-426614174000")).toBeNull();
+      expect(bad(CID.createV1(CODEC_DAG_CBOR, await sha256.digest(bytes)).toString())).toBeNull();
+      expect(bad(CID.createV1(CODEC_RAW, await sha512.digest(bytes)).toString())).toBeNull();
+    });
+  });
+
   describe("place_image name", () => {
     const base = { type: "place_image", cid: dagPbCid, position: [0, 0, 0], yaw: 0, width: 2, height: 1 };
     it("keeps an optional sanitized name", () => {

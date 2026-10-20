@@ -21,6 +21,7 @@
     "@libp2p/websockets": "^10.1.23",
     "@libp2p/yamux": "^8.0.5",
     "@multiformats/multiaddr": "^13.0.3",
+    "@pixiv/three-vrm": "^3.5.5",
     "@proto/protocol": "workspace:*",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",

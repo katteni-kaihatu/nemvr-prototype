@@ -1,8 +1,8 @@
-import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, formatBytes } from "@proto/protocol";
+import { MAX_AVATAR_BYTES, MAX_FILE_BYTES, MAX_IMAGE_BYTES, formatBytes } from "@proto/protocol";
 import { sniffImageType } from "./images.js";
 import { ContentRejected, type Fetched, type FetchLimits } from "./ipfs.js";
 
-export type ContentKind = "image" | "file";
+export type ContentKind = "image" | "file" | "avatar";
 
 /** ContentStore が使う IPFS ノードの操作 (テストで差し替えられるよう、最小限に絞っている)。 */
 export interface ContentBackend {
@@ -15,9 +15,10 @@ export interface ContentBackend {
 export interface ContentStoreOptions {
   /** 保持する内容の合計バイト数の上限 (ディスクに置くので、ディスクの空きより十分小さくする) */
   maxTotalBytes: number;
-  /** データが届かない状態がこの時間続いたら取得を打ち切る (画像・ファイル) */
+  /** データが届かない状態がこの時間続いたら取得を打ち切る (画像・ファイル・アバター) */
   imageIdleTimeoutMs?: number;
   fileIdleTimeoutMs?: number;
+  avatarIdleTimeoutMs?: number;
   /** 1 回の取得の合計時間の上限 (既定 1 時間) */
   maxTotalMs?: number;
   /** 参照が無くなってから gc するまでの待ち時間 (短時間の連続削除をまとめる) */
@@ -194,19 +195,28 @@ export class ContentStore {
   }
 
   private limitsFor(kind: ContentKind): FetchLimits {
-    return kind === "image"
-      ? {
-          maxBytes: MAX_IMAGE_BYTES,
-          idleTimeoutMs: this.options.imageIdleTimeoutMs ?? 20_000,
-          maxTotalMs: this.options.maxTotalMs,
-          tooLargeMessage: `画像が大きすぎます (上限 ${formatBytes(MAX_IMAGE_BYTES)})`,
-        }
-      : {
-          maxBytes: MAX_FILE_BYTES,
-          idleTimeoutMs: this.options.fileIdleTimeoutMs ?? 30_000,
-          maxTotalMs: this.options.maxTotalMs,
-          tooLargeMessage: `ファイルが大きすぎます (上限 ${formatBytes(MAX_FILE_BYTES)})`,
-        };
+    if (kind === "image") {
+      return {
+        maxBytes: MAX_IMAGE_BYTES,
+        idleTimeoutMs: this.options.imageIdleTimeoutMs ?? 20_000,
+        maxTotalMs: this.options.maxTotalMs,
+        tooLargeMessage: `画像が大きすぎます (上限 ${formatBytes(MAX_IMAGE_BYTES)})`,
+      };
+    }
+    if (kind === "avatar") {
+      return {
+        maxBytes: MAX_AVATAR_BYTES,
+        idleTimeoutMs: this.options.avatarIdleTimeoutMs ?? 30_000,
+        maxTotalMs: this.options.maxTotalMs,
+        tooLargeMessage: `アバターが大きすぎます (上限 ${formatBytes(MAX_AVATAR_BYTES)})`,
+      };
+    }
+    return {
+      maxBytes: MAX_FILE_BYTES,
+      idleTimeoutMs: this.options.fileIdleTimeoutMs ?? 30_000,
+      maxTotalMs: this.options.maxTotalMs,
+      tooLargeMessage: `ファイルが大きすぎます (上限 ${formatBytes(MAX_FILE_BYTES)})`,
+    };
   }
 
   private capacityError(): ContentRejected {
@@ -219,6 +229,7 @@ export class ContentStore {
   private check(kind: ContentKind, size: number, head: Uint8Array): void {
     const limits = this.limitsFor(kind);
     if (size > limits.maxBytes) throw new ContentRejected(limits.tooLargeMessage);
+    // アバター (VRM) は画像ではないので、画像の形式は調べない
     if (kind === "image" && !sniffImageType(head)) {
       throw new ContentRejected("対応していない画像形式です (PNG / JPEG / GIF / WebP)");
     }

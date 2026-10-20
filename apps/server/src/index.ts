@@ -332,8 +332,54 @@ const holdsContent = (object: WorldObject): boolean => object.kind === "image" |
 
 wss.on("connection", (ws) => {
   let peerId: string | null = null;
+  let closed = false;
+  /** この接続が pin しているアバターの CID (通常は 1 つ) */
+  const avatarCids = new Map<string, string>();
+  /** set_avatar を 1 件ずつ順に処理する (取得中の別の要求で、pin の対応が崩れないように) */
+  let avatarUpdates: Promise<void> = Promise.resolve();
   alive.add(ws);
   ws.on("pong", () => alive.add(ws));
+
+  function releaseAvatar(id: string, cid: string): void {
+    const size = content.known(cid)?.size;
+    content.release(cid);
+    console.log(`[avatar] released ${cid} (${size === undefined ? "unknown" : formatBytes(size)}) for ${id}`);
+  }
+
+  async function setAvatar(id: string, cid: string | null): Promise<void> {
+    if (closed) return;
+    const previous = avatarCids.get(id);
+    if (cid === previous) return; // 同じアバターの再指定 (null も含む)
+    if (cid === null) {
+      if (previous) {
+        avatarCids.delete(id);
+        releaseAvatar(id, previous);
+      }
+      room.setAvatar(id, null);
+      return;
+    }
+    try {
+      // アップロードした人から取得して pin する (既に保持していれば参照だけ増える)
+      const { size } = await content.add(cid, "avatar");
+      if (closed) {
+        content.release(cid); // 取得中に退室したので、この参照は使わない
+        return;
+      }
+      const current = avatarCids.get(id);
+      if (current) {
+        avatarCids.delete(id);
+        releaseAvatar(id, current);
+      }
+      avatarCids.set(id, cid);
+      room.setAvatar(id, cid);
+      console.log(`[avatar] ${cid} pinned for ${id} (${formatBytes(size)})`);
+    } catch (err) {
+      if (closed) return;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[avatar] failed to fetch ${cid} for ${id}: ${message}`);
+      room.sendError(id, `アバターを取得できませんでした: ${message}`);
+    }
+  }
 
   ws.on("message", (data, isBinary) => {
     if (isBinary) return;
@@ -350,6 +396,13 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "ipfs_peer") {
       if (!peerId) return;
       room.announceIpfs(peerId, msg.peerId);
+    } else if (msg.type === "set_avatar") {
+      if (!peerId) return;
+      const id = peerId;
+      const cid = msg.cid;
+      avatarUpdates = avatarUpdates
+        .then(() => setAvatar(id, cid))
+        .catch((err: unknown) => console.warn("[avatar] unexpected error:", err instanceof Error ? err.message : err));
     } else if (msg.type === "grab_object") {
       if (peerId) room.grabObject(peerId, msg.id);
     } else if (msg.type === "move_object") {
@@ -388,9 +441,12 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    closed = true;
     if (!peerId) return;
     room.leave(peerId);
     placements.cancelPending(peerId); // 順番待ちのものは、取りに行かない (取得できない)
+    for (const [id, cid] of avatarCids) releaseAvatar(id, cid);
+    avatarCids.clear();
     console.log(`[leave] ${peerId} (room size: ${room.size})`);
   });
 

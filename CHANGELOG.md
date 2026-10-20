@@ -7,6 +7,19 @@
 
 ### Added
 
+- **任意の VRM アバターを使えるようにした**。入室画面で `.vrm` ファイル (64MB まで) を選ぶと、そのモデルが自分のアバターになり、他のユーザーにも表示される。
+  - **Lobby**: `.vrm` のファイル入力 (任意) を追加した。選んだファイル名とサイズを表示し、クリアできる。プレビューは無い。
+  - **アップロードと同期**: 入室後にブラウザの IPFS へ `addContent` で追加し、CID を得たら `keepServing` で配りながら `set_avatar` を送る。
+    サーバーは `PeerInfo.avatarCid` に記録し、本人以外へ `peer_avatar`、後から入室した人へは `welcome` / `peer_joined` で配る。
+  - **サーバーでの保持**: `set_avatar` の CID を取得・検証して pin する (`ContentKind "avatar"`、上限 64 MiB (`MAX_AVATAR_BYTES`))。参照カウントで管理し、
+    アバターの差し替え・退室で解放する。これにより、ブラウザ同士が直接つながらない (中継のみの) 場合でも、他のユーザーはサーバーから取得できる。
+  - **表示と姿勢**: `@pixiv/three-vrm` で読み込み (`loadVrm`。CID ごとに `ArrayBuffer` をキャッシュし、VRM はピアごとに作る。VRM 0.x は `rotateVRM0`)、
+    ルートの位置・向き、頭のピッチ・ロール、しゃがみの脚 IK、リーンの背骨、A ポーズの腕、スプリングボーンを反映する。名前タグは残す。
+  - **フォールバック**: VRM が無い・読み込めないときは、これまでどおり簡易アバターを表示する。
+  - テスト: 単体テスト (`ContentStore` の avatar の上限、`set_avatar` の検証、`Room` の `peer_avatar` / `welcome`)、
+    ヘッドレス Firefox の E2E (`vrm.mjs`、17 項目)。alice が VRM 1.0 をアップロードし、WebRTC の直接接続を有効にしていない bob (`directPeers = 0`) が、
+    サーバー経由で CID を取得して VRM を読み込み・表示できること、位置に追従すること、bob は VRM 無しで簡易アバターのままであること、
+    carol の VRM 0.x も bob が読み込めることを確認した。スクリーンショットは `vrm_bob.png`。
 - **Shift を押しながら移動すると、走れるようにした**。歩く速さ (3m/s) の 2 倍 (6m/s)。しゃがんでいる間 (深さ 0.5 以上) は走れない。
   速さの計算は `world/movement.ts` の `moveSpeedFactor` に切り出した。HUD の操作説明と README を更新した。
   テスト: 単体テスト (`moveSpeedFactor`: 2 倍・しゃがみ中は走れない・境界・範囲の丸め)、ヘッドレス Firefox の E2E (`sprint.mjs`: 歩く 3.05m / 走る 6.10m / しゃがみ + Shift 1.53m / Shift を離すと 3.05m)。
@@ -260,6 +273,23 @@
 
 ### Notes
 
+- **VRM アバターの確認 (ヘッドレス Firefox、手元のマシン)**: `vrm.mjs` の全項目 (17) が通った。alice が `/tmp/sample.vrm` (VRM 1.0、10.3 MiB) をアップロードし、
+  bob は WebRTC の直接接続を助ける設定を入れず (`directPeers = 0`、中継のみ) に、`peers[alice].avatarCid` と `window.__avatars[alice].loaded === true` を確認した。
+  bob のカメラを alice に向けたスクリーンショット (`vrm_bob.png`) で、VRM のメッシュと名前タグを確認した。alice を x=-2 へ動かすと、bob 側の `position` が (-2, 0, 0) に追従した。
+  bob 自身は VRM 無しで、bob の画面に自分の `__avatars` エントリは無く、alice の画面では bob は簡易アバター (`avatarCid: null`) だった。
+  続けて carol が `/tmp/vrm0.vrm` (VRM 0.x、5.3 MiB) をアップロードし、bob が読み込めることも確認した。
+  回帰: `pnpm -r test` (protocol 21・client 115・server 136)、`pnpm -r typecheck`、`pnpm --filter @proto/client build` が通った (ビルドは chunk サイズの警告のみ)。
+  **制限**: 表情はモデルの既定から変えない。VRM のライセンス (利用条件) の確認・表示はしない。モデルのプレビューは無い。
+  自分のアバターは一人称で見えない (体は表示しない)。モデルは退室するとサーバーから解放され、永続化しない。64 MiB まで。VRM 0.x / 1.0 に対応。
+  **本番確認**: VPS (https://nemvr.nemnomi.dev/) にデプロイ済み。バンドルは 2,139,671 バイト (gzip 593.67 kB) で、`proto-server` は active、サイトは 200。
+  Node クライアントで、`/tmp/sample.vrm` (10,776,032 バイト、SHA-256 `12c2b97e95e700783a6a550dc0eee2d7880aeedccef9ae67bc4c5a2f0f2631a2`) を
+  別クライアント A が IPFS に追加して `set_avatar` を送り、サーバーが `bafybeihdhgktvfiapd6twpnv2rkbknklbqcfhvzxaqocffzars5nmuvyri` を pin した
+  (ログ: `[avatar] ... pinned ... (10 MB)`)。別のクライアント B がサーバーから bitswap で取得し、サイズと SHA-256 が一致した。
+  `set_avatar: null` で `[avatar] released` と `[content] released ... holding 0 B` を確認した。
+  本番の実ブラウザ (ヘッドレス Firefox) では、alice が Lobby で `/tmp/sample.vrm` を選んで入室して「アバターを設定しました」と表示され、
+  bob が VRM なしで入室してサーバーから `avatarCid` を受信した。スクリーンショット (`prod_vrm_bob.png`) で VRM の人体メッシュ (簡易アバターではない) を目視確認し、
+  サーバーは同じ CID を pin し、退室後に解放した。アプリのコンソールエラーは無し (テスト用の記録スクリプト由来のページエラーが 1 件あったが、記録なしの対照実行では出ていない)。
+  **未確認**: 実機のブラウザ・別マシン・Chrome 系、複数人が同時に大きな VRM を使う場合の負荷、表情・ライセンス表示・プレビュー、64MiB の境界 (単体テストのみ)。
 - **カーソルの距離制限の解除の確認 (ヘッドレス Firefox、手元のマシン)**: `reach.mjs` で、35m 先に置いたボックスを狙ってリングメニューを開き、右ボタンでつかめることを確認した (以前は 8m まで)。
   回帰: `interact.mjs` (28)、`box.mjs` (46)。単体テストは protocol 21・client 115・server 129。型チェックも通った。
   **注意**: 選択 (レイ) は無限遠だが、描画のカメラの far は 200m。それより遠いものは見えない (ワールドは 50m 四方なので、通常は関係ない)。

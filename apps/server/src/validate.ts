@@ -178,6 +178,12 @@ export function parseClientMessage(text: string): ClientMessage | null {
         ? { type: "ipfs_peer", peerId: id }
         : null;
     }
+    case "set_avatar": {
+      // null は簡易アバターに戻す。文字列なら、置くファイルと同じ CID の形だけを受け付ける
+      if (msg.cid === null) return { type: "set_avatar", cid: null };
+      const cid = normalizeCid(msg.cid);
+      return cid ? { type: "set_avatar", cid } : null;
+    }
     case "place_file": {
       const place = parsePlaceFile(msg);
       return place ? { type: "place_file", ...place } : null;

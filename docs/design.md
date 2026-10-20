@@ -27,6 +27,7 @@ interface PeerInfo {
   id: string;   // サーバーが採番
   name: string; // 表示名
   color: string; // "#rrggbb"。サーバーが割り当て
+  avatarCid?: string; // アップロードされた VRM の CID。無ければ簡易アバター
 }
 
 interface PeerState extends PeerInfo {
@@ -88,6 +89,7 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 | `request_file` | `id` | まだサーバーが保持していないファイル (取得中) の、取得の完了を待つ。ダウンロードで、先に試した直接の取得がだめだったときの切り替え先。要求した人にだけ `prepare_progress` / `prepare_failed` が返り、終わると `object_updated` (`stored`) が全員に配られる |
 | `place_box` | `position`, `yaw`, `pitch?`, `size`, `color` | ボックスを置く (デモ・テスト用。クライアントの UI からは送らない) |
 | `ipfs_peer` | `peerId: string` | 自分の libp2p ピア ID を知らせる。他のブラウザから WebRTC で接続してもらえる状態になってから送る |
+| `set_avatar` | `cid: string \| null` | 自分の VRM アバターの CID を知らせる (`null` で簡易アバターに戻す)。入室時のアップロード完了後に送る |
 | `grab_object` | `id` | オブジェクトをつかむ。他の人がつかんでいると拒否される |
 | `move_object` | `id`, `position`, `yaw`, `pitch?` | つかんでいる間の移動 (つかんでいる本人だけが送れる)。20Hz |
 | `release_object` | `id` | 離す |
@@ -106,6 +108,7 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 | `prepare_progress` | `cid`, `loaded`, `total?`, `queued?` | `request_file` の進捗。サーバーが、置いた人から取得している途中 (要求した人にだけ) |
 | `prepare_failed` | `cid`, `message` | `request_file` が失敗した (置いた人が退室した、容量が足りない、など) |
 | `peer_ipfs` | `id: string`, `ipfsPeerId: string` | 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ WebRTC で接続しに行く |
+| `peer_avatar` | `id: string`, `cid: string \| null` | 他のユーザーの VRM アバターが変わった (本人以外へ)。`null` は簡易アバターに戻った |
 | `peer_joined` | `peer: PeerState` | 他ユーザーの入室 |
 | `peer_left` | `id: string` | 他ユーザーの退室 |
 | `snapshot` | `time: number`, `poses: Record<id, Pose>` | 全ユーザーの最新姿勢。20Hz |
@@ -312,6 +315,53 @@ sequenceDiagram
 - ダウンロード: 対象の中身を IPFS から取得して保存する (上記)。
   (同一平面での描画のちらつきを避けるため、手前に少しずらす)。上限 (100 個) に達していれば拒否する。
 
+### VRM アバター
+
+入室画面で任意の `.vrm` を選ぶと、そのユーザーのアバターとして表示する。上限は `MAX_AVATAR_BYTES` (64 MiB)。
+選んだファイルは入室時にブラウザの IPFS へ追加し、ワールドには CID だけを載せる。モデルのプレビューは無い。
+
+**プロトコル**
+- `PeerInfo.avatarCid?: string` に、そのユーザーの VRM の CID が入る。`welcome` の `peers` と `peer_joined` に含まれる。
+- `set_avatar {cid: string | null}` (Client → Server): アップロード完了後に自分の CID を知らせる。`null` は簡易アバターに戻す。
+  CID は置くファイルと同じ形式 (dag-pb / raw、sha2-256) に正規化して受け付ける。
+- `peer_avatar {id, cid}` (Server → Client): 他のユーザーのアバターが変わったことを、本人以外へ配る。`cid: null` は解除。
+
+**アップロード (client)**
+- ロビーで選ばれた `File` は、`welcome` と IPFS ノードの起動を待ってから、バックグラウンドで `addContent` する (入室は待たせない)。
+  CID を得たら `keepServing(cid)` で、このタブが開いている間は他のピアへ配り続け、`set_avatar` を送る。
+- 64 MiB を超えるファイルはアップロードせず、HUD に通知する。
+- アバターを差し替えたときは、前の CID の配布をやめる (`releaseUpload`)。切断時は IPFS ノードごと止める。
+
+**サーバーでの保持 (pinning)**
+- `set_avatar` を受けると、`ContentStore.add(cid, "avatar")` で、アップロードした人のブラウザから中身を取得し、検証して pin する。
+  種類は `ContentKind = "avatar"`、上限は 64 MiB (`MAX_AVATAR_BYTES`)、アイドルタイムアウトは 30 秒。画像の形式判定は行わない。
+- 取得と pin が終わってから `Room.setAvatar` で `PeerInfo.avatarCid` を記録し、`peer_avatar` を配る。取得に失敗した場合は CID を配らず、本人にエラーを返す。
+- 参照カウント (`ContentStore` の refs) で保持する。同じ CID を複数のユーザーが使えば 1 つだけ保持する。
+  ユーザーが別のアバターに差し替えたときと、退室したとき (`ws` の close) に `release` し、最後の参照が無くなれば unpin して gc する。
+- アバターはユーザーが部屋にいる間だけ保持され、退室するとサーバーから解放される (永続化しない)。
+
+**読み込みと表示 (client)**
+- `loadVrm` (`world/vrmModels.ts`) が `fetchBlob` で取得した `ArrayBuffer` を CID ごとにキャッシュし (同じ CID を何度もダウンロードしない)、
+  `GLTFLoader` + `VRMLoaderPlugin` (`@pixiv/three-vrm`) で VRM を作る。VRM インスタンスはピアごとに別に作る (three.js のオブジェクトは共有できない)。
+  VRM 0.x は `VRMUtils.rotateVRM0` で 1.0 と同じ +Z 向きにそろえる。
+- スキンメッシュは `frustumCulled = false` にする (バウンディングボックスが実際の姿勢と合わず、視界の端で消えるため)。
+  読み込みに失敗した場合は `[vrm]` をコンソールに出し、簡易アバターのままにする。CID が変わると前の VRM を `deepDispose` する。
+- 表示中は簡易アバターの胴体と頭を隠し、名前タグはそのまま残す。読み込みが終わるまでは簡易アバターを表示する。
+
+**姿勢の反映**
+- ルート: `Pose.position` をそのままグループの位置にし、`Pose.head` の yaw に π を足して、モデルの正面 (+Z) をこのアプリの正面 (-Z) に合わせる。
+- 頭: 残りのピッチ・ロールを、VRM の正面が +Z か -Z かに応じた符号で首のボーンに適用する (ピッチは ±1.2 rad に制限)。
+- しゃがみ: 目の高さの低下から腰を下げる量を決め、太もも・すねの長さから 2 関節の簡易 IK で脚を曲げる。足首はすねの回転を打ち消して地面と平行に保つ。
+- リーン: 背骨 (`spine` / `chest` / `upperChest`) を Z 軸回りに傾ける。脚は動かさない。
+- 待機姿勢: 腕を T ポーズから A ポーズへ下ろし、ひじを少し曲げる。毎フレーム上書きする。
+- 最後に `vrm.update(delta)` を呼び、スプリングボーン (髪・揺れ物) を進める。
+- 補間は簡易アバターと同じ `RemoteAvatar` の `useFrame` で行い、補間済みの姿勢を `applyPose` に渡す。
+
+**フォールバック・制限・開発用フック**
+- `avatarCid` が無い、または VRM を読み込めないときは、これまでどおり手続き的な簡易アバターを表示する。
+- 表情 (expression) はモデルの既定から変えない。VRM のライセンス (利用条件) の確認・表示は行わない。
+- 開発時のみ `window.__avatars[peerId] = { cid, loaded, error, position }` を公開する (`import.meta.env.DEV`)。E2E テストはこれで読み込み状態と追従を確認する。
+
 ## 6. サーバー設計
 
 ### モジュール構成 (apps/server/src)
@@ -354,7 +404,7 @@ validate.ts  受信メッセージの検証・正規化
 |---|---|
 | WebXR / 手の姿勢 | `Pose` にオプショナルな `hands` を追加する |
 | 複数ルーム | `join` に `roomId` を追加し、server に `Room` を複数持たせる |
-| アバター差し替え | `PeerInfo` に `avatarUrl` を追加。`Avatar` コンポーネントを差し替える |
+| アバターの表情・アニメーション | `PeerInfo.avatarCid` で VRM を同期済み。表情・モーションの状態を `Pose` に足し、`VrmAvatar` で反映する |
 | ボイスチャット | 別途 SFU (LiveKit 等) を用意。ピア ID をトークン発行時の identity に使う |
 | 画像以外のオブジェクト・回転 / 拡大縮小・元に戻す | `WorldObject` に `kind` を追加する。`object_updated` はオブジェクト全体を送るので、プロパティを足せばそのまま同期できる。操作・排他制御はサーバーが既に持っている |
 | 音声の再生、ファイルのプレビュー、動画の再生同期 | 映像は、リングメニューで 3D 空間の中に再生できる (Service Worker + ブラウザの IPFS で P2P ストリーミング)。音声も同じ仕組みで足せる。再生位置のクライアント間の同期は未実装 |

@@ -12,6 +12,8 @@ export const MAX_ABS_POSITION = 1000;
 // 画像オブジェクト (画像本体は IPFS で共有し、ワールドには CID だけを載せる)
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりの上限
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // ファイル 1 個あたりの上限 (2 GiB)
+// VRM アバター (ブラウザが IPFS にアップロードする) の 1 個あたりの上限
+export const MAX_AVATAR_BYTES = 64 * 1024 * 1024;
 /**
  * これ以下のファイルは、サーバーが全部取得して保持してから置く (置いた人が退室しても使える)。
  * これより大きいファイルは、取得に時間がかかるので、先に置き (`stored: false`)、サーバーがバックグラウンドで取得する。
@@ -39,6 +41,8 @@ export interface PeerInfo {
   id: string;
   name: string;
   color: string; // "#rrggbb"
+  /** ユーザーがアップロードした VRM の CID。無ければ簡易アバターを使う。 */
+  avatarCid?: string;
 }
 
 export interface PeerState extends PeerInfo {
@@ -154,6 +158,8 @@ export type ClientMessage =
   | { type: "request_file"; id: string }
   // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
   | { type: "ipfs_peer"; peerId: string }
+  // 自分の VRM アバターの CID をサーバーに知らせる (null なら簡易アバターに戻す)
+  | { type: "set_avatar"; cid: string | null }
   // オブジェクトの操作。つかんでいる間は、つかんだ本人だけが move できる (排他)
   | { type: "grab_object"; id: string }
   | { type: "move_object"; id: string; position: Vec3; yaw: number; pitch?: number }
@@ -187,6 +193,8 @@ export type ServerMessage =
   | { type: "prepare_failed"; cid: string; message: string }
   // 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ接続しに行く
   | { type: "peer_ipfs"; id: string; ipfsPeerId: string }
+  // 他のユーザーの VRM アバターが変わった (cid が null なら簡易アバターに戻った)
+  | { type: "peer_avatar"; id: string; cid: string | null }
   | { type: "peer_joined"; peer: PeerState }
   | { type: "peer_left"; id: string }
   | { type: "snapshot"; time: number; poses: Record<string, Pose> }

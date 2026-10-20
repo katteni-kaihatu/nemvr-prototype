@@ -259,6 +259,41 @@ describe("duplicate", () => {
   });
 });
 
+describe("avatars", () => {
+  const AVATAR_CID = "bafkreigrdheq5ptzw7vvhpb7oo7dxenzlcz4eggaew7novpz6fppsvdnuy";
+
+  it("broadcasts peer_avatar to the other peers, not the setter", () => {
+    const { room, a, b, aId } = setup();
+    room.setAvatar(aId, AVATAR_CID);
+    expect(a.sent).toEqual([]);
+    expect(b.of("peer_avatar")).toEqual([{ type: "peer_avatar", id: aId, cid: AVATAR_CID }]);
+  });
+
+  it("includes the avatar CID in welcome.peers for later joiners", () => {
+    const { room, aId } = setup();
+    room.setAvatar(aId, AVATAR_CID);
+    const c = new FakeSocket();
+    room.join(c as unknown as WebSocket, "carol");
+    const welcome = c.of("welcome")[0]!;
+    expect(welcome.peers.find((p) => p.id === aId)?.avatarCid).toBe(AVATAR_CID);
+    expect(welcome.peers.find((p) => p.id !== aId)).not.toHaveProperty("avatarCid");
+  });
+
+  it("null clears it (the property is absent afterwards) and is broadcast", () => {
+    const { room, a, b, aId } = setup();
+    room.setAvatar(aId, AVATAR_CID);
+    b.clear();
+
+    room.setAvatar(aId, null);
+    expect(a.sent).toEqual([]);
+    expect(b.of("peer_avatar")).toEqual([{ type: "peer_avatar", id: aId, cid: null }]);
+
+    const c = new FakeSocket();
+    room.join(c as unknown as WebSocket, "carol");
+    expect(c.of("welcome")[0]!.peers.find((p) => p.id === aId)).not.toHaveProperty("avatarCid");
+  });
+});
+
 describe("files", () => {
   const file = { cid: CID, name: "report.pdf", position: [1, 0.4, 2] as [number, number, number], yaw: 0, size: 1234, category: "file" as const, stored: true };
 

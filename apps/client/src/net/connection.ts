@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   formatBytes,
+  MAX_AVATAR_BYTES,
   type ClientMessage,
   type FileObject,
   type PeerInfo,
@@ -14,6 +15,7 @@ import { resetInteraction, useInteraction } from "../world/interaction";
 import { needsLocalFile } from "./lazyUploads";
 import { PoseBuffer } from "./interpolation";
 import {
+  addContent,
   describeError,
   dialPeer,
   rememberPeerName,
@@ -89,9 +91,21 @@ export function sendPose(pose: Pose): void {
   send({ type: "pose", pose });
 }
 
+/** 自分の VRM アバターの CID をサーバーへ知らせる (null なら簡易アバターに戻す)。 */
+export function sendSetAvatar(cid: string | null): void {
+  send({ type: "set_avatar", cid });
+}
+
 export function sendPlaceImage(place: PlaceImage): void {
   send({ type: "place_image", ...place });
 }
+
+/** 入室時に選ばれたアバターのファイル。接続が確立するまで覚えておく。 */
+let pendingAvatarFile: File | null = null;
+/** アバターのアップロードが、どの接続のものかを識別する。切断後に完了しても状態を書き換えない。 */
+let avatarEpoch = 0;
+/** アップロードの進捗通知の間隔 (ミリ秒)。 */
+const AVATAR_PROGRESS_INTERVAL_MS = 300;
 
 /** サーバーへ転送中のアップロード (CID → ファイル名)。進捗の通知にファイル名を付けるために覚えておく。 */
 const pendingUploads = new Map<string, string>();
@@ -169,6 +183,9 @@ export function applyLocalObjectPose(id: string, position: [number, number, numb
 function reset(): void {
   for (const id of [...prepareWaits.keys()]) settlePrepare(id, new Error("サーバーとの接続が切れました"));
   pendingUploads.clear();
+  // 接続が切れたら、選ばれたアバターと、進行中のアップロードの結果は捨てる
+  pendingAvatarFile = null;
+  avatarEpoch += 1;
   resetInteraction();
   void stopIpfs();
   peerBuffers.clear();
@@ -176,8 +193,10 @@ function reset(): void {
   socket = null;
 }
 
-export function connect(name: string): void {
+export function connect(name: string, avatarFile?: File): void {
   if (socket) return;
+  // ソケットを開く前に、入室時に選ばれたアバターを覚えておく
+  pendingAvatarFile = avatarFile ?? null;
   useNet.setState({
     status: "connecting",
     message: null,
@@ -212,7 +231,7 @@ export function connect(name: string): void {
         welcomed = true;
         const peers: Record<string, PeerInfo> = {};
         for (const p of msg.peers) {
-          peers[p.id] = { id: p.id, name: p.name, color: p.color };
+          peers[p.id] = { id: p.id, name: p.name, color: p.color, avatarCid: p.avatarCid };
         }
         const objects: Record<string, WorldObject> = {};
         for (const o of msg.objects) objects[o.id] = o;
@@ -224,10 +243,13 @@ export function connect(name: string): void {
           () => {
             useNet.setState({ ipfs: "ready" });
             // 他のブラウザから直接接続してもらえる状態になったら、自分のピア ID を知らせる
-            waitForDialable().then(
-              (peerId) => send({ type: "ipfs_peer", peerId }),
-              (err: unknown) => console.warn(`[ipfs] not dialable: ${describeError(err)}`, err),
-            );
+            waitForDialable()
+              .then(
+                (peerId) => send({ type: "ipfs_peer", peerId }),
+                (err: unknown) => console.warn(`[ipfs] not dialable: ${describeError(err)}`, err),
+              )
+              // 自分のピア ID を知らせたあとで、選ばれていればアバターをアップロードする (入室は待たせない)
+              .finally(() => void uploadPendingAvatar());
           },
           (err: unknown) => {
             console.warn(`[ipfs] start failed: ${describeError(err)}`, err);
@@ -346,9 +368,32 @@ export function connect(name: string): void {
         showNotice(`${name}: サーバーへ転送中 ${amount}`, 8000);
         break;
       }
+      case "peer_avatar": {
+        const { id, cid } = msg;
+        // サーバーは設定した本人には送らないが、念のため自分なら self を更新する
+        if (id === useNet.getState().self?.id) {
+          useNet.setState((s) => {
+            if (!s.self) return s;
+            const self = { ...s.self };
+            if (cid === null) delete self.avatarCid;
+            else self.avatarCid = cid;
+            return { self };
+          });
+          break;
+        }
+        useNet.setState((s) => {
+          const peer = s.peers[id];
+          if (!peer) return s;
+          const next = { ...peer };
+          if (cid === null) delete next.avatarCid;
+          else next.avatarCid = cid;
+          return { peers: { ...s.peers, [id]: next } };
+        });
+        break;
+      }
       case "peer_joined": {
-        const { id, name, color } = msg.peer;
-        useNet.setState((s) => ({ peers: { ...s.peers, [id]: { id, name, color } } }));
+        const { id, name, color, avatarCid } = msg.peer;
+        useNet.setState((s) => ({ peers: { ...s.peers, [id]: { id, name, color, avatarCid } } }));
         break;
       }
       case "peer_left": {
@@ -400,6 +445,53 @@ export function connect(name: string): void {
 
 export function disconnect(): void {
   socket?.close();
+}
+
+/**
+ * 入室時に選ばれたアバターを IPFS に取り込み、CID をサーバーへ知らせる。
+ * 入室の完了は待たせない (IPFS ノードの準備後、バックグラウンドで行う)。
+ */
+async function uploadPendingAvatar(): Promise<void> {
+  const file = pendingAvatarFile;
+  if (!file) return;
+  // 一度だけ行う (再接続で再アップロードしない)
+  pendingAvatarFile = null;
+  if (file.size > MAX_AVATAR_BYTES) {
+    showNotice("アバターが大きすぎます (64MB まで)");
+    return;
+  }
+  const epoch = avatarEpoch;
+  showNotice("アバターをアップロード中...", 60_000);
+  let lastProgressAt = 0;
+  let cid: string;
+  try {
+    cid = await addContent(file, {
+      onProgress: (loaded, total) => {
+        const now = Date.now();
+        if (now - lastProgressAt < AVATAR_PROGRESS_INTERVAL_MS) return;
+        lastProgressAt = now;
+        const percent = total > 0 ? Math.min(100, Math.floor((loaded / total) * 100)) : null;
+        showNotice(percent === null ? "アバターをアップロード中..." : `アバターをアップロード中... ${percent}%`, 60_000);
+      },
+    });
+  } catch (err) {
+    if (epoch !== avatarEpoch) return;
+    console.warn(`[avatar] upload failed: ${describeError(err)}`, err);
+    showNotice(`アバターをアップロードできませんでした: ${describeError(err)}`, 10_000);
+    return;
+  }
+  if (epoch !== avatarEpoch) {
+    // 接続が切れたので、取り込んだ分は配るのをやめる
+    releaseUpload(cid);
+    return;
+  }
+  const previous = useNet.getState().self?.avatarCid;
+  // このタブが開いている間は、他のユーザーが取得できるように配り続ける
+  keepServing(cid);
+  sendSetAvatar(cid);
+  useNet.setState((s) => (s.self ? { self: { ...s.self, avatarCid: cid } } : s));
+  if (previous && previous !== cid) releaseUpload(previous);
+  showNotice("アバターを設定しました");
 }
 
 // 開発時のみ、E2E テストやコンソールから状態を確認できるようにする

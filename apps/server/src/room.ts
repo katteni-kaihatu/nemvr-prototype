@@ -98,6 +98,15 @@ export class Room {
     if (peer) peer.state.pose = pose;
   }
 
+  /** VRM アバターの CID を記録して、本人以外に知らせる (null なら簡易アバターに戻す)。 */
+  setAvatar(id: string, cid: string | null): void {
+    const peer = this.peers.get(id);
+    if (!peer) return;
+    if (cid === null) delete peer.state.avatarCid;
+    else peer.state.avatarCid = cid;
+    this.broadcast({ type: "peer_avatar", id, cid }, id);
+  }
+
   /** 画像オブジェクトを追加して全員に通知する。上限に達していたら false。 */
   addImage(place: PlaceImage): boolean {
     if (this.objects.size >= MAX_OBJECTS) return false;
