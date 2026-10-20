@@ -118,9 +118,51 @@ VPS に coturn を入れてあり、サーバーが入室 (`welcome`) のたび�
 
 - **証明書の取得に失敗している間、Caddy は自動で再試行する** (Let's Encrypt のレート制限を避けるため、途中からステージング環境で試す)。
   ポートを開けた後に急ぐ場合は `systemctl restart caddy`。
-- legacy では、サーバーを再起動すると、置かれた画像とワールドの状態は消える (メモリのみ、ブロックストアも起動時に空にする)。`crdt-v1` は `CRDT_DATA_DIR` と `blocks/` を保持するが、公開デプロイ向けのモードではない (信頼できる少人数の実験専用)。
+- legacy では、サーバーを再起動すると、置かれた画像とワールドの状態は消える (メモリのみ、ブロックストアも起動時に空にする)。`crdt-v1` は `CRDT_DATA_DIR` とブロックストアを保持する。
+- **現在の公開 VPS は `crdt-v1` を有効にしている** (停止耐性の実験)。`crdt-v1` には認証・編集権限・悪意ある更新への防御がないため、信頼できる少人数の利用に限定し、公開範囲を制限すること。legacy に戻す手順は「CRDT 実験モードの有効化と戻し方」を参照。
 - 認証がなく、誰でも入室して画像・ファイルを置ける。オブジェクト数 (100)・画像サイズ (5MB)・ファイルサイズ (2 GiB)・保持する合計サイズ (20 GiB)・同時の取り込み数 (4) の上限があるだけで、内容の検査 (ウイルス、違法なコンテンツ) や、削除の権限管理は無い。公開範囲には注意すること。
 - Node / pnpm のバージョンは `deploy/setup-vps.sh` の `NODE_VERSION` / `PNPM_VERSION` で固定している (開発環境と同じ)。
+
+## CRDT 実験モードの有効化と戻し方
+
+現在の公開 VPS は `crdt-v1` で動作している。サーバーとクライアントの両方に設定が必要で、クライアント側はビルド時に埋め込まれる。
+
+### 有効化
+
+1. `/etc/proto/server.env` に次を追加する (既存の `TURN_*` は残す)。
+
+   ```sh
+   SYNC_MODE=crdt-v1
+   CRDT_DATA_DIR=/var/lib/proto/crdt
+   ```
+
+2. 保存領域を作る。
+
+   ```sh
+   install -d -o proto -g proto /var/lib/proto/crdt
+   ```
+
+3. クライアントを `VITE_SYNC_MODE=crdt-v1` 付きでビルドしてデプロイする。`deploy.sh` は `pnpm --filter @proto/client build` を実行するため、環境変数がそのまま埋め込まれる。
+
+   ```sh
+   VITE_SYNC_MODE=crdt-v1 DEPLOY_HOST=root@<VPS> SSH_KEY=~/.ssh/<鍵> deploy/deploy.sh
+   ```
+
+4. `journalctl -u proto-server -n 20 --no-pager` で `Mode: crdt-v1 (worldId ..., data /var/lib/proto/crdt)` を確認する。
+
+### 戻し方
+
+1. `/etc/proto/server.env` から `SYNC_MODE` と `CRDT_DATA_DIR` を削除する。
+2. `VITE_SYNC_MODE` を付けずに `deploy/deploy.sh` を実行し、クライアントを legacy で再ビルドする。
+3. `journalctl` で `Mode: legacy` を確認する。
+4. `/var/lib/proto/crdt` は消さない (再度有効化したときに復元できるようにする)。削除する場合は明示的に行う。
+
+### 保存場所
+
+- 文書と台帳: `/var/lib/proto/crdt/meta.json`、`doc.bin`、`content.json`
+- 画像・ファイルのブロック: systemd の `BLOCKSTORE_DIR=/var/lib/proto/blocks` を使うため、`CRDT_DATA_DIR` の外にある。バックアップする場合は両方を対象にする。
+- `VITE_SYNC_MODE` はビルド時の値なので、サーバーの環境変数だけを変えてもクライアントは切り替わらない。
+
 
 ## 検証状況
 
