@@ -8,6 +8,7 @@ import { CursorDot } from "./CursorDot";
 import { DropTarget } from "./DropTarget";
 import { FilePlane } from "./FilePlane";
 import { ImagePlane } from "./ImagePlane";
+import { LocalAvatar } from "./LocalAvatar";
 import { LocalPlayer } from "./LocalPlayer";
 import { Mirror } from "./Mirror";
 import { ObjectInteraction } from "./ObjectInteraction";
@@ -81,6 +82,7 @@ export function World() {
 
         <Mirror enabled={mirrorEnabled} />
         <LocalPlayer />
+        <LocalAvatar />
         <DropTarget />
         <ObjectInteraction />
         {Object.values(peers).map((p) => (

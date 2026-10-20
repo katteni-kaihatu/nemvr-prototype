@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from "react";
-import { PlaneGeometry, type Material } from "three";
+import { useThree } from "@react-three/fiber";
+import { PlaneGeometry, type Camera, type Material } from "three";
+import { LOCAL_AVATAR_LAYER } from "./layers";
 import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 
 /** 鏡の大きさ (m) と、置く位置。ワールドの北側 (z = -20) に、スポーンから見えるように立てる。 */
@@ -14,6 +16,7 @@ const MIRROR_BOTTOM = 0.2;
  * 反射はクライアント側だけで行い、他の人には同期しない (各自の ON/OFF)。
  */
 export function Mirror({ enabled }: { enabled: boolean }) {
+  const camera = useThree((s) => s.camera);
   const reflector = useMemo(() => {
     if (!enabled) return null;
     const geometry = new PlaneGeometry(MIRROR_WIDTH, MIRROR_HEIGHT);
@@ -36,10 +39,28 @@ export function Mirror({ enabled }: { enabled: boolean }) {
   }, [reflector]);
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    // E2E から、反射が有効か (Reflector を作ったか) を確認できるようにする
-    (window as unknown as { __mirror: unknown }).__mirror = { enabled, hasReflector: reflector !== null };
-  }, [enabled, reflector]);
+    if (!reflector) {
+      if (import.meta.env.DEV) {
+        (window as unknown as { __mirror: unknown }).__mirror = { enabled, hasReflector: false, reflectionLayers: null };
+      }
+      return;
+    }
+    // 鏡の反射カメラ (メインカメラの複製) に、ローカルアバターのレイヤーを加える。
+    // メインカメラ (一人称) はレイヤー 0 だけなので、自分の体はメイン視点には出ず、鏡の中だけに映る。
+    const getReflectionCamera = (
+      reflector as unknown as { getReflectionCamera(camera: Camera): Camera }
+    ).getReflectionCamera;
+    const reflectionCamera = getReflectionCamera.call(reflector, camera);
+    reflectionCamera.layers.enable(LOCAL_AVATAR_LAYER);
+    if (import.meta.env.DEV) {
+      // E2E から、反射が有効か (Reflector を作ったか) と、反射カメラのレイヤーを確認できるようにする
+      (window as unknown as { __mirror: unknown }).__mirror = {
+        enabled,
+        hasReflector: true,
+        reflectionLayers: reflectionCamera.layers.mask,
+      };
+    }
+  }, [enabled, reflector, camera]);
 
   return (
     <group position={[0, MIRROR_BOTTOM + MIRROR_HEIGHT / 2, MIRROR_Z]}>

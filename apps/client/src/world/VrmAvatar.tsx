@@ -292,6 +292,8 @@ export interface VrmAvatarHandle {
 
 interface VrmAvatarProps {
   cid: string;
+  /** この VRM を描くレイヤー (鏡の中だけで描くときは 1)。省略すると既定のレイヤー */
+  layer?: number;
   /** 開発時の確認 (window.__vrmMotion) に使う、このアバターのピア ID */
   peerId?: string;
   /** 直近の姿勢。読み込みが終わった瞬間に、原点に一瞬出ないよう使う。 */
@@ -305,7 +307,7 @@ interface VrmAvatarProps {
  * (補間のタイミングを RemoteAvatar と合わせるため)。
  */
 export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function VrmAvatar(
-  { cid, peerId, poseRef, onLoadedChange, onError },
+  { cid, layer, peerId, poseRef, onLoadedChange, onError },
   ref,
 ) {
   const groupRef = useRef<Group>(null);
@@ -356,6 +358,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
         }
         vrmRef.current = vrm;
         rigRef.current = buildRig(vrm);
+        if (layer !== undefined) vrm.scene.traverse((object) => object.layers.set(layer));
         group.add(vrm.scene);
         const pose = poseRef.current;
         if (pose) applyPose(pose, 0);
@@ -386,7 +389,7 @@ export const VrmAvatar = forwardRef<VrmAvatarHandle, VrmAvatarProps>(function Vr
       }
       loadedChangeRef.current?.(false);
     };
-  }, [cid, peerId, poseRef, applyPose]);
+  }, [cid, layer, peerId, poseRef, applyPose]);
 
   return <group ref={groupRef} visible={false} />;
 });

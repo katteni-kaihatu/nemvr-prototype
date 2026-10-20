@@ -12,6 +12,9 @@ const WORLD_HALF_SIZE = 24;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 
 /** 入力処理・移動・一人称カメラ・姿勢送信。移動はクライアント権威。 */
+/** ローカルプレイヤーの姿勢 (鏡に映す自分のアバター用)。毎フレーム更新する。 */
+export const localPlayerPose = { x: 0, y: 0, z: 0, crouch: 0, lean: 0, eyeY: 0 };
+
 export function LocalPlayer() {
   const camera = useThree((s) => s.camera);
   const canvas = useThree((s) => s.gl.domElement);
@@ -161,6 +164,14 @@ export function LocalPlayer() {
     p.headZ = p.z - Math.sin(p.yaw) * lean.side;
     camera.position.set(p.headX, p.eyeY, p.headZ);
     camera.rotation.set(p.pitch, p.yaw, -lean.roll); // 右へ傾けると、時計回り (回転の向きは負)
+
+    // 鏡に映す自分のアバター用に、姿勢を共有する
+    localPlayerPose.x = p.x;
+    localPlayerPose.y = p.y;
+    localPlayerPose.z = p.z;
+    localPlayerPose.crouch = p.crouch;
+    localPlayerPose.lean = p.lean;
+    localPlayerPose.eyeY = p.eyeY;
   });
 
   return null;
