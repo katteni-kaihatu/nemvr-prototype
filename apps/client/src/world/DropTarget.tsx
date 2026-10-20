@@ -13,6 +13,7 @@ import {
 } from "@proto/protocol";
 import { expectUpload, sendPlaceFile, sendPlaceImage, sendPlaceUrl, showNotice } from "../net/connection";
 import { addContent } from "../net/ipfs";
+import { isPasteShortcut, shouldHandlePaste } from "./pasteShortcut";
 
 const IMAGE_LONG_EDGE = 2.5; // 置く画像の長辺 (m)
 const GAP = 0.3; // 複数枚を同時に置くときの間隔 (m)
@@ -192,7 +193,18 @@ export function DropTarget() {
 
   // Ctrl+V で http(s) の URL を貼ると、その URL を取得して置く (サーバーが取得するので CORS の影響を受けない)
   useEffect(() => {
+    // 中ボタン貼り付け (Linux の primary selection) でも paste が発火するため、
+    // 直前の Ctrl+V / Cmd+V と対応する貼り付けだけを URL 配置として扱う。
+    let pasteShortcutAt = 0;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isPasteShortcut(e)) pasteShortcutAt = performance.now();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isPasteShortcut(e)) pasteShortcutAt = 0;
+    };
     const onPaste = (e: ClipboardEvent) => {
+      if (!shouldHandlePaste(pasteShortcutAt, performance.now())) return;
+      pasteShortcutAt = 0;
       const text = e.clipboardData?.getData("text/plain")?.trim() ?? "";
       if (!/^https?:\/\//i.test(text)) return; // URL 以外の貼り付けは、そのまま
       if (text.length > MAX_URL_LENGTH) {
@@ -207,8 +219,14 @@ export function DropTarget() {
       sendPlaceUrl(text, [point.x, 0, point.z], yaw);
       showNotice(`URL を取得中... ${text.length > 70 ? `${text.slice(0, 70)}...` : text}`, 60000);
     };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
     window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("paste", onPaste);
+    };
   }, [camera, canvas]);
 
   return null;

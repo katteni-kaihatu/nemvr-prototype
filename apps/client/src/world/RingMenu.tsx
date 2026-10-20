@@ -146,12 +146,15 @@ export function RingMenu() {
               key={item.id}
               data-testid={`ring-menu-${item.id}`}
               className="ring-menu-button"
-              onClick={(e) => {
-                // 右クリックなどでは実行しない (ブラウザによっては click が来ることがある)
+              onPointerDown={(e) => {
+                // 中ボタンでメニューを開いた直後に、同じ操作で項目が実行されないようにする。
+                // pointerdown の button は実際のボタンを表すので、主ボタンだけを受け付ける。
                 if (e.button !== 0) return;
+                e.stopPropagation();
                 item.run(object);
                 closeMenu();
               }}
+              onClick={(e) => e.stopPropagation()}
               style={{
                 position: "absolute",
                 left: "50%",
