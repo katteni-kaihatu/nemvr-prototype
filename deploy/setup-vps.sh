@@ -22,6 +22,10 @@
 # Kubo の API (5001) とゲートウェイ (8082) は 127.0.0.1 だけで待ち受ける。
 set -euo pipefail
 
+# ssh で実行すると cwd が /root のままになる。runuser -u proto は cwd を引き継ぐため、
+# proto が読めない /root から Elixir / Kubo を起動して失敗しないように /tmp へ移る。
+cd /tmp
+
 : "${PROTO_HOST:?PROTO_HOST (証明書を取るホスト名) を指定してください}"
 NODE_VERSION="${NODE_VERSION:-24.15.0}"
 PNPM_VERSION="${PNPM_VERSION:-12.14.0}"
@@ -54,7 +58,15 @@ apt-get install -y -qq \
   elixir erlang-dev erlang-ssl erlang-inets
 
 # curl が入った後に最新版を解決する (KUBO_VERSION を指定した場合はそれを使う)。
-KUBO_VERSION="${KUBO_VERSION:-$(curl -fsSL https://dist.ipfs.tech/kubo/versions | head -n 1 | tr -d '[:space:]')}"
+# dist.ipfs.tech に到達できない環境 (一部の VPS / 地域) では GitHub API を使う。
+if [ -z "${KUBO_VERSION}" ]; then
+  KUBO_VERSION="$(curl -fsSL --connect-timeout 10 https://dist.ipfs.tech/kubo/versions 2>/dev/null | head -n 1 | tr -d '[:space:]' || true)"
+fi
+if [ -z "${KUBO_VERSION}" ]; then
+  KUBO_VERSION="$(curl -fsSL --connect-timeout 10 https://api.github.com/repos/ipfs/kubo/releases/latest 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1 || true)"
+fi
+: "${KUBO_VERSION:?Kubo のバージョンを解決できませんでした。KUBO_VERSION=v0.40.1 のように指定してください}"
 case "$KUBO_VERSION" in
   v*) KUBO_VERSION_NUMBER="${KUBO_VERSION#v}" ;;
   *)
@@ -94,6 +106,7 @@ chmod 755 /srv/proto-client
 echo "==> elixir toolchain for proto user"
 # mix local.hex / local.rebar は初回だけ必要。再実行しても上書きするだけで同じ結果になる。
 runuser -u proto -- env HOME=/opt/proto bash -c '
+  cd /opt/proto
   mix local.hex --force >/dev/null
   mix local.rebar --force >/dev/null
 '
@@ -103,7 +116,11 @@ if ! command -v ipfs >/dev/null 2>&1 || [ "$(ipfs version --number 2>/dev/null |
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   file="kubo_${KUBO_VERSION}_linux-${KUBO_ARCH}.tar.gz"
-  curl -fsSL -o "$tmp/$file" "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/${file}"
+  if ! curl -fsSL --retry 2 --connect-timeout 20 -o "$tmp/$file" "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/${file}"; then
+    echo "    dist.ipfs.tech に接続できないため GitHub Releases から取得する"
+    curl -fsSL --retry 2 --connect-timeout 20 -o "$tmp/$file" \
+      "https://github.com/ipfs/kubo/releases/download/${KUBO_VERSION}/${file}"
+  fi
   tar -xzf "$tmp/$file" -C "$tmp"
   install -m 0755 "$tmp/kubo/ipfs" /usr/local/bin/ipfs
   rm -rf "$tmp"
@@ -192,7 +209,7 @@ Environment=IPFS_API_URL=http://127.0.0.1:5001 IPFS_GATEWAY_URL=http://127.0.0.1
 Environment=RELEASE_TMP=/var/lib/proto/tmp
 # TURN_HOST / TURN_PORT / TURN_SECRET (coturn と共有。root と proto だけが読める)
 EnvironmentFile=-/etc/proto/server.env
-ExecStart=/opt/proto/app/apps/server/_build/prod/rel/proto_server/bin/proto_server foreground
+ExecStart=/opt/proto/app/apps/server/_build/prod/rel/proto_server/bin/proto_server start
 Restart=on-failure
 RestartSec=3
 MemoryMax=1536M

@@ -35,6 +35,7 @@
     `WS_URL` / `HTTP_URL` で接続先を指定する。
   - デプロイを Elixir release + Kubo + Caddy の構成に更新した (`deploy/setup-vps.sh` / `deploy/deploy.sh`)。
     Kubo は systemd の `kubo.service`、Elixir サーバーは `proto-server.service` として動かす。
+    release は VPS の Elixir/OTP でビルドする (Nix ビルドの release は Nix ストアへ動的リンクするため Ubuntu では動かない)。
 - **Shift + ホイールで、つかんだオブジェクトの大きさを変えられるようにした。**
   - つかんでいる間、Shift を押しながらホイールを回すと、上で大きく・下で小さくなる (1 目盛りで 1.12 倍、0.1〜10 倍で止まる)。
     Shift 無しのホイールは従来どおり遠近。移動モード・回転モードのどちらでも使える。変更中は案内に倍率 (%) を出す。

@@ -206,8 +206,10 @@ HOST:8443 {
 /etc/proto/server.env       # TURN_* (root:proto 0640)
 ```
 
-`mix.exs` の release は `include_erts: true` なので、VPS に Elixir / Erlang が無くても起動できる。
-VPS に必要なのは release の実行ファイルと Kubo だけ。
+`mix.exs` の release は `include_erts: true` なので、起動時に VPS の Elixir / Erlang は不要
+(release に実行環境を含む)。ただし release は VPS の Elixir/OTP でビルドする。
+Nix の Elixir/OTP で作った release は Nix ストアの glibc などへ動的リンクしており、
+Ubuntu では起動できないため (`setup-vps.sh` が VPS 側の Elixir を導入する)。
 
 ## 手順
 
@@ -251,17 +253,20 @@ DEPLOY_HOST=root@<VPS> SSH_KEY=~/.ssh/<鍵> deploy/deploy.sh
 
 `deploy.sh` は次を行う:
 
-1. `pnpm install --frozen-lockfile`
+1. 手元で `pnpm install --frozen-lockfile`
 2. `pnpm typecheck`
 3. `pnpm --filter @proto/client build`
-4. `apps/server` で `MIX_ENV=prod mix deps.get --only prod` と `MIX_ENV=prod mix release --overwrite`
-5. 現在の release とクライアントを `.prev` として VPS 内に退避
-6. `apps/client/dist/` を `/srv/proto-client/` へ rsync
-7. `_build/prod/rel/proto_server/` を `/opt/proto/app/apps/server/_build/prod/rel/proto_server/` へ rsync
-8. `systemctl restart proto-server` (Kubo は再起動しない)
+4. `apps/server` のソース (`mix.exs` / `mix.lock` / `config/` / `lib/`) を VPS の `/opt/proto/build/apps/server` へ rsync
+5. VPS 上で `runuser -u proto -- mix deps.get --only prod && mix release --overwrite`
+6. 現在の release とクライアントを `.prev` として VPS 内に退避
+7. `apps/client/dist/` を `/srv/proto-client/` へ rsync
+8. ビルドした release を `/opt/proto/app/apps/server/_build/prod/rel/proto_server/` へ配置
+9. `systemctl restart proto-server` (Kubo は再起動しない)
 
 `node_modules`、`.git`、クライアントの `dist` をアプリのソースツリーへ転送しない。
-Kubo の設定を変えた場合は、`deploy.sh` ではなく `setup-vps.sh` を再実行して Kubo を再起動する。
+VPS のソースは `/opt/proto/build/apps/server` にだけ置き、実行する release は
+`/opt/proto/app` に置く。Kubo の設定を変えた場合は、`deploy.sh` ではなく
+`setup-vps.sh` を再実行して Kubo を再起動する。
 
 ### 3. 確認する
 

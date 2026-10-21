@@ -204,6 +204,12 @@ async function main() {
     "object_removed",
   );
 
+  primary.send({ type: "delete_object", id: duplicate.object.id });
+  await primary.waitFor(
+    (m) => m.type === "object_removed" && m.id === duplicate.object.id,
+    "duplicate object_removed",
+  );
+
   primary.send({
     type: "pose",
     pose: { position: [3, 0, 3], head: [0, 0, 0, 1] },
@@ -224,8 +230,12 @@ async function main() {
   const mediaResponse = await fetch(`${HTTP_URL}/media/deadbeef`);
   assert.equal(mediaResponse.status, 404, "/media/deadbeef status");
 
-  const otherResponse = await fetch(`${HTTP_URL}/not-media`);
-  assert.equal(otherResponse.status, 404, "/not-media status");
+  // 本番の Caddy は /media と /ws 以外を SPA として返すため、この確認は
+  // サーバーへ直接つなぐときだけ行う (SMOKE_CHECK_HTTP_404=0 で省略)。
+  if (process.env.SMOKE_CHECK_HTTP_404 !== "0") {
+    const otherResponse = await fetch(`${HTTP_URL}/not-media`);
+    assert.equal(otherResponse.status, 404, "/not-media status");
+  }
 }
 
 const timeout = setTimeout(() => {
