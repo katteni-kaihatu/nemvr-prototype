@@ -16,6 +16,9 @@ import { assembleBlob } from "./blobAssembly";
 import { ServingBlockstore, importFileBacked } from "./fileBackedBlockstore";
 
 const CONNECT_TIMEOUT_MS = 10_000;
+/** サーバーへの接続が混雑で断られたときの再試行回数と、待ち時間 (ms)。 */
+const CONNECT_ATTEMPTS = 5;
+const CONNECT_RETRY_MS = [300, 600, 1200, 2400];
 
 /** CRDT の P2P 同期に使う libp2p のプロトコル ID。 */
 export const WORLD_SYNC_PROTOCOL = "/proto/world-sync/1.0.0";
@@ -139,10 +142,27 @@ async function createNode(
     { doNotResendBlockWindow: 0 },
   ).start();
 
-  // サーバーの Helia ノードに接続する (画像の取得元・中継役)
-  await helia.libp2p.dial(multiaddr(serverAddr), {
-    signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS),
-  });
+  // サーバーの Helia ノードに接続する (画像の取得元・中継役)。
+  // 入室が重なると、サーバーが一時的に接続を断ることがあるので、少し待って再試行する。
+  let dialError: unknown = null;
+  for (let attempt = 0; attempt < CONNECT_ATTEMPTS; attempt++) {
+    try {
+      await helia.libp2p.dial(multiaddr(serverAddr), {
+        signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS),
+      });
+      dialError = null;
+      break;
+    } catch (err) {
+      dialError = err;
+      if (attempt + 1 >= CONNECT_ATTEMPTS) break;
+      await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS[attempt] ?? 2400));
+    }
+  }
+  if (dialError) {
+    // 起動した Helia を残すと、次の試行でノードと接続が増え続ける。失敗したら必ず止める
+    await helia.stop().catch(() => undefined);
+    throw dialError;
+  }
 
   // 直接 (WebRTC) 接続の数を数えて通知する。中継経由のものは数えない
   const countDirect = () =>

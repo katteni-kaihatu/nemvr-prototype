@@ -4,3 +4,10 @@ dist
 .DS_Store
 # crdt-v1 の実験用データ (文書・コンテンツ台帳・ブロックストア)
 .crdt-data
+
+# Elixir / Mix
+_build/
+deps/
+*.ez
+erl_crash.dump
+.elixir_ls/

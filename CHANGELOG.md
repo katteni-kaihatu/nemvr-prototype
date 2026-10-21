@@ -3,10 +3,38 @@
 このプロジェクトの主な変更を記録する。
 形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠する。
 
+> 注: 過去のエントリは当時の実装 (Node.js サーバー、埋め込み Helia、crdt-v1) の記録。
+> 現在の構成は `[Unreleased]` を参照。crdt-v1 のサーバー実装は削除済みで、`SYNC_MODE` /
+> `CRDT_DATA_DIR` / `BLOCKSTORE_DIR` は現在の Elixir/OTP サーバーでは使えない。
+
 ## [Unreleased]
+
+### Changed
+
+- **バックエンドを Node.js / TypeScript から Elixir/OTP (Mix + Cowboy) に置き換えた。**
+  - ワールド同期は `ProtoServer.Room` (GenServer)、WebSocket は `ProtoServer.WsHandler`、`/media` は `ProtoServer.MediaHandler` が担当する。
+  - プロトコル検証、TURN 認証情報、Range / MIME 判定、URL 取り込みを Elixir モジュールへ移植した。
+  - 配置処理は `ProtoServer.Queue` (peer ごとの直列化、全体同時 4 件)、`ProtoServer.Content` (参照カウント・容量上限・unpin/GC)、`ProtoServer.Place` (画像・ファイル・URL・アバター) に分割した。
+  - legacy プロトコル、20 Hz snapshot、grab 排他、複製・削除、動画状態、デモボックスは従来どおり。
+- **IPFS を埋め込み Helia から外部 Kubo に委譲した。**
+  - サーバーは Kubo の HTTP API (pin/unpin/gc/add) と Gateway (stat/head/Range 配信) を使う。
+  - `welcome.ipfs` には Kubo の peer ID と `IPFS_PUBLIC_PORT` (本番は Caddy 経由の 8443) を載せる。
+  - `CONTENT_MAX_TOTAL_MB`、画像 5 MiB・ファイル 2 GiB・アバター 64 MiB、16 MiB 超のバックグラウンド取得は維持する。
+- **開発・デプロイ構成を更新した。** `flake.nix` の devShell、`scripts/smoke-ws.mjs`、systemd の `kubo.service` / `proto-server.service`、Elixir release を転送する `deploy/deploy.sh` を追加・更新した。
+
+### Removed
+
+- **サーバー側の crdt-v1 を削除した。** `SYNC_MODE` / `CRDT_DATA_DIR` / `BLOCKSTORE_DIR` / `sync_*` / `claim*` は Elixir/OTP サーバーでは使えない。クライアントの CRDT コードは休眠状態で、`VITE_SYNC_MODE=crdt-v1` では未対応のエラーを表示する。
+- Node.js サーバーの実装 (`apps/server/src/*.ts`) と Vitest テスト、`apps/server/tsconfig.json` を削除した。
 
 ### Added
 
+- **Nix flake と WebSocket / media の smoke test を追加した。**
+  - `nix develop` で Elixir / Kubo / Node 24 / pnpm の開発シェルを起動できる (`flake.nix`)。
+  - `scripts/smoke-ws.mjs` で、Kubo を起動しなくても入室・配置・つかむ・移動・複製・削除・snapshot・`/media` の 404 を確認できる。
+    `WS_URL` / `HTTP_URL` で接続先を指定する。
+  - デプロイを Elixir release + Kubo + Caddy の構成に更新した (`deploy/setup-vps.sh` / `deploy/deploy.sh`)。
+    Kubo は systemd の `kubo.service`、Elixir サーバーは `proto-server.service` として動かす。
 - **Shift + ホイールで、つかんだオブジェクトの大きさを変えられるようにした。**
   - つかんでいる間、Shift を押しながらホイールを回すと、上で大きく・下で小さくなる (1 目盛りで 1.12 倍、0.1〜10 倍で止まる)。
     Shift 無しのホイールは従来どおり遠近。移動モード・回転モードのどちらでも使える。変更中は案内に倍率 (%) を出す。
@@ -288,6 +316,17 @@
 
 ### Changed
 
+- **バックエンドを Node.js + `ws` から Elixir/OTP (Cowboy) に置き換えた。**
+  - `apps/server` は Mix プロジェクトになり、`ProtoServer.Room` / `Content` / `Queue` / `Place` / `Ipfs` などの GenServer で構成する。
+    WebSocket の legacy プロトコル、`/media/<cid>` の Range ストリーミング、URL 取り込み、TURN 認証情報は従来の挙動を維持する。
+  - IPFS は埋め込みの Helia ではなく、外部の Kubo に委譲した。サーバーは Kubo の HTTP API (5001) とゲートウェイ (8082) だけを使い、
+    libp2p / bitswap / pin / blockstore は持たない。`welcome.ipfs` には Kubo の peer ID と `IPFS_PUBLIC_PORT` (開発 8081 / 本番 8443) を載せる。
+  - コンテンツは Kubo が保持する。サーバーはオブジェクトが存在する間 pin し、最後の参照が消えると unpin + GC する。
+    ワールド状態はメモリのみで、再起動すると消える。Kubo の pin / ブロックは残ることがあり、クラッシュ後は孤立した pin が残り得る。
+- **デプロイ構成を Caddy + Kubo + proto-server + coturn に更新した。**
+  - `setup-vps.sh` は Node 24 / pnpm / Elixir / Erlang / Kubo を導入し、`kubo.service` と `proto-server.service` を作る。
+  - `deploy.sh` はクライアントの `dist` と自己完結した Elixir release だけを転送する。`node_modules` / `.git` / `dist` をアプリツリーへ rsync しない。
+  - ロールバック用に、転送前の release とクライアントを `.prev` に退避する。
 - **画面中央のカーソルで選べる距離の制限 (8m) をなくした**。画面に写っているオブジェクトは、遠くても狙って、つかむ・メニューを開くことができる (`Raycaster.far` を無限遠にした。`GRAB_REACH` は削除)。
 - 公開先のホスト名を `nemvr.nemnomi.dev` にした (A レコードで VPS を指す)。`deploy/setup-vps.sh` は、再実行のたびに `/etc/proto/server.env` の `TURN_HOST` を `PROTO_HOST` に合わせる (秘密は変えない)。
   Caddy が新しい名前の証明書を自動で取得する。移行前のホスト名 (`172-104-89-28.ip.linodeusercontent.com`) は配信されなくなった。
@@ -302,8 +341,22 @@
   (`POST /images`, `GET /images/:id`) と、保持数の上限 (`MAX_IMAGES`)、CORS 全許可の設定を廃止。
   サーバーが提供するのは WebSocket・IPFS (libp2p)・動画のストリーミング配信 (`/media`) のみ。
 
+### Removed
+
+- **crdt-v1 のサーバー実装を削除した。**
+  - `sync_*` / `claim` / `claim_release`、専用の保存領域、同期モードの切替は Elixir/OTP サーバーに存在しない。
+    クライアントが送った場合は接続を切らずに `error` を返す。
+  - クライアントの CRDT コード (`packages/world-sync`) は休止状態で残る。`VITE_SYNC_MODE=crdt-v1` を指定すると、
+    サーバーが対応していない旨のエラーを表示する。当時の設計は [docs/crdt-experiment.md](docs/crdt-experiment.md) (歴史的資料) に残す。
+
 ### Fixed
 
+- **サーバー再起動後などに、IPFS への接続が「接続失敗」になる問題を修正した**。
+  - サーバーの libp2p は、認証の途中の接続を既定で 10 件までしか受け付けない。入室が重なるとここが埋まり、
+    新しいクライアントの接続を拒否していた (`incomingPendingConnections exceeded`)。上限を 200 件に増やし、
+    1 秒あたりの接続数の上限も 500、全体の接続数も 1000 にした。
+  - クライアントは、サーバーへの接続が断られたら 0.3 / 0.6 / 1.2 / 2.4 秒待って最大 5 回まで再試行する。
+    失敗した Helia ノードを止めずに残していたため、再試行のたびにノードと接続が増えていたのも修正した。
 - **VRM を使っている人が入ってきたときの、数秒のフリーズを減らした**。
   - `GLTFLoader` の解析を、依存 (メッシュ・マテリアル・テクスチャなど) ごとに区切り、8ms を超えたら次のフレームまで待つようにした
     (three.js の内部メソッドを包む。実装が変わったら見直す)。解析が 1 回の同期処理で走らなくなる。

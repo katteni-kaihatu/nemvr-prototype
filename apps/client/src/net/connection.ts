@@ -359,6 +359,24 @@ function reset(): void {
 
 export function connect(name: string, avatarFile?: File): void {
   if (socket) return;
+  if (requested) {
+    useNet.setState({
+      status: "idle",
+      message: "crdt-v1 は Elixir/OTP サーバーでは未対応です。VITE_SYNC_MODE を外してください",
+      self: null,
+      peers: {},
+      objects: {},
+      notice: null,
+      ipfs: "idle",
+      directPeers: 0,
+      videoStates: {},
+      sync: "legacy",
+      localSaved: false,
+      serverSaved: false,
+      peerCount: 0,
+    });
+    return;
+  }
   explicitExit = false;
   // 再接続でも同じ名前・アバターで join できるように覚えておく
   lastName = name;
@@ -535,7 +553,7 @@ function openSocket(): void {
           teardownCrdt();
           useNet.setState({
             status: "idle",
-            message: "サーバーは legacy モードです。VITE_SYNC_MODE=crdt-v1 とサーバーの SYNC_MODE=crdt-v1 を揃えてください",
+            message: "crdt-v1 は Elixir/OTP サーバーでは未対応です。VITE_SYNC_MODE を外してください",
             self: null,
             peers: {},
             objects: {},

@@ -101,7 +101,7 @@ WebSocket 上で JSON テキストメッセージを送受信する。すべて�
 
 | type | フィールド | 説明 |
 |---|---|---|
-| `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: ImageObject[]`, `ipfs: { peerId, wsPort }`, `iceServers?: IceServer[]`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト、サーバーの IPFS ノードの接続情報、WebRTC 用の STUN / TURN 設定 (TURN 未設定なら省略) |
+| `welcome` | `self: PeerInfo`, `peers: PeerState[]`, `objects: WorldObject[]`, `ipfs: { peerId, wsPort }`, `iceServers?: IceServer[]`, `tickRate: number` | `join` への応答。自分の ID、既存ユーザー、既に置かれているオブジェクト、Kubo の peer ID と公開 WS ポート、WebRTC 用の STUN / TURN 設定 (TURN 未設定なら省略) |
 | `object_added` | `object: WorldObject` | オブジェクトが置かれた (置いた本人を含む全員へ) |
 | `object_updated` | `object: ImageObject` | 位置・向き・つかまれている状態が変わった (オブジェクト全体を送る) |
 | `object_removed` | `id: string` | オブジェクトが削除された |
@@ -135,41 +135,45 @@ sequenceDiagram
 
 ### 画像・ファイルの共有 (IPFS)
 
-画像・ファイルの中身は WebSocket に載せず、IPFS (Helia 7 / libp2p) で共有する。ワールドには CID だけを載せる。
+画像・ファイルの中身は WebSocket に載せず、IPFS で共有する。ワールドには CID だけを載せる。
+サーバーは Kubo の HTTP API / ゲートウェイだけを使い、libp2p / bitswap / pin / blockstore は持たない。
 以下の流れと検証は画像の場合 (`place_image`)。ファイル (`place_file`) の違いは、次の「ファイルの配置とダウンロード」を参照。
 
 ```mermaid
 sequenceDiagram
     participant A as Client A (置く人)
-    participant S as Server (WS + Helia)
+    participant S as Server (Elixir/OTP)
+    participant K as Kubo
     participant B as Client B
 
-    A->>S: libp2p 接続 (ws://host:8081, bitswap)
     A->>A: fs.addBytes(画像) → CID
     A->>S: place_image {cid, position, ...}
-    S->>A: bitswap で CID を取得 (サイズ・形式を検証)
-    S->>S: pin
+    S->>K: Gateway / API で CID を取得 (サイズ・形式を検証)
+    S->>K: pin/add
     S-->>A: object_added
     S-->>B: object_added
-    B->>S: bitswap で CID を取得 (または A から直接)
+    B->>K: libp2p で CID を取得 (または A から直接)
     B->>B: blob URL → テクスチャ
 ```
 
-- **サーバーの Helia ノード**: libp2p の WebSocket (`IPFS_PORT`, 既定 8081) で待ち受ける。ブラウザの接続先、circuit relay、pin 済み画像の提供元を兼ねる。
-  ブロックストアはディスク (`BLOCKSTORE_DIR`。legacy の既定は一時ディレクトリ、crdt-v1 の既定は `CRDT_DATA_DIR/blocks`)。legacy では起動のたびに空にする (再起動でワールドの状態が消えるので、残しても参照されない)。
-- **ブラウザの Helia ノード**: 入室 (`welcome`) 後に起動し、`welcome.ipfs` とページのホスト名から組み立てた
-  `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` でサーバーに接続する。
+- **IPFS ノード (Kubo)**: Kubo が libp2p の WebSocket (`0.0.0.0:8081/ws`)、circuit relay、pin 済み画像の提供元を兼ねる。
+  サーバーは `IPFS_API_URL` (既定 `http://127.0.0.1:5001`) と `IPFS_GATEWAY_URL` (既定 `http://127.0.0.1:8082`) に HTTP で話す。
+  ブロックストアは Kubo のリポジトリ (本番 `/var/lib/proto/ipfs`) にあり、サーバーの再起動では消えない。
+  ワールドの状態はメモリのみなので、再起動後に参照のない pin が残ることがある。
+- **クライアントの IPFS ノード**: ブラウザ内の Helia ノード。入室 (`welcome`) 後に起動し、`welcome.ipfs` とページのホスト名から組み立てた
+  `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` で Kubo に接続する。`peerId` は Kubo の peer ID。
   トランスポートは WebSocket / WebRTC / circuit relay。ルーティング (DHT・公開ゲートウェイ) は使わない。
 - **取得**: CID を `unixfs.cat` で取得し (上限 5MB・30 秒)、Blob → blob URL → `TextureLoader` で読み込む。CID ごとにキャッシュする。
   失敗したら灰色の板のままにする。
-- **検証 (server)**: `place_image` の CID を取得しながら、5MB を超えたら中止、先頭バイトが PNG / JPEG / GIF / WebP でなければ拒否 (SVG は不可)、
-  データが 20 秒届かなければ拒否する (合計の時間ではなく、止まっているかで見る)。通ったら pin する (pin 済みの CID は何もしない)。同じ人の分は 1 件ずつ順に、全体では同時に 4 件まで取り込む (順番待ち。後述)。オブジェクト数の上限は 100。
+- **検証 (server)**: `place_image` は CID のサイズと先頭バイトを Kubo から確認し、5MB を超える場合は拒否する。先頭バイトが PNG / JPEG / GIF / WebP でなければ拒否 (SVG は不可)。
+  Kubo が応答しない場合は HTTP タイムアウトで拒否する。通ったら Kubo に pin する (pin 済みの CID は何もしない)。
+  同じ人の分は 1 件ずつ順に、全体では同時に 4 件まで取り込む (順番待ち。後述)。オブジェクト数の上限は 100。
 - **CID の形式**: UnixFS ファイルの CID (codec は dag-pb / raw、ハッシュは sha2-256) のみ。サーバーは正規化した文字列を保持する。
 - **ブラウザ同士の直接接続**: ブラウザは中継に予約を作り (`/p2p-circuit/webrtc` のアドレスを持つ) 、
   ダイヤル可能になってから `ipfs_peer` を送る。サーバーは本人以外に `peer_ipfs` を送り、受け取った側が
-  `<サーバーのアドレス>/p2p-circuit/webrtc/p2p/<相手>` へ接続する (既存の参加者 → 新しい参加者の一方向)。
+  `<Kubo のアドレス>/p2p-circuit/webrtc/p2p/<相手>` へ接続する (既存の参加者 → 新しい参加者の一方向)。
   接続が確立すると bitswap が直接のピアからも取得するようになる。HUD の `P2P n` は直接接続の数。
-  失敗しても (NAT 越えできないなど) サーバー経由の取得は続く。
+  失敗しても (NAT 越えできないなど) Kubo 経由の取得は続く。
 - **STUN / TURN**: サーバーに `TURN_HOST` / `TURN_SECRET` が設定されていると、`welcome.iceServers` に STUN (自前の coturn と公開 STUN) と、ユーザーごとの時間制限つき TURN 認証情報 (`username = <期限>:<ユーザー ID>`、`credential = base64(HMAC-SHA1(共有秘密, username))`) を入れて配る。クライアントはこれを libp2p の WebRTC (`rtcConfiguration.iceServers`) に渡す。未設定のときは libp2p の既定 (公開 STUN のみ)。ページに `?ice=relay` を付けると中継 (TURN) だけを使う (診断用)。
 
 ### ファイルの配置とダウンロード
@@ -194,17 +198,17 @@ sequenceDiagram
 - 拡張子が無い・未知のときだけ、先頭バイト (ID3、RIFF、OggS、fLaC、ftyp、EBML など) で補う。拡張子が申告より優先される。
 - 判定はアイコンの表示にしか使わない (中身は検証・実行しない)。判定できなければ汎用のファイルアイコン。
 
-**保持と解放 (`ContentStore`)**
-- 画像・ファイルの中身は、CID ごとに 1 つだけ保持し、指しているオブジェクトの数 (参照) を数える。複製や同じファイルの再投入では、取得し直さず、容量も増えない。
-- 最後の参照が無くなったら (`delete_object`) unpin し、gc でメモリを空ける。短時間の連続削除は 1 回の gc にまとめる。
-- gc は、取得中のブロックを消さないよう、取得が終わっているときだけ行う。gc の最中に始まる取得は、終わるまで待たせる。
-- 容量の判定と登録は同期的に行う (pin の待ち時間の間に、同時に始まった追加が容量を二重に使わないように)。
+**保持と解放 (`ProtoServer.Content`)**
+- 画像・ファイルの中身は Kubo が保持する。サーバーは CID ごとに参照数を数え、複製や同じファイルの再投入では取得し直さず、容量も増えない。
+- 最後の参照が無くなったら (`delete_object`) Kubo から unpin し、GC する。短時間の連続削除は 1 回の GC にまとめる。
+- GC は、取得中の CID を消さないよう、取得が終わっているときだけ行う。GC の最中に始まる取得は、終わるまで待たせる。
+- 容量の判定と登録は同期的に行う (pin の待ち時間の間に、同時に始まった追加が容量を二重に使わないように)。上限は `CONTENT_MAX_TOTAL_MB`。
 
 **大きなファイルの扱い (最大 2 GiB)**
 
 2 GiB のファイルを、サーバーとブラウザのメモリを使い切らずに扱うための設計。
 
-- **サーバー**: ブロックはメモリではなくディスク (`FsBlockstore`) に置く。サーバーのメモリは、ファイルのサイズに比例せず、転送 1 件あたり 150〜200MiB 程度で頭打ちになる。
+- **サーバー / Kubo**: ブロックはサーバーのメモリではなく Kubo のリポジトリ (ディスク) に置く。サーバーのメモリは、ファイルのサイズに比例せず、転送 1 件あたりのバッファで頭打ちになる。
 - **アップロード (ブラウザ)**: ファイルを丸ごと読まず、**ブロックを保存もしない**。「このブロックは、ファイルの何バイト目から何バイト分か」という索引だけを作り (`FileBackedBlockstore`)、
   サーバーが取りに来たときに、元のファイルから該当部分を読んで渡す (読んだ内容は、CID と一致するか確かめてから渡す)。コピーを作らないので、メモリもディスクも使わず、取り込みはハッシュの計算の速さで済む。
   Helia と同じ設定 (CIDv1・1MiB の固定チャンク・均衡レイアウト・生のブロック) で取り込むので、同じファイルは Helia の `addByteStream` と同じ CID になる。
@@ -212,7 +216,7 @@ sequenceDiagram
 - **サーバーが取り終えるまで配る**: サーバーが取り終えて `object_added` が届いたら、配るのをやめて索引を捨てる。取っている間は、サーバーの `place_progress` が届くたびに配り続ける時間を延ばし、通知が途絶えたら (断られた・失敗した) 2 分で諦める。
 - **ダウンロード (ブラウザ)**: 取得したブロックは保存せず、流して Blob にする (`assembleBlob`)。全チャンクを配列に溜めず、32MiB ごとに Blob にまとめる。
   **チャンクは受け取った時点で必ずコピーする** (取得元がバッファを再利用して書き換えても、保存されるファイルが壊れないように)。
-- **順番待ち (`PlacementQueue`)**: 同じ人の分は 1 件ずつ順に取り込む。同じ接続からの転送を並列にしても速くならないため。全体では同時に 4 件まで。順番待ちの間も、本人に `place_progress` (`queued`) を 10 秒ごとに送る。
+- **順番待ち (`ProtoServer.Queue`)**: 同じ人の分は 1 件ずつ順に取り込む。同じ接続からの転送を並列にしても速くならないため。全体では同時に 4 件まで。順番待ちの間も、本人に `place_progress` (`queued`) を 10 秒ごとに送る。
   本人が退室したら、待っている分は取り消す。
 
 > **IndexedDB は使わない**: 当初は、ブラウザ内のブロックストアを IndexedDB にしたが、Firefox では 1MiB あたり 0.2〜0.3 秒かかり、サーバーが数十ブロックを一度に要求すると応答が間に合わず、転送が止まった。
@@ -223,9 +227,9 @@ sequenceDiagram
 置いた人は、いつ退室するか分からない。そのため、ファイルは置いた時点で、サーバーが取得して保持する。
 ただし大きなファイルは、取得に時間がかかる (2 GiB で約 1 分) ので、取り終えるのを待たずに、先にワールドに置く。
 
-- **置くとき (`place_file`)**: `ContentStore.probe` が、先頭 16 バイトと宣言サイズだけを取得する (`fetchVerified` の `headOnly`)。
-  16MiB (`EAGER_FILE_MAX_BYTES`) 以下、またはサーバーが既に保持している内容は、全部取得して pin してから置く (`stored: true`)。
-  16MiB を超えていれば、すぐに `stored: false`・`owner: <置いた人>` で `object_added` を配り、続けて、サーバーが全部をバックグラウンドで取得する (`stageFile`。`started at placement`)。
+- **置くとき (`place_file`)**: `ProtoServer.Place` が、先頭 16 バイトと宣言サイズだけを Kubo から取得する (gateway の Range / API の `files/stat`)。
+  16MiB (`EAGER_FILE_MAX_BYTES`) 以下、または Kubo が既に保持している内容は、全部取得して pin してから置く (`stored: true`)。
+  16MiB を超えていれば、すぐに `stored: false`・`owner: <置いた人>` で `object_added` を配り、続けて、サーバーが全部をバックグラウンドで Kubo に取り込む (`ProtoServer.Place`)。
   `size` は、取り終えるまでは宣言サイズ (申告。取得するときに上限を守らせる)。容量は、取得を始めるときに宣言サイズで予約する。
 - **置いた人のブラウザ**: `keepServing` で、元のファイルから配り続ける (サーバーが取り終えるまで、このタブを開いたままにする必要がある。HUD に案内を出す)。
   取得の進捗は `place_progress` で届く。サーバーが保持したら (`object_updated` で `stored`) 配るのをやめる。
@@ -233,14 +237,14 @@ sequenceDiagram
   置いた人が退室して `offline` になったものは、取り除かずに残す。
 - **ダウンロード**: クライアントは、サーバーが保持していない (`stored` でない)・自分が配っていないファイルは、**先に、繋がっている相手から直接取得を試す** (`fetchBlob`)。
   データが 8 秒届かない・失敗したときは、`request_file` に切り替える。サーバーが、この取得の完了を待っている人に加えて (`prepare_progress`)、終わったら `object_updated` (`stored`) を配るので、
-  クライアントは、そのあとで取得し直す。同じ内容の取得は 1 回 (`staging`)。順番待ちは、置いた人 (`owner`) ごとに 1 件ずつ (`PlacementQueue`)。置いた人が退室していれば、`request_file` は理由つきで失敗する。
+  クライアントは、そのあとで取得し直す。同じ内容の取得は 1 回 (`staging`)。順番待ちは、置いた人 (`owner`) ごとに 1 件ずつ (`ProtoServer.Queue`)。置いた人が退室していれば、`request_file` は理由つきで失敗する。
   実測では、置いた直後のダウンロードは、サーバーが取得を進めるのに合わせて、サーバーから (保持される前でも) 届いた。`request_file` に切り替わるのは、データが 8 秒届かないときだけ。
 - **削除・複製**: 保持していないファイルは、サーバーの参照を数えない (`holdsContent`)。削除してもディスクは変わらない。
 - **取得元の確認**: クライアントは、ダウンロードで受け取ったブロックごとに、送ってきたピアを数え (`fs.cat` の `onProgress` の `bitswap:block`)、HUD と `console` に内訳を出す。
   ピアは、サーバー / ユーザー名 (直接 WebRTC) / ユーザー名 (中継) に分けて表す (ユーザー名は、`welcome` の `peers[].ipfsPeerId` と `peer_ipfs` から)。サーバーも、取得ごとに `[stage_file] ... blocks from: owner=N` をログに出す。
-- **bitswap の再送の窓**: 送信側は、既定では「直前に送った」という理由で、同じ相手から要求されたブロックを 5 秒間再送しない。取得が途中で中断して取り直すと、その要求は無視され、
+- **bitswap の再送の窓**: ブラウザ側の送信は、既定では「直前に送った」という理由で、同じ相手から要求されたブロックを 5 秒間再送しない。取得が途中で中断して取り直すと、その要求は無視され、
   受信側も要求を送り直さないため、両方が待ち続けてアイドルタイムアウト (30 秒) になる (しばらく待つと成功する、という間欠的な失敗になる)。
-  サーバーとブラウザの bitswap は、ともに `doNotResendBlockWindow: 0` にして、重複した要求にも再送するようにした。`fetchVerified` の `retryAfterMs` (最初のデータが 4 秒届かなければ取り消して要求し直す) は、保険として残している。
+  ブラウザの bitswap は `doNotResendBlockWindow: 0` にして、重複した要求にも再送するようにした。Kubo の bitswap は既定の設定で動く。
 
 **ダウンロード (`net/download.ts`)**
 - リングメニューの「ダウンロード」。オブジェクトの `cid` を IPFS から取得し (上限は種類ごと。データが 30 秒届かなければ中止)、Blob にして、`<a download>` で保存する (ページは開かない)。
@@ -248,7 +252,7 @@ sequenceDiagram
   同じ CID を直後に取り直すと、5〜15 秒かかることがある (通常の UI では、サムネイルを `/media` から読むので、この競合は起きない)。
 - ファイル名は `name` を、念のためクライアントでも `sanitizeFileName` にかけたもの。名前の無い画像は、`image-<CID の末尾>.<形式の拡張子>`。
 - 進捗 (割合と取得済みのバイト数) と結果は HUD に表示する。同じオブジェクトの二重のダウンロードは始めない。
-- 取得は、サーバーの Helia ノードか、直接つながったブラウザから行われる。置いた人が退室していても、サーバーが pin していれば取得できる (取得中のファイルは、上記のとおり)。
+- 取得は、Kubo か、直接つながったブラウザから行われる。置いた人が退室していても、サーバーが Kubo に pin していれば取得できる (取得中のファイルは、上記のとおり)。
 
 **動画の再生 (`world/FilePlane.tsx` + `world/videoPlayback.ts` + `net/p2pMedia.ts` + `public/p2p-media-sw.js`)**
 - 映像 (`FileObject.category === "video"`) のリングメニューに「再生 / 一時停止」を出す (`applies` で対象を絞る。ボタンの文字は、`label` の関数で状態によって変える)。
@@ -262,11 +266,11 @@ sequenceDiagram
 - **配信 (ブラウザ同士の P2P)**: `<video>` は HTTP の URL しか再生できないため、Service Worker が `/p2p-media/<id>` への要求 (Range を含む) を横取りする。
   SW はページに `open` / `pull` を送り、ページはブラウザ内の Helia (`fs.cat` / `ipfs-unixfs-exporter`) から 1 チャンクずつ返す。SW はそれを HTTP のストリームとして返す
   (`Accept-Ranges: bytes`、`Content-Range`、`Content-Length`、`Content-Type`)。これにより、全体の取得を待たずに再生が始まり、シークもできる。
-  取得は、サーバー以外の、直接つながっているブラウザだけを provider にした bitswap セッションを先に試す (`blockstore.createSession`)。ブラウザが持っていない場合だけ、
-  通常の取得 (サーバーなども含む) に切り替える。**置いた人のブラウザは、サーバーが保持したあとも、タブが開いている間は映像を配り続ける** (`needsLocalFile` の映像の扱い)。
+  取得は、Kubo 以外の、直接つながっているブラウザだけを provider にした bitswap セッションを先に試す (`blockstore.createSession`)。ブラウザが持っていない場合だけ、
+  通常の取得 (Kubo なども含む) に切り替える。**置いた人のブラウザは、サーバーが Kubo に保持したあとも、タブが開いている間は映像を配り続ける** (`needsLocalFile` の映像の扱い)。
 - **フォールバック**: Service Worker が使えない環境 (非対応・非セキュアコンテキスト・制御前) では、サーバーの `GET /media/<cid>` を使う。
-  サーバーは `Range` 要求に 206 で応え、要求された範囲だけを IPFS から流す。配るのは、サーバーが保持している (`stored`) ファイルだけ。
-  配信の間は `ContentStore.retain` で参照を増やし、途中で削除されてもブロックが消えないようにする。
+  サーバーは `Range` 要求に 206 で応え、要求された範囲だけを Kubo ゲートウェイから流す。配るのは、サーバーが保持している (`stored`) ファイルだけ。
+  配信の間は `ProtoServer.Content.retain` で参照を増やし、途中で削除されても Kubo のブロックが消えないようにする。
 - まだ保持していない映像は、これまでの映像のアイコンのまま (サーバーが保持したら、サムネイルと再生の準備をする)。
 - 音声付きの再生がブラウザに止められた場合は、ミュートで再生して、その旨を知らせる。
 - Service Worker は `public/p2p-media-sw.js` (ビルドで `dist` の直下に置かれる)。登録時に `clients.claim()` で、開いているページも制御する。
@@ -280,17 +284,17 @@ sequenceDiagram
   リモートからの再生はユーザー操作ではないため、音声付きの再生が止められたらミュートで再生する。動画が削除されると状態も消す。サーバーを再起動すると状態は消える。
   シークの UI は無いので、位置の同期は再生 / 一時停止と、途中入室時の現在位置まで。
 
-**URL の貼り付け (`DropTarget` + サーバーの `urlFetch.ts`)**
+**URL の貼り付け (`DropTarget` + `ProtoServer.UrlFetch`)**
 - クライアントは `paste` イベントで http(s) の URL を読み、画面中央の床の位置 (ドロップと同じ計算) と、こちらを向く yaw を付けて `place_url` を送る。
   取得はサーバーが行うので、CORS の制約を受けない。
-- サーバー (`placeFromUrl`) は URL を取得して種類を決める:
+- サーバー (`ProtoServer.Place.place_url` + `ProtoServer.UrlFetch`) は URL を取得して種類を決める:
   - http(s) だけ。認証情報を含む URL、localhost / `.local` / プライベート・ループバック・リンクローカルなどの IP は拒否する。
     ホスト名は DNS で解決して検査する。リダイレクトは手動で最大 3 回まで追い、各ホップを同じように検査する。全体のタイムアウトは 120 秒。
   - Content-Type と URL の拡張子から、画像 / 動画 / 音声 / その他を判定する。画像は 5MiB、動画・音声は 128MiB まで。
     それ以外 (HTML など) は本文を読まずにリンクにする。
   - 画像は先頭のヘッダーから大きさを求める (PNG / JPEG / GIF / WebP)。クライアントのドロップと同じく長辺 2.5m に合わせる。
     極端な縦横比・未対応形式はリンクにする。
-  - 画像・動画・音声は `ipfs.addBytes` でサーバーの IPFS に入れ、`ContentStore.add` で登録・pin する (参照カウント・容量の対象)。
+  - 画像・動画・音声は Kubo の `/api/v0/add` で Kubo に入れ、`ProtoServer.Place` が pin してから `ProtoServer.Content.acquire` で登録する (参照カウント・容量の対象)。
     画像は画像オブジェクト、動画・音声はファイルオブジェクト (`stored: true`) として置く。
   - それ以外は `LinkObject { kind: "link", url }` を作る。中身は持たず、当たり判定は画像と同じ薄い板。複製・削除はできる。
 - クライアントのリングメニューは、リンクに「ブラウザで開く」を出す。`window.open(url, "_blank", "noopener,noreferrer")` で別タブを開く (ダウンロードの項目は出さない)。
@@ -372,10 +376,10 @@ sequenceDiagram
 - アバターを差し替えたときは、前の CID の配布をやめる (`releaseUpload`)。切断時は IPFS ノードごと止める。
 
 **サーバーでの保持 (pinning)**
-- `set_avatar` を受けると、`ContentStore.add(cid, "avatar")` で、アップロードした人のブラウザから中身を取得し、検証して pin する。
-  種類は `ContentKind = "avatar"`、上限は 64 MiB (`MAX_AVATAR_BYTES`)、アイドルタイムアウトは 30 秒。画像の形式判定は行わない。
+- `set_avatar` を受けると、`ProtoServer.Place` がアップロードした人のブラウザから中身を取得し、検証して Kubo に pin する。その後 `Content.acquire(cid, :avatar, ...)` で参照カウントに登録する。
+  種類は `ContentKind = "avatar"`、上限は 64 MiB (`MAX_AVATAR_BYTES`)。画像の形式判定は行わない。
 - 取得と pin が終わってから `Room.setAvatar` で `PeerInfo.avatarCid` を記録し、`peer_avatar` を配る。取得に失敗した場合は CID を配らず、本人にエラーを返す。
-- 参照カウント (`ContentStore` の refs) で保持する。同じ CID を複数のユーザーが使えば 1 つだけ保持する。
+- 参照カウント (`ProtoServer.Content` の refs) で保持する。同じ CID を複数のユーザーが使えば 1 つだけ保持する。
   ユーザーが別のアバターに差し替えたときと、退室したとき (`ws` の close) に `release` し、最後の参照が無くなれば unpin して gc する。
 - アバターはユーザーが部屋にいる間だけ保持され、退室するとサーバーから解放される (永続化しない)。
 
@@ -422,25 +426,40 @@ sequenceDiagram
 
 ## 6. サーバー設計
 
-### モジュール構成 (apps/server/src)
+### モジュール構成 (`apps/server/lib/proto_server`)
 
 ```
-index.ts     起動 (WebSocketServer、画像・ファイルの検証と配置の受け付け)
-room.ts      Room クラス: ピア管理、オブジェクト管理 (配置・つかむ・移動・削除・複製)、snapshot ループ
-ipfs.ts      Helia ノード (libp2p ws / circuit relay)、CID の取得・検証・pin
-content.ts   ContentStore: 保持する中身の管理 (種類ごとの検証・参照カウント・合計容量・unpin と gc)
-images.ts    マジックナンバーによる画像形式の判定
-validate.ts  受信メッセージの検証・正規化
+application.ex   supervision tree (Finch / Task.Supervisor / Ipfs / Room / Content / Queue / Place / HttpServer)
+http_server.ex   Cowboy の 1 リスナー (HTTP + WebSocket)
+ws_handler.ex    :cowboy_websocket。join / pose / 配置 / 操作の dispatch、ping / idle timeout
+media_handler.ex /media/<cid> の GET / HEAD、Range の解析と Kubo ゲートウェイへの中継
+room.ex          GenServer: ピア管理、オブジェクト管理 (配置・つかむ・移動・削除・複製)、snapshot
+content.ex       GenServer: 参照カウント、合計容量、最後の参照が消えたときの unpin / GC
+queue.ex         GenServer: ピアごとの取得ジョブの直列化、全体の同時実行数
+place.ex         CID の取得・検証・配置 (画像 / ファイル / URL / アバター)
+ipfs.ex          Kubo の HTTP API / ゲートウェイ、peer ID の取得
+protocol.ex      受信メッセージの検証・正規化、JSON の encode / decode
+media.ex         Range / MIME / 画像のマジックナンバー判定
+url_fetch.ex     URL 取り込みと SSRF 対策
+turn.ex          TURN REST 認証情報
+config.ex        runtime.exs の環境変数を動的に読む
 ```
 
 ### 設定 (環境変数)
 
 | 名前 | 既定値 | 説明 |
 |---|---|---|
-| `PORT` | `8080` | WebSocket (ワールド同期) の待受ポート |
-| `IPFS_PORT` | `8081` | libp2p の WebSocket の待受ポート。ブラウザから到達できる必要がある |
-| `CONTENT_MAX_TOTAL_MB` | `20480` (20 GiB) | サーバーが保持する画像・ファイルの合計サイズの上限 (MB)。ディスクに置くので、ディスクの空きより十分小さくする |
-| `BLOCKSTORE_DIR` | 一時ディレクトリの `vr-sns-proto-blocks` | 画像・ファイルの中身 (ブロック) を置くディレクトリ。legacy では起動のたびに空にする。crdt-v1 では `CRDT_DATA_DIR/blocks` が既定で、再起動後も保持する |
+| `HOST` | `0.0.0.0` | 待ち受けアドレス。リバースプロキシの背後では `127.0.0.1` |
+| `PORT` | `8080` | WebSocket (ワールド同期) と `/media` の待受ポート |
+| `IPFS_PORT` | `8081` | Kubo の libp2p WebSocket の待受ポート。ブラウザから到達できる必要がある |
+| `IPFS_PUBLIC_PORT` | `IPFS_PORT` と同じ | ブラウザから見た libp2p のポート (本番は Caddy の 8443) |
+| `IPFS_API_URL` | `http://127.0.0.1:5001` | Kubo の API。localhost のみ |
+| `IPFS_GATEWAY_URL` | `http://127.0.0.1:8082` | Kubo のゲートウェイ。`/media` の Range 中継に使う |
+| `IPFS_PEER_ID` | (なし) | 未指定なら起動時に Kubo から取得する |
+| `CONTENT_MAX_TOTAL_MB` | `20480` (20 GiB) | サーバーが pin する画像・ファイルの合計サイズの上限 (MB) |
+| `TURN_HOST` / `TURN_PORT` / `TURN_SECRET` | (なし) / `3478` / (なし) | TURN の設定。3 つ揃ったときだけ `iceServers` を配る |
+
+Kubo のリポジトリの場所はサーバーの環境変数ではない (`IPFS_PATH` は Kubo 側の設定)。
 
 ### 色の割り当て
 
@@ -448,7 +467,7 @@ validate.ts  受信メッセージの検証・正規化
 
 ### 切断検知
 
-`ws` の ping / pong を 30 秒間隔で行い、応答のない接続は切断する。
+Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切断する。詳細は `docs/otp-backend.md`。
 
 ## 7. 共有パッケージ (packages/protocol)
 
@@ -465,88 +484,24 @@ validate.ts  受信メッセージの検証・正規化
 | アバターの表情・アニメーション | `PeerInfo.avatarCid` で VRM を同期済み。表情・モーションの状態を `Pose` に足し、`VrmAvatar` で反映する |
 | ボイスチャット | 別途 SFU (LiveKit 等) を用意。ピア ID をトークン発行時の identity に使う |
 | 画像以外のオブジェクト・回転 / 拡大縮小・元に戻す | `WorldObject` に `kind` を追加する。`object_updated` はオブジェクト全体を送るので、プロパティを足せばそのまま同期できる。操作・排他制御はサーバーが既に持っている |
-| 音声の再生、ファイルのプレビュー、動画の再生同期 | 映像は、リングメニューで 3D 空間の中に再生できる (Service Worker + ブラウザの IPFS で P2P ストリーミング)。音声も同じ仕組みで足せる。再生位置のクライアント間の同期は legacy で実装済み。crdt-v1 では未対応 |
+| 音声の再生、ファイルのプレビュー、動画の再生同期 | 映像は、リングメニューで 3D 空間の中に再生できる (Service Worker + ブラウザの IPFS で P2P ストリーミング)。音声も同じ仕組みで足せる。再生位置のクライアント間の同期は実装済み |
 | バイナリプロトコル | `type` 毎に固定レイアウトの `ArrayBuffer` へ移行 |
 
 ## 9. テスト・検証方針
 
-- server: `validate` / `content` / `ipfs` / `room` / `syncHub` / `worldStore` の単体テスト。
-- client: 補間ロジック (`interpolation`) と `crdt` / `crdtP2P` / `idb` の単体テスト。
+- server: `mix test` (ExUnit)。プロトコル検証、Room、Content、Queue、Place、URL 取り込み、Range / MIME の単体テスト。
+- client: 補間ロジック (`interpolation`) の単体テスト (Vitest)。`packages/world-sync` のテストは休止中の CRDT コードに対するもの。
 - protocol / world-sync: メッセージ型、文書モデル、projection、transfer codec の単体テスト。
-- 結合: ブラウザタブを複数開いて、互いのアバターが見え、動き、退室で消えることを目視確認する。crdt-v1 は Node 上の 2 クライアント smoke test まで確認済みで、実ブラウザの障害試験は未実施 (詳細は [CRDT 実験モード](crdt-experiment.md) の「15. 検証状況」)。
+- 結合: `scripts/smoke-ws.mjs` で、Kubo なしでも入室・配置・操作・`/media` の 404 を確認できる。
+  実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
+  (2026-10-21、ローカルの `ipfs daemon --offline`)。本番の WSS 経由 libp2p は未検証。
+- ブラウザ: 複数タブで、互いのアバターが見え、動き、退室で消えることを目視確認する。
 
-## 10. CRDT 実験モード (crdt-v1)
+## 10. CRDT (歴史的設計)
 
-> **状態**: 既定は legacy。以下は `SYNC_MODE=crdt-v1` / `VITE_SYNC_MODE=crdt-v1` を指定した実験モードの設計で、コードと単体テストは実装済み。ただし実ブラウザでの IndexedDB、障害中の P2P 生存、3 ブラウザ・100 objects の E2E は未検証。保証範囲・設定・障害試験の詳細は [CRDT 実験モード](crdt-experiment.md) を参照。
+`crdt-v1` はクライアント (`packages/world-sync`) にコードが残っているが、**Elixir/OTP サーバーは実装していない**。
+サーバーに `sync_*` / `claim` / `claim_release`、専用の保存領域、同期モードの切替はない。
+クライアントが `sync_hello` を送っても、サーバーは接続を切らずに `error` を返す。
+`VITE_SYNC_MODE=crdt-v1` を指定した場合も、クライアントはサーバーが対応していない旨を表示する。
 
-### プロトコル
-
-制御メッセージは JSON、Yjs の更新は base64 で運ぶ。クライアントが `sync_hello` で state vector を送り、サーバーが `sync_init` で差分を返す。その後は `sync_update` の増分を双方向に配り、サーバーはディスクへの保存が確定した state vector を `sync_ack` で返す。ACK は更新 ID やラウンドには紐づかない。
-
-| type | 方向 | 主なフィールド | 説明 |
-|---|---|---|---|
-| `sync_hello` | Client → Server | `worldId`, `schemaVersion`, `stateVector` | 接続時の照合と、クライアントの state vector の送信 |
-| `sync_init` | Server → Client | `update` | クライアントの vector に対する差分。大きい場合は `sync_part` に分割 |
-| `sync_update` | 双方向 | `update` | 増分更新。重複・順序逆転を許容する |
-| `sync_part` | 双方向 | `transferId`, `index`, `count`, `data` | 大きな更新の分割転送 (48 KiB/チャンク、`data` は base64) |
-| `sync_ack` | Server → Client | `stateVector` | ディスクに保存が確定したサーバーの state vector。クライアントは自分の vector と比較し、同じなら何も送らない。足りなければローカル差分を送って次の ACK を待つ |
-| `claim` | Client → Server / Server → Client | `id`, `peerId`, `sessionId`, `seq`, `until` | つかみの一時 claim。サーバーは送信元の `peerId` を付けて他へ配る |
-| `claim_release` | Client → Server / Server → Client | `id`, `sessionId` | claim の解放。サーバーは `until: 0` の `claim` としてブロードキャストする |
-
-- 初期上限は再構成後の文書 16 MiB、接続ごとの送信待ち 2 MiB。サーバーは適用前の更新を 8 MiB または 10,000 struct で拒否し、適用後の文書が 1,000 オブジェクトを超えたピアの更新を停止する。超過は診断可能な同期エラーにし、収束済みと表示しない。
-- P2P は既存の libp2p 接続 (WebRTC / circuit relay) 上の `/proto/world-sync/1.0.0` を使う。同じ論理メッセージを 4 バイト big-endian の長さ + UTF-8 JSON で運ぶ。実装済みだが、実際の障害中にリンクが生存するかは未検証で、停止中の新規接続は確立できない。
-- legacy のメッセージと同じ文書に書き込まない。モード・スキーマ不一致は明示エラーにする。
-
-### 文書のレイアウト
-
-```text
-Y.Doc
-├─ objects: Y.Map<Y.Map>
-│   └─ <objectId>
-│       ├─ id / kind / cid / name / size / category など (生成後不変)
-│       └─ transform: { position, yaw, pitch, scale, updateId }
-└─ deleted: Y.Map<true>
-```
-
-- `transform` は一つの値として置換し、座標軸ごとにマージしない。
-- 削除は tombstone として保持し、同じ ID を復活・再作成しない。複製は新しい UUID を使う。
-- pose・つかみ claim・ドラッグプレビュー・転送進捗は文書に入れない。claim は 3 秒で失効し、ドラッグ中は最大 1Hz、離した時点で transform を確定する。
-- ファイルの検証結果 (サイズ・種類など) は transform と別の属性に持つ。
-
-### 永続化
-
-- ブラウザは IndexedDB のトランザクション完了を「ローカル保存済み」とする。使用不可・容量超過は警告し、保存済みと偽らない。複数タブの圧縮は、同じ readwrite トランザクションで既存の行を読み、スナップショットとマージしてから置き換える。
-- サーバーは保存キューで Yjs の全状態を直列化し、一時ファイル書込・file fsync・rename・親ディレクトリ fsync (best-effort) の完了後に保存済みとする。電源断に対する完全な保証ではない。失敗した一時ファイルは削除する。
-- 保存するのは `meta.json` (worldId・schemaVersion)、`doc.bin` (Yjs 文書)、`content.json` (コンテンツ台帳)、`blocks/` (ブロックストア)。`BLOCKSTORE_DIR` を指定すると `blocks/` の代わりにそのディレクトリを使う。Helia の datastore・pin 情報・サーバー identity は保存しない。
-- `sync_ack` は、hello・更新受信・周期 ACK のどの経路でも、未保存の変更があれば保存の成功を待ち、最後に保存が成功した state vector を返す。ACK は更新 ID やラウンドには紐づかない。保存に失敗した場合は `sync_error` を返し、バックオフで再試行する。`flush()` は期限内に書けなければ reject する。
-- IndexedDB の復元は接続後、CRDT の welcome を受けてから行う。welcome で objects を全置換しない。`doc.bin` はあるが `meta.json` が無い場合は、seed 済みの文書なら `meta.json` を作り直す。壊れた snapshot・未知スキーマでは空ワールドを作らず起動失敗を明示する。
-- 「ローカル保存済み」「他ノードへ反映」「サーバー保存済み」を HUD とログで区別する。
-
-### 再接続とバックオフ
-
-- WebSocket の切断では transport の状態だけを変え、シーン・文書・Helia の寿命を分離する。切断時に文書を消さない。
-- クライアントは指数バックオフ (1s, 2s, 4s, 8s, 10s + jitter) で再接続し、claim は 1 秒ごとに heartbeat を送る。クライアント側の WebSocket watchdog / heartbeat はなく、無応答の接続はサーバーが 30 秒間隔の ping / pong で切断する。明示的な退出では再接続を停止するが、保存済み文書は消さない。
-- 復旧時はクライアントが `sync_hello` を送り、サーバーが `sync_init` で差分を返す。クライアントは `sync_ack` の state vector を比較し、同じなら何も送らず、不足があれば `sync_update` で送る。サーバーは 10 秒ごとにも ACK を送り、定期的な差分再同期で取りこぼしを回復する。経路切替で同じ操作を再生成しない。
-- 送信キューが飽和したら文書から差分同期をやり直す。未反映更新を黙って捨てない。
-
-### 競合規則
-
-- 同じ transform への同時更新は Yjs の決定的な解決に従う。実時刻の最後の操作や端末時計で勝者を決めない。
-- 削除は単調な tombstone。移動・検証完了・複製・古い更新が後から届いても削除済み ID を表示しない。
-- 削除と複製が競合した場合は複製を残す。削除と検証完了が競合しても復活させない。
-- つかみ claim は分断をまたぐロックではない。同時 claim の表示上の勝者は、`sessionId` が小さい方、同じセッションなら `seq` が大きい方、`seq` も同じなら `peerId` が小さい方。`dragId` は使わず、敗者の操作を中止・補正する仕組みもない。claim は直接の P2P リンクには載るが、他のピアへ中継しない。
-- `MAX_OBJECTS=100` は配置経路 (新規作成・複製・サーバーの配置) で拒否する上限。分断後のマージで 100 個を超えることはあり、全件を保持する。専用の超過 HUD はない。サーバーは適用後の文書が 1,000 オブジェクトを超えたピアの更新を停止する。
-
-### クライアント HUD
-
-| 表示 | 意味 |
-|---|---|
-| 接続中... | 接続処理中。まだ同期を確立していない |
-| オンライン | WebSocket 接続済み。サーバーと同期している |
-| P2P のみ | サーバーには未接続だが、P2P 経路で文書の変更を同期している (他参加者の姿勢・アバターは WS 再接続まで更新されない) |
-| 孤立 (ローカル保存) | どの経路も未接続。ローカル編集を続け、保存済みとして扱う |
-| 再同期中 | 再接続後に state vector と差分を交換している |
-| 保存失敗 (メモリのみ) | IndexedDB の保存に失敗した。保存済みと表示しない |
-| 同期エラー | `sync_error` を受信した。制限超過・スキーマ不一致・保存失敗など |
-
-P2P のみ・孤立でも編集は継続する。新規ファイル検証・URL のメディア取り込み・新規参加はサーバー復帰待ちとし、動画同期は crdt-v1 では未対応とする。WS が切れるとクライアントは peer 一覧と姿勢バッファを消すため、他参加者の姿勢・アバターは再接続まで更新されない。P2P で継続するのは文書編集と claim で、姿勢の P2P 共有は未実装。実験用の「実験: ボックスを置く」「実験: リンクを置く」ボタンは、この状態でも文書へ直接配置できる (リンクは URL のメディア取り込みをしない)。
+当時の設計・保証範囲・障害試験は [CRDT 実験モード](crdt-experiment.md) を参照 (歴史的資料)。

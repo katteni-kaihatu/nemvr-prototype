@@ -33,11 +33,12 @@
 **完了条件**: 画像をドロップするとその場に立ち、他のユーザー (後から入室した人も) にも見える。
 
 > 画像の受け渡しは当初 HTTP (`POST /images`) で実装し、M3 で IPFS に置き換えた。
+> M3 当時のサーバーは Helia を埋め込んでいたが、現在は Kubo に置き換え済み (M6.5)。
 
 ## M3: 画像の共有を IPFS に
 
 - [x] protocol: `imageId` を `cid` に置き換え、`welcome.ipfs` / `ipfs_peer` / `peer_ipfs` を追加
-- [x] server: Helia ノード (libp2p ws / circuit relay)、`place_image` の CID を取得・検証 (サイズ・形式) して pin
+- [x] server: Helia ノード (libp2p ws / circuit relay)、`place_image` の CID を取得・検証 (サイズ・形式) して pin (現在は Kubo が担当)
 - [x] server: HTTP の画像アップロード / 配信を廃止
 - [x] client: ブラウザ内 Helia ノード、画像を CID 化して追加、CID から取得してテクスチャ化
 - [x] client: ブラウザ同士の WebRTC 直接接続 (ピア ID 共有、HUD に接続数)
@@ -65,20 +66,39 @@
 
 **完了条件**: 任意のファイルをドロップするとアイコンとして置かれ、全員に見える。音声・映像は種類が分かるアイコンになる。メニューからダウンロードでき、内容が元のファイルと一致する。削除するとサーバーのメモリが空く。
 
-## M6: CRDT による停止耐性の検証 (実験)
+## M6: CRDT による停止耐性の検証 (歴史的・サーバーでは未対応)
 
-サーバー停止・通信分断中も基本編集を続け、復旧後に統合できるかを検証する。既定の legacy モードは変更せず、`SYNC_MODE=crdt-v1` / `VITE_SYNC_MODE=crdt-v1` を明示した実験環境だけで動かす。設計・保証範囲・試験項目は [CRDT 実験モード](crdt-experiment.md) を参照。
+> **注意**: このマイルストーンは Node サーバー時代の実験。Elixir/OTP サーバーは `crdt-v1` を実装していないため、
+> 現在の構成では動作しない。設計・障害試験は [CRDT 実験モード](crdt-experiment.md) を参照 (歴史的資料)。
+
+サーバー停止・通信分断中も基本編集を続け、復旧後に統合できるかを検証する。当時は既定の legacy モードを変更せず、
+`crdt-v1` を明示した実験環境だけで動かしていた。
 
 - [x] `packages/world-sync`: Yjs 文書・作成/移動/複製/削除・projection・共通フレーム
-- [x] server: 専用保存領域 (`CRDT_DATA_DIR` の `meta.json` / `doc.bin` / `content.json` / `blocks/`)・`worldId`・初回 seed・復元失敗の明示
+- [x] server (当時): 専用保存領域 (`meta.json` / `doc.bin` / `content.json` / `blocks/`)・`worldId`・初回 seed・復元失敗の明示
 - [x] client: IndexedDB 保存・初期復元・再接続/再同期・HUD の状態表示・オフラインで使える実験用ボックス / リンク配置ボタン
 - [x] P2P: 既存 WebRTC / circuit relay 上の `/proto/world-sync/1.0.0` の実装 (サーバー停止中の生存は未検証)
 - [x] content: 永続台帳・明示リセットまでの pin・20 GiB 上限・取得不能表示と再試行
 - [ ] E2E: 3 browser contexts・100 objects の障害試験と legacy モードの回帰
 
-**完了条件**: WebSocket のみの遮断、Node プロセス停止、P2P のみの遮断、全経路分断、ホスト / TURN 停止、タブ再読み込み・終了、サーバー再起動、コンテンツ提供元の消失をそれぞれ再現し、復旧後に文書が収束すること。100 objects の条件でも編集継続と再統合ができ、legacy モードに回帰がないこと。通信経路と handshake の復旧から 5 秒以内の収束、サーバー復帰から 30 秒以内の自動再接続を目標とし、RTT・TURN 使用・再試行回数を記録する。測定結果が出るまでは合格としない。
+**現状**: サーバー側の crdt-v1 は削除済み。クライアントのコードは休止状態で、`VITE_SYNC_MODE=crdt-v1` を指定しても
+サーバーが対応していない旨のエラーになる。M6 は現在のバックエンドの完了条件には含めない。
 
-**現状**: 実装済み・E2E 未実施。M6 の完了条件はまだ満たしていない (Node / 単体テストの結果は [CRDT 実験モード](crdt-experiment.md) の「15. 検証状況」)。ACK ループ・耐久 ACK・マルチタブ圧縮・未保存ファイルの配布・`setMetadata` / `transforms`・終了処理・初期化復旧・マージ上限などのレビュー指摘の修正は適用済みだが、実ブラウザと障害時の E2E は未実施のまま。E2E が通るまで M6 完了とはしない。
+## M6.5: Elixir/OTP バックエンドへの置き換え (実装済み)
+
+Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置き換える。
+
+- [x] Mix プロジェクト (`apps/server/mix.exs`)、Cowboy の単一リスナー、runtime 設定 (`HOST` / `PORT` / Kubo / TURN)
+- [x] GenServer: `ProtoServer.Room` / `Content` / `Queue` / `Place` / `Ipfs`
+- [x] legacy プロトコル (join / pose / snapshot / 配置 / つかむ・移動・削除・複製 / 動画状態 / URL 取り込み / TURN)
+- [x] `/media/<cid>` の Range ストリーミング (Kubo ゲートウェイ経由)
+- [x] IPFS を Kubo に委譲 (HTTP API 5001 / ゲートウェイ 8082 / libp2p ws 8081)。`welcome.ipfs` に Kubo の peer ID と `IPFS_PUBLIC_PORT` を載せる
+- [x] crdt-v1 のサーバー実装を削除 (クライアントのコードは休止)
+- [x] Nix flake (`nix develop`)、`scripts/smoke-ws.mjs`、デプロイスクリプト (Kubo + release + Caddy)
+- [x] Kubo を接続したメディア E2E (画像・動画の取得、pin / unpin / GC、Range)。ローカルの `ipfs daemon --offline` で確認済み
+- [ ] 本番 VPS での `wss://HOST:8443` 経由の libp2p
+
+**完了条件**: 上記の未検証項目を、Kubo を起動した環境と本番構成で確認する。
 
 ## M7 以降 (候補。着手前に再検討する)
 
