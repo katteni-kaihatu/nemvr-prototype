@@ -37,6 +37,24 @@ defmodule ProtoServer.Space.StoreTest do
     refute Map.has_key?(peer, "avatarCid")
   end
 
+  test "places an image before the server has pinned it", %{session: session} do
+    cid = "bafy-image"
+
+    assert {:ok, %{"kind" => "image", "cid" => ^cid, "width" => 2, "height" => 1}} =
+             Store.add_image(session, %{
+               "cid" => cid,
+               "position" => [1, 0, 2],
+               "yaw" => 0,
+               "width" => 2,
+               "height" => 1,
+               "name" => "pixel.png",
+               "stored" => false,
+               "owner" => "peer-1"
+             })
+
+    assert [_] = Store.mark_image_stored(session, cid, 68)
+  end
+
   test "creates, patches and deletes a box", %{session: session, peer_id: peer_id, scope: scope} do
     id = Uuid.v4()
 

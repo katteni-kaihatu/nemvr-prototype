@@ -103,6 +103,11 @@ defmodule ProtoServer.Space.Store do
     GenServer.call(store_name(session_id), {:mark_stored, cid, size})
   end
 
+  @spec mark_image_stored(session_id(), binary(), integer()) :: [map()]
+  def mark_image_stored(session_id, cid, size) do
+    GenServer.call(store_name(session_id), {:mark_image_stored, cid, size})
+  end
+
   @spec remove_unstored(session_id(), binary()) :: non_neg_integer()
   def remove_unstored(session_id, cid) do
     GenServer.call(store_name(session_id), {:remove_unstored, cid})
@@ -297,6 +302,31 @@ defmodule ProtoServer.Space.Store do
         dims = Entity.dims(entity)
 
         if Map.get(dims, "entity.kind") == "file" and Map.get(dims, "content.cid") == cid and
+             Map.get(dims, "content.stored") != true do
+          new_dims =
+            dims
+            |> Map.put("content.stored", true)
+            |> Map.put("content.size", size)
+            |> Map.drop(["content.owner", "content.offline"])
+            |> Map.put("time.updatedAt", now_ms())
+
+          new_entity = %{entity | "dimensions" => new_dims}
+          state = put_entity(acc, new_entity)
+          {state, [Entity.to_legacy(new_entity) | updated]}
+        else
+          {acc, updated}
+        end
+      end)
+
+    {:reply, Enum.reverse(updated), state}
+  end
+
+  def handle_call({:mark_image_stored, cid, size}, _from, state) do
+    {state, updated} =
+      Enum.reduce(state.entities, {state, []}, fn {_id, entity}, {acc, updated} ->
+        dims = Entity.dims(entity)
+
+        if Map.get(dims, "entity.kind") == "image" and Map.get(dims, "content.cid") == cid and
              Map.get(dims, "content.stored") != true do
           new_dims =
             dims

@@ -166,16 +166,10 @@ defmodule ProtoServer.Place do
 
   defp do_place_image(peer, place) do
     cid = Map.get(place, "cid")
-    command_id = Map.get(place, "commandId")
-
-    callbacks = %{
-      queued: fn -> send_place_progress(peer, cid, 0, nil, true) end,
-      on_full: fn ->
-        send_error(peer, "順番待ちの画像が多すぎます。いくつか終わってから再来してください", command_id)
-      end
-    }
-
-    schedule(peer, fn -> run_place_image(peer, place, cid) end, callbacks)
+    # Place the image immediately and pin/validate it in the background. A
+    # slow Kubo fetch must not delay the image appearing in the room.
+    _ = start_task(fn -> run_place_image(peer, place, cid) end)
+    :ok
   end
 
   defp run_place_image(peer, place, cid) do
@@ -185,25 +179,37 @@ defmodule ProtoServer.Place do
         _ -> place
       end
 
-    case ensure_content(cid, :image, peer) do
-      {:ok, info} ->
-        case Store.add_image(@session, place) do
-          {:ok, object} ->
-            Logger.info("[place_image] #{cid} (#{Media.format_bytes(info.size)}) by #{peer}")
-            ack(peer, place, object)
+    object = Map.merge(place, %{"stored" => false, "owner" => peer})
+
+    case Store.add_image(@session, object) do
+      {:ok, placed} ->
+        ack(peer, place, placed)
+
+        case ensure_content(cid, :image, peer) do
+          {:ok, info} ->
+            case Store.mark_image_stored(@session, cid, info.size) do
+              [] ->
+                # The image was deleted (or its owner left) while Kubo was fetching it.
+                Content.release(cid)
+
+              _updated ->
+                Logger.info("[place_image] #{cid} (#{Media.format_bytes(info.size)}) by #{peer}")
+            end
+
             :ok
 
-          :full ->
-            Content.release(cid)
-            send_error(peer, "これ以上オブジェクトを置けません", Map.get(place, "commandId"))
-
-          {:error, code} ->
-            Content.release(cid)
-            send_error(peer, "画像の次元が不正です (#{code})", Map.get(place, "commandId"))
+          {:error, message} ->
+            # The object is already visible and served by the uploading browser.
+            # Keep it even if server-side pinning fails.
+            Logger.warning("[place_image] #{cid} could not be pinned for #{peer}: #{message}")
+            :ok
         end
 
-      {:error, message} ->
-        send_error(peer, message, Map.get(place, "commandId"))
+      :full ->
+        send_error(peer, "これ以上オブジェクトを置けません", Map.get(place, "commandId"))
+
+      {:error, code} ->
+        send_error(peer, "画像の次元が不正です (#{code})", Map.get(place, "commandId"))
     end
   end
 
