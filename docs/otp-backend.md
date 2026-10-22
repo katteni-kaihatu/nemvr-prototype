@@ -19,6 +19,9 @@ state is memory-only and is lost on restart; test data may be discarded.
 - **Writer**: `ProtoServer.Space.Writer` is one process per WebSocket. It
   validates capabilities and schema, applies `space_mutate`, delegates content
   creation to `ProtoServer.Place`, and sends `space_ack` / `space_error`.
+- **RTT ping**: `WsHandler` answers `space_ping {id}` with `space_pong {id}`
+  immediately. The client sends it every second and displays the smoothed RTT
+  in the HUD.
 - **Schema**: `packages/protocol/space-schema.json` is the shared dimension
   schema. `ProtoServer.Space.Schema` embeds the release-local copy
   `apps/server/priv/space-schema.json` at compile time. A test enforces that the

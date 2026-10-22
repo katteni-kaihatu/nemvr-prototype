@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      playwright-core:
+        specifier: ^1.64.1
+        version: 1.64.1
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -2291,6 +2294,11 @@ packages:
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
+
+  playwright-core@1.64.1:
+    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   postcss@8.5.30:
     resolution: {integrity: sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==}
@@ -5524,7 +5532,7 @@ snapshots:
       '@babel/types': 7.29.8
       flow-enums-runtime: 0.0.6
       invariant: 2.2.4
-      metro-symbolicate: 0.87.1(supports-color@10.2.2)
+      metro-symbolicate: 0.87.1
       nullthrows: 1.1.1
       ob1: 0.87.1
       source-map: 0.5.7
@@ -5532,7 +5540,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  metro-symbolicate@0.87.1(supports-color@10.2.2):
+  metro-symbolicate@0.87.1:
     dependencies:
       flow-enums-runtime: 0.0.6
       invariant: 2.2.4
@@ -5540,8 +5548,6 @@ snapshots:
       nullthrows: 1.1.1
       source-map: 0.5.7
       vlq: 1.0.1
-    transitivePeerDependencies:
-      - supports-color
 
   metro-transform-plugins@0.87.1(supports-color@10.2.2):
     dependencies:
@@ -5603,7 +5609,7 @@ snapshots:
       metro-resolver: 0.87.1
       metro-runtime: 0.87.1
       metro-source-map: 0.87.1(supports-color@10.2.2)
-      metro-symbolicate: 0.87.1(supports-color@10.2.2)
+      metro-symbolicate: 0.87.1
       metro-transform-plugins: 0.87.1(supports-color@10.2.2)
       metro-transform-worker: 0.87.1(supports-color@10.2.2)
       mime-types: 3.0.2
@@ -5746,6 +5752,8 @@ snapshots:
   picomatch@2.3.2: {}
 
   picomatch@4.0.7: {}
+
+  playwright-core@1.64.1: {}
 
   postcss@8.5.30:
     dependencies:

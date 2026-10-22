@@ -9,9 +9,11 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "smoke:ws": "node scripts/smoke-ws.mjs"
+    "smoke:ws": "node scripts/smoke-ws.mjs",
+    "e2e:browser": "node scripts/e2e-browser.mjs"
   },
   "devDependencies": {
+    "playwright-core": "^1.64.1",
     "typescript": "^7.0.2"
   }
 }

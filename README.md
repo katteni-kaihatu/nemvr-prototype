@@ -122,9 +122,17 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
 # 画像のサーバーアップロード経路も確認する場合
 WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
   SMOKE_CHECK_HTTP_404=0 SMOKE_UPLOAD_IMAGE=1 node scripts/smoke-ws.mjs
+
+# ブラウザ E2E (2 つのヘッドレス Chromium。画像・HUD・IPFS 取得元・RTT を検証)
+nix develop -c bash -lc \
+  'CHROME_PATH=$(nix shell nixpkgs#chromium -c which chromium) pnpm e2e:browser'
 ```
 
-複数ブラウザでの P2P / WebRTC / 画像表示は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。
+UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更では、このブラウザ E2E を**必須**とする。
+`SITE_URL` で別のデプロイ先を指定できる。テストで置いた `e2e-*` 画像はスクリプト終了時に削除する。
+
+複数ブラウザでの P2P / WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。
+HUD は RTT、画像の取得元 (IPFS / サーバー)、直近 8 行のログを表示する。
 VPS は開発環境なので、テストで作成したオブジェクトや Kubo の pin は残ってよい。不要になったら
 `ipfs pin ls` / `ipfs repo gc` で整理する。
 

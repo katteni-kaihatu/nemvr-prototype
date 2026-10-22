@@ -35,6 +35,8 @@ interface SpaceEntity {
 - Store は購読フィルタの「変更前マッチ」と「変更後マッチ」を比較し、範囲外に出たエンティティを `remove` として送る（実体は削除しない）。
 - Writer は `create` / `patch` / `delete` / `duplicate` / `claim` / `release` を検証する。`space.*` の patch は、未保持なら暗黙に claim し、他人が保持していれば `held_by_other` を返す。
 - 削除・複製時の `Content` の retain / release は Writer が行う。コンテンツ作成時の acquire は Place が行う。
+- `space_ping` / `space_pong` は HUD の RTT 表示用。クライアントが 1 秒ごとに `space_ping {id}` を送り、
+  WsHandler が同じ `id` で `space_pong` を返す。
 - 旧プロトコルは受け付けない。旧 type には `space_error` の `protocol_mismatch` を返す。
 
 3D 写像 `vr-sns-3d@1` は、`entity.kind` でコンポーネントを選び、`space.*` / `content.*` / `interaction.heldBy` / `time.playback` を既存の `WorldObject` / `PeerState` に変換する。`space.deform` は保存・公開のみで、現行の描画にはまだ使わない。
@@ -571,6 +573,8 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
   1×1 PNG を drop した。両方のページで `[image] source=ipfs` / `[image] loaded` を確認し、
   `source=server` へフォールバックしなかった (2026-10-22)。同じマシン上の 2 コンテキストは
   WebRTC の mDNS により `P2P 0` のままだが、画像表示には影響しない。
+- **ブラウザ E2E は、UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更で必須**。
+  `pnpm e2e:browser` が 2 コンテキストで入室・画像 drop・IPFS 取得・HUD の RTT / 取得元 / ログを検証する。
 - 実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
   (2026-10-21、ローカルの `ipfs daemon --offline`)。開発 VPS の `wss://HOST:8443` 経由の libp2p は Node クライアントで確認済み。
   ブラウザ間の WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。

@@ -360,8 +360,18 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
   SMOKE_CHECK_HTTP_404=0 SMOKE_UPLOAD_IMAGE=1 node scripts/smoke-ws.mjs
 ```
 
-- 複数ブラウザでの P2P / WebRTC / 画像表示は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
-  Firefox は同一マシン内の WebRTC を mDNS で隠すことがあり、その場合は `P2P 0` のままでよい
+- **ブラウザ E2E は必須**: UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更では、
+  次のヘッドレス Chromium テストを実行する。2 コンテキストが入室し、片方が画像を drop し、
+  両方が `source=ipfs` で画像を読み込むこと、HUD の RTT / 取得元 / ログ行を検証する。
+
+  ```sh
+  nix develop -c bash -lc \
+    'CHROME_PATH=$(nix shell nixpkgs#chromium -c which chromium) pnpm e2e:browser'
+  ```
+
+  `SITE_URL` で別のデプロイ先を指定できる。テストで置いた `e2e-*` 画像はスクリプト終了時に削除する。
+- 複数ブラウザでの P2P / WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
+  Firefox / 同一マシンの Chromium は WebRTC を mDNS で隠すことがあり、その場合は `P2P 0` のままでよい
   (画像は Kubo / サーバー経由で共有される)。
 - **ブラウザ E2E (2026-10-22)**: ヘッドレス Chromium (Playwright) で独立した 2 コンテキストを
   `https://nemvr.nemnomi.dev` に接続し、片方の canvas に 1×1 PNG を drop した。両方のページで
