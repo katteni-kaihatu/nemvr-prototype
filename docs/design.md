@@ -193,6 +193,8 @@ sequenceDiagram
 > 画像の pin が失敗した場合はサーバーが `file_failed` (`role=fallback`) を送り、置いた人が
 > `POST /media/upload` で本体を送る。サーバーは保持済みにして、他のクライアントは
 > `GET /media/<cid>` を使う。フォールバックしたことはクライアントにメッセージで表示する。
+> サーバーの `Ipfs.add_bytes` はクライアントと同じ `chunker=size-1048576` / CIDv1 / raw leaves を使う。
+> ここがずれると、同じ画像でも CID が変わり、既存の暫定画像を `stored=true` にできない。
 
 ```mermaid
 sequenceDiagram

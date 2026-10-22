@@ -320,7 +320,7 @@ defmodule ProtoServer.Ipfs do
     request =
       Finch.build(
         :post,
-        api_url() <> "/api/v0/add?pin=false&cid-version=1&raw-leaves=true",
+        api_url() <> "/api/v0/add?pin=false&cid-version=1&raw-leaves=true&chunker=size-1048576",
         [{"content-type", "multipart/form-data; boundary=" <> boundary}],
         body
       )
