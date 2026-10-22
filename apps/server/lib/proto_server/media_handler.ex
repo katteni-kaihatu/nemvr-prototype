@@ -4,8 +4,9 @@ defmodule ProtoServer.MediaHandler do
 
   `GET|HEAD` looks up a stored file or image, parses one `Range: bytes=...`
   header and streams only that range from the Kubo gateway. `POST /media/upload`
-  validates and pins a small image before it is placed, so clients do not depend
-  on the uploader's browser staying connected for images.
+  is the fallback for an image that Kubo could not fetch from the uploader's
+  browser (for example a multi-block DAG); it pins the bytes and marks existing
+  provisional images as stored.
   """
 
   @behaviour :cowboy_handler
@@ -87,8 +88,10 @@ defmodule ProtoServer.MediaHandler do
           true ->
             case Ipfs.add_bytes(body) do
               {:ok, cid, size} ->
-                # The image is uploaded before `space_mutate create`; it is pinned
-                # here so every client can fetch it without the uploader's browser.
+                # If the image was already placed from IPFS but Kubo could not
+                # fetch its child blocks, mark the existing provisional image as
+                # stored so every client switches to the server copy.
+                Store.mark_image_stored("main", cid, size)
                 reply_json(req, state, 200, %{"cid" => cid, "size" => size})
 
               {:error, reason} ->

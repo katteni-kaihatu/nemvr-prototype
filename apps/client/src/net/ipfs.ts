@@ -512,19 +512,22 @@ export async function fetchBlob(
 }
 
 /** CID の画像を取得して、テクスチャ読み込み用の blob URL を返す (CID ごとにキャッシュ)。 */
-export function getImageUrl(cid: string): Promise<string> {
+export function getImageUrl(cid: string, onFallback?: () => void): Promise<string> {
   let url = imageUrls.get(cid);
   if (!url) {
-    // Prefer the server copy. It is available to every client and does not
-    // depend on the uploader's browser being online. Fall back to the local
-    // IPFS node for images that the server has not pinned yet.
-    url = fetch(`/media/${encodeURIComponent(cid)}`, { cache: "no-store" })
-      .then((response) => {
-        if (!response.ok) throw new Error(`image ${response.status}`);
-        return response.blob();
-      })
-      .catch(() => fetchBlob(cid, { maxBytes: MAX_IMAGE_BYTES }))
-      .then((blob) => URL.createObjectURL(blob));
+    // IPFS が第一経路。取得できない場合だけ、サーバーが保持しているコピーへ切り替える。
+    url = fetchBlob(cid, {
+      maxBytes: MAX_IMAGE_BYTES,
+      idleTimeoutMs: 4_000,
+      maxTotalMs: 8_000,
+    })
+      .then((blob) => URL.createObjectURL(blob))
+      .catch(async (ipfsError: unknown) => {
+        const response = await fetch(`/media/${encodeURIComponent(cid)}`, { cache: "no-store" });
+        if (!response.ok) throw ipfsError;
+        onFallback?.();
+        return URL.createObjectURL(await response.blob());
+      });
     imageUrls.set(cid, url);
     // 失敗はキャッシュしない
     url.catch(() => imageUrls.delete(cid));

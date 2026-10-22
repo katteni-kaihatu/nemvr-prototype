@@ -40,13 +40,14 @@ defmodule ProtoServer.Space.Notify do
     })
   end
 
-  @spec file_failed(binary(), binary() | nil, binary() | nil, binary()) :: :ok
-  def file_failed(peer_id, entity_id, cid, message) do
+  @spec file_failed(binary(), binary() | nil, binary() | nil, binary(), binary()) :: :ok
+  def file_failed(peer_id, entity_id, cid, message, role \\ "prepare") do
     send_to_peer(peer_id, %{
       "type" => "file_failed",
       "entityId" => entity_id,
       "cid" => cid,
-      "message" => message
+      "message" => message,
+      "role" => role
     })
   end
 

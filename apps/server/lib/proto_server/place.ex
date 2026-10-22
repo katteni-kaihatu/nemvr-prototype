@@ -183,25 +183,37 @@ defmodule ProtoServer.Place do
 
     case Store.add_image(@session, object) do
       {:ok, placed} ->
+        placed_id = Map.get(placed, "id")
         ack(peer, place, placed)
 
         case ensure_content(cid, :image, peer) do
           {:ok, info} ->
-            case Store.mark_image_stored(@session, cid, info.size) do
-              [] ->
-                # The image was deleted (or its owner left) while Kubo was fetching it.
-                Content.release(cid)
+            case Store.get_object(@session, placed_id) do
+              {:ok, _object} ->
+                Store.mark_image_stored(@session, cid, info.size)
 
-              _updated ->
                 Logger.info("[place_image] #{cid} (#{Media.format_bytes(info.size)}) by #{peer}")
+
+              :error ->
+                # The image was deleted while Kubo was fetching it.
+                Content.release(cid)
             end
 
             :ok
 
           {:error, message} ->
             # The object is already visible and served by the uploading browser.
-            # Keep it even if server-side pinning fails.
+            # Ask the uploader to send the bytes to the server as a fallback.
             Logger.warning("[place_image] #{cid} could not be pinned for #{peer}: #{message}")
+
+            Notify.file_failed(
+              peer,
+              placed_id,
+              cid,
+              "IPFS で画像を取得できませんでした。サーバー経由に切り替えます",
+              "fallback"
+            )
+
             :ok
         end
 
@@ -775,7 +787,7 @@ defmodule ProtoServer.Place do
 
   # An image or avatar that cannot be fetched quickly must not block the
   # per-peer queue for an hour. Large files still get the long timeout.
-  defp pin_timeout(:image), do: 60_000
+  defp pin_timeout(:image), do: 15_000
   defp pin_timeout(:avatar), do: 300_000
   defp pin_timeout(_kind), do: 3_600_000
 

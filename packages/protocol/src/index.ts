@@ -239,7 +239,7 @@ export type ServerMessage =
       queued?: boolean;
       role?: "place" | "prepare";
     }
-  | { type: "file_failed"; entityId?: string; cid?: string; message: string };
+  | { type: "file_failed"; entityId?: string; cid?: string; message: string; role?: "prepare" | "fallback" };
 
 /** 旧クライアント互換のためのヘルパー型 (v2 ではメッセージには使わない)。 */
 export type PlaceImage = Pick<ImageObject, "cid" | "position" | "yaw" | "width" | "height" | "name"> & {

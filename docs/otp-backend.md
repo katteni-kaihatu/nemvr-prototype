@@ -38,7 +38,7 @@ Removed: `ProtoServer.Room`, the legacy world protocol, `crdt-v1`, `sync_*`,
 The OTP backend serves the **space v2 protocol** plus:
 
 - `/media/<cid>` HTTP streaming (files and stored images)
-- `POST /media/upload` (images up to 5 MiB; validates and pins before placement)
+- `POST /media/upload` (fallback for images Kubo cannot fetch from the uploader; max 5 MiB, validated and pinned)
 - TURN credentials
 - URL import (`space_import_url`)
 - Kubo-backed content storage and retrieval

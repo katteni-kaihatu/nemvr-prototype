@@ -34,6 +34,7 @@ import {
   releaseUpload,
   startIpfs,
   stopIpfs,
+  uploadImage,
   waitForDialable,
 } from "./ipfs";
 
@@ -150,6 +151,13 @@ const AVATAR_PROGRESS_INTERVAL_MS = 300;
 /** サーバーへ転送中のアップロード (CID → ファイル名)。 */
 const pendingUploads = new Map<string, string>();
 
+/** サーバーが IPFS で取得できなかったときに、画像本体を送るための控え (CID → File)。 */
+const fallbackImageFiles = new Map<string, File>();
+
+export function expectImageFallback(cid: string, file: File): void {
+  fallbackImageFiles.set(cid, file);
+}
+
 export function expectUpload(cid: string, name: string): void {
   pendingUploads.set(cid, name);
 }
@@ -250,6 +258,7 @@ export function applyLocalObjectPose(
 function reset(): void {
   for (const id of [...prepareWaits.keys()]) settlePrepare(id, new Error("サーバーとの接続が切れました"));
   pendingUploads.clear();
+  fallbackImageFiles.clear();
   pendingAvatarFile = null;
   pendingAvatar = null;
   avatarEpoch += 1;
@@ -420,6 +429,24 @@ function handleMessage(msg: ServerMessage, ws: WebSocket, epoch: number): boolea
     }
 
     case "file_failed": {
+      if (msg.role === "fallback" && msg.cid) {
+        const file = fallbackImageFiles.get(msg.cid);
+        if (file) {
+          fallbackImageFiles.delete(msg.cid);
+          showNotice(
+            "IPFS で画像を共有できなかったため、サーバー経由に切り替えています...",
+            60_000,
+          );
+          void uploadImage(file)
+            .then(() => showNotice("サーバー経由に切り替えました。他の人にも表示されます", 8_000))
+            .catch((err: unknown) => {
+              console.warn(`[image] server fallback failed: ${describeError(err)}`, err);
+              showNotice(`画像をサーバーへ送れませんでした: ${describeError(err)}`, 10_000);
+            });
+          return true;
+        }
+      }
+
       const object =
         (msg.entityId ? useNet.getState().objects[msg.entityId] : undefined) ??
         Object.values(useNet.getState().objects).find(
@@ -570,10 +597,19 @@ function refreshWorld(at: number): void {
       } else if (object.kind === "image") {
         const name = pendingUploads.get(object.cid);
         pendingUploads.delete(object.cid);
+        if (object.stored) fallbackImageFiles.delete(object.cid);
         if (!object.stored && object.owner === selfId) keepServing(object.cid);
         if (name) showNotice(`${name}: 置きました`, 4_000);
       }
     }
+  }
+
+  const objectCids = new Set<string>();
+  for (const object of Object.values(objects)) {
+    if (object.kind === "file" || object.kind === "image") objectCids.add(object.cid);
+  }
+  for (const cid of fallbackImageFiles.keys()) {
+    if (!objectCids.has(cid)) fallbackImageFiles.delete(cid);
   }
 
   for (const cid of uploadsToRelease(objects, selfId ?? undefined, isServing)) releaseUpload(cid);

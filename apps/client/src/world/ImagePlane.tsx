@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { DoubleSide, SRGBColorSpace, TextureLoader, type Texture } from "three";
 import type { ImageObject } from "@proto/protocol";
+import { showNotice } from "../net/connection";
 import { getImageUrl } from "../net/ipfs";
 import { ObjectFrame } from "./ObjectFrame";
 
@@ -14,7 +15,12 @@ function useImageTexture(cid: string, retryKey: string): Texture | null {
   useEffect(() => {
     let disposed = false;
     let loaded: Texture | null = null;
-    getImageUrl(cid)
+    getImageUrl(cid, () =>
+      showNotice(
+        "この画像は IPFS から取得できなかったため、サーバー経由で表示しています",
+        8_000,
+      ),
+    )
       .then(
         (url) =>
           new Promise<Texture>((resolve, reject) => {
