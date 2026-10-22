@@ -102,12 +102,13 @@ fn main() {
         .map(|dirs| dirs.cache_dir().join("assets"))
         .unwrap_or_else(|| std::path::PathBuf::from("assets"));
     std::fs::create_dir_all(asset_root.join("vrm")).ok();
+    let asset_root = asset_root.to_string_lossy().replace('\\', "/");
 
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
             .set(AssetPlugin {
-                file_path: asset_root.to_string_lossy().into_owned(),
+                file_path: asset_root,
                 ..default()
             })
             .set(LogPlugin {
