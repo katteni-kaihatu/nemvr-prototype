@@ -528,10 +528,14 @@ export function getImageUrl(cid: string, onFallback?: () => void): Promise<strin
       idleTimeoutMs: 4_000,
       maxTotalMs: 8_000,
     })
-      .then((blob) => URL.createObjectURL(blob))
+      .then((blob) => {
+        console.info(`[image] source=ipfs ${cid}`);
+        return URL.createObjectURL(blob);
+      })
       .catch(async (ipfsError: unknown) => {
         const response = await fetch(`/media/${encodeURIComponent(cid)}`, { cache: "no-store" });
         if (!response.ok) throw ipfsError;
+        console.info(`[image] source=server ${cid}`);
         onFallback?.();
         return URL.createObjectURL(await response.blob());
       });

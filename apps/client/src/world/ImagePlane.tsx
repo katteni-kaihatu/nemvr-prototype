@@ -36,6 +36,7 @@ function useImageTexture(cid: string, retryKey: string): Texture | null {
         t.anisotropy = 8;
         loaded = t;
         setTexture(t);
+        console.info(`[image] loaded ${cid}`);
       })
       .catch((err: unknown) => {
         // 取得失敗時はプレースホルダーのままにする。stored に変わったら再試行する
