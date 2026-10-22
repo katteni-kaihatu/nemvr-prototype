@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Grid } from "@react-three/drei";
-import type { CrdtSyncStatus } from "../net/crdt";
-import { createBoxAt, placeLinkLocal, showNotice, useNet } from "../net/connection";
+import { useNet } from "../net/connection";
 import { useInteraction } from "./interaction";
 import { BoxPlane } from "./BoxPlane";
 import { CursorDot } from "./CursorDot";
@@ -11,23 +10,13 @@ import { FilePlane } from "./FilePlane";
 import { ImagePlane } from "./ImagePlane";
 import { LocalAvatar } from "./LocalAvatar";
 import { LinkPlane } from "./LinkPlane";
-import { LocalPlayer, localPlayerPose } from "./LocalPlayer";
+import { LocalPlayer } from "./LocalPlayer";
 import { Mirror } from "./Mirror";
 import { ObjectInteraction } from "./ObjectInteraction";
 import { RemoteAvatar } from "./RemoteAvatar";
 import { RingMenu } from "./RingMenu";
 
 const MIRROR_KEY = "vr-sns:mirror";
-
-const SYNC_LABELS: Record<CrdtSyncStatus, string> = {
-  connecting: "接続中...",
-  online: "オンライン",
-  p2p: "P2P のみ",
-  offline: "孤立 (ローカル保存)",
-  resyncing: "再同期中",
-  "save-failed": "保存失敗 (メモリのみ)",
-  "sync-error": "同期エラー",
-};
 
 export function World() {
   const peers = useNet((s) => s.peers);
@@ -130,9 +119,6 @@ function HUD({
   const self = useNet((s) => s.self);
   const notice = useNet((s) => s.notice);
   const ipfs = useNet((s) => s.ipfs);
-  const sync = useNet((s) => s.sync);
-  const localSaved = useNet((s) => s.localSaved);
-  const serverSaved = useNet((s) => s.serverSaved);
   const grabbedId = useInteraction((s) => s.grabbedId);
   const grabMode = useInteraction((s) => s.grabMode);
   const directPeers = useNet((s) => s.directPeers);
@@ -156,12 +142,6 @@ function HUD({
       <div>
         {self?.name} / 接続中: {count} 人 / IPFS: {ipfsLabel}
       </div>
-      {sync !== "legacy" && (
-        <div>
-          同期: {SYNC_LABELS[sync]} / {serverSaved ? "サーバー保存済み" : "サーバー未保存"} /{" "}
-          {localSaved ? "ローカル保存済み" : "ローカル未保存"}
-        </div>
-      )}
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Shift (押している間) で走る / Space でジャンプ / C・Ctrl (押している間) でしゃがみ / Q・E (押している間) でリーン / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>ファイルや画像をドロップ、または Ctrl+V で URL を貼って配置 (視点操作中は Esc で解除してから)</div>
       <div style={{ opacity: 0.7 }}>M で鏡の反射を ON/OFF (このクライアントだけ)</div>
@@ -190,60 +170,6 @@ function HUD({
       >
         鏡: {mirrorEnabled ? "ON" : "OFF"} (M)
       </button>
-      {sync !== "legacy" && (
-        <button
-          data-testid="crdt-create-box"
-          onClick={() => {
-            const x = Math.max(-24, Math.min(24, localPlayerPose.x));
-            const z = Math.max(-24, Math.min(24, localPlayerPose.z - 4));
-            const created = createBoxAt([x, 0, z]);
-            showNotice(created ? "ボックスを置きました" : "オブジェクトが上限 (100 個) に達しています", 4000);
-          }}
-          style={{
-            pointerEvents: "auto",
-            marginTop: 4,
-            marginLeft: 6,
-            padding: "2px 8px",
-            fontSize: 12,
-            borderRadius: 4,
-            border: "1px solid rgba(255,255,255,0.4)",
-            background: "rgba(60,90,120,0.8)",
-            color: "#ffffff",
-            cursor: "pointer",
-          }}
-        >
-          実験: ボックスを置く
-        </button>
-      )}
-      {sync !== "legacy" && (
-        <button
-          data-testid="crdt-create-link"
-          onClick={() => {
-            const url = window.prompt("置く URL (http/https)")?.trim() ?? "";
-            if (!url) return;
-            if (!/^https?:\/\//i.test(url)) {
-              showNotice("http(s) の URL を入力してください");
-              return;
-            }
-            const placed = placeLinkLocal(url, [localPlayerPose.x, 0, localPlayerPose.z - 4], 0);
-            showNotice(placed ? "リンクを置きました" : "リンクを置けませんでした");
-          }}
-          style={{
-            pointerEvents: "auto",
-            marginTop: 4,
-            marginLeft: 6,
-            padding: "2px 8px",
-            fontSize: 12,
-            borderRadius: 4,
-            border: "1px solid rgba(255,255,255,0.4)",
-            background: "rgba(60,90,120,0.8)",
-            color: "#ffffff",
-            cursor: "pointer",
-          }}
-        >
-          実験: リンクを置く
-        </button>
-      )}
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
     </div>
   );
