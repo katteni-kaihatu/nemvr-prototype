@@ -126,9 +126,13 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
 # ブラウザ E2E (2 つのヘッドレス Chromium。画像・HUD・IPFS 取得元・RTT を検証)
 nix develop -c bash -lc \
   'CHROME_PATH=$(nix shell nixpkgs#chromium -c which chromium) pnpm e2e:browser'
+
+# 20 クライアントの同期ストレステスト (配置・claim・移動・全員への収束を検証)
+CLIENTS=20 pnpm stress:ws
 ```
 
 UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更では、このブラウザ E2E を**必須**とする。
+複数クライアントの同期・Store / Reader / Writer に触れる変更では、`pnpm stress:ws` (既定 20 クライアント) も実行する。
 `SITE_URL` で別のデプロイ先を指定できる。テストで置いた `e2e-*` 画像はスクリプト終了時に削除する。
 
 複数ブラウザでの P2P / WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。

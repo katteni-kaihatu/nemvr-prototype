@@ -370,6 +370,15 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
   ```
 
   `SITE_URL` で別のデプロイ先を指定できる。テストで置いた `e2e-*` 画像はスクリプト終了時に削除する。
+- **同期ストレステスト**: 20 クライアントが同時に入室し、画像を配置・claim・移動し、全員が
+  すべての配置と最終位置を観測できることを確認する。
+
+  ```sh
+  CLIENTS=20 pnpm stress:ws
+  ```
+
+  `scripts/stress-ws.mjs` は最後にテスト用画像を削除する。2026-10-22 の開発 VPS 実行結果は
+  20 クライアント / 20 画像 / 100 回の移動で、全クライアントが収束し、エラー 0 だった。
 - 複数ブラウザでの P2P / WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
   Firefox / 同一マシンの Chromium は WebRTC を mDNS で隠すことがあり、その場合は `P2P 0` のままでよい
   (画像は Kubo / サーバー経由で共有される)。
