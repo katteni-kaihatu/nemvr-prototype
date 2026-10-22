@@ -115,6 +115,16 @@ defmodule ProtoServer.Protocol do
     {:legacy, type}
   end
 
+  defp parse_message(%{"type" => "space_ping"} = message) do
+    id = Map.get(message, "id")
+
+    if is_integer(id) and id >= 0 do
+      {:ok, %{"type" => "space_ping", "id" => id}}
+    else
+      :error
+    end
+  end
+
   defp parse_message(%{"type" => "space_join"} = message) do
     name = Map.get(message, "name")
     template_id = Map.get(message, "templateId")

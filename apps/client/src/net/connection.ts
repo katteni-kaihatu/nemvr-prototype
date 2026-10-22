@@ -58,6 +58,9 @@ interface NetState {
   directPeers: number;
   videoStates: Record<string, VideoPlaybackState>;
   peerCount: number;
+  rtt: number | null;
+  logs: string[];
+  contentSources: Record<string, "ipfs" | "server">;
 }
 
 export const useNet = create<NetState>(() => ({
@@ -71,6 +74,9 @@ export const useNet = create<NetState>(() => ({
   directPeers: 0,
   videoStates: {},
   peerCount: 0,
+  rtt: null,
+  logs: [],
+  contentSources: {},
 }));
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -78,6 +84,20 @@ export function showNotice(text: string, durationMs = 5000): void {
   clearTimeout(noticeTimer);
   useNet.setState({ notice: text });
   noticeTimer = setTimeout(() => useNet.setState({ notice: null }), durationMs);
+}
+
+/** Append one line to the multi-line HUD log (most recent 8 lines). */
+export function showLog(text: string): void {
+  const time = new Date().toLocaleTimeString("ja-JP", { hour12: false });
+  useNet.setState((s) => ({ logs: [...s.logs.slice(-7), `${time} ${text}`] }));
+}
+
+/** Record where an image's bytes came from. */
+export function recordContentSource(cid: string, source: "ipfs" | "server", label?: string): void {
+  useNet.setState((s) => ({
+    contentSources: { ...s.contentSources, [cid]: source },
+  }));
+  showLog(`${label ?? cid}: 取得元 ${source === "ipfs" ? "IPFS" : "サーバー"}`);
 }
 
 /** 毎フレーム参照される姿勢履歴。React state にはしない。 */
@@ -103,6 +123,35 @@ const writer = new SpaceWriter((message) => send(message));
 const knownObjectIds = new Set<string>();
 const dialedIpfsPeers = new Set<string>();
 const lastPeerUpdate = new Map<string, number>();
+
+let pingTimer: ReturnType<typeof setInterval> | undefined;
+let pingSeq = 0;
+const pendingPings = new Map<number, number>();
+
+function startPing(): void {
+  stopPing();
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  sendPing();
+  pingTimer = setInterval(sendPing, 1000);
+}
+
+function stopPing(): void {
+  if (pingTimer) clearInterval(pingTimer);
+  pingTimer = undefined;
+  pendingPings.clear();
+  useNet.setState({ rtt: null });
+}
+
+function sendPing(): void {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  const id = ++pingSeq;
+  pendingPings.set(id, performance.now());
+  send({ type: "space_ping", id });
+  if (pendingPings.size > 8) {
+    const oldest = pendingPings.keys().next().value;
+    if (typeof oldest === "number") pendingPings.delete(oldest);
+  }
+}
 
 /** 現在のサーバー時刻の推定値 (ms)。welcome 未受信なら null。 */
 export function serverNow(): number | null {
@@ -268,6 +317,7 @@ function reset(): void {
   lastPeerUpdate.clear();
   resetInteraction();
   void stopIpfs();
+  stopPing();
   peerBuffers.clear();
   serverTimeOffset = null;
   socket = null;
@@ -290,6 +340,9 @@ export function connect(name: string, avatarFile?: File): void {
     directPeers: 0,
     videoStates: {},
     peerCount: 0,
+    rtt: null,
+    logs: [],
+    contentSources: {},
   });
   openSocket();
 }
@@ -336,6 +389,9 @@ function openSocket(): void {
       directPeers: 0,
       videoStates: {},
       peerCount: 0,
+      rtt: null,
+      logs: [],
+      contentSources: {},
       message:
         useNet.getState().message ??
         (welcomed ? "サーバーとの接続が切断されました" : "サーバーに接続できませんでした"),
@@ -345,6 +401,18 @@ function openSocket(): void {
 
 function handleMessage(msg: ServerMessage, ws: WebSocket, epoch: number): boolean {
   switch (msg.type) {
+    case "space_pong": {
+      const sent = pendingPings.get(msg.id);
+      if (sent !== undefined) {
+        pendingPings.delete(msg.id);
+        const sample = Math.max(0, Math.round(performance.now() - sent));
+        useNet.setState((s) => ({
+          rtt: s.rtt === null ? sample : Math.max(1, Math.round(s.rtt * 0.7 + sample * 0.3)),
+        }));
+      }
+      return true;
+    }
+
     case "space_welcome": {
       if (epoch !== connectionEpoch || socket !== ws) return false;
       reader.applyWelcome(msg);
@@ -354,6 +422,8 @@ function handleMessage(msg: ServerMessage, ws: WebSocket, epoch: number): boolea
       selfBase = { id: msg.self.peerId, name: msg.self.name, color: msg.self.color };
       selfEntityId = msg.self.entityId;
       useNet.setState({ status: "connected", ipfs: "starting" });
+      showLog("サーバーに接続しました");
+      startPing();
       refreshWorld(msg.at);
 
       startIpfs(msg.ipfs, msg.iceServers, (directPeers) => useNet.setState({ directPeers })).then(
@@ -631,6 +701,9 @@ export function disconnect(): void {
     directPeers: 0,
     videoStates: {},
     peerCount: 0,
+    rtt: null,
+    logs: [],
+    contentSources: {},
   });
 }
 

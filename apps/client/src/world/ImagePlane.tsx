@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { DoubleSide, SRGBColorSpace, TextureLoader, type Texture } from "three";
 import type { ImageObject } from "@proto/protocol";
-import { showNotice } from "../net/connection";
+import { showNotice, recordContentSource } from "../net/connection";
 import { getImageUrl } from "../net/ipfs";
 import { ObjectFrame } from "./ObjectFrame";
 
@@ -9,18 +9,20 @@ import { ObjectFrame } from "./ObjectFrame";
  * CID の画像を IPFS から取得してテクスチャにする。
  * 取得前・失敗時は null (例外は投げない)。
  */
-function useImageTexture(cid: string, retryKey: string): Texture | null {
+function useImageTexture(cid: string, retryKey: string, label?: string): Texture | null {
   const [texture, setTexture] = useState<Texture | null>(null);
 
   useEffect(() => {
     let disposed = false;
     let loaded: Texture | null = null;
-    getImageUrl(cid, () =>
-      showNotice(
-        "この画像は IPFS から取得できなかったため、サーバー経由で表示しています",
-        8_000,
-      ),
-    )
+    getImageUrl(cid, {
+      onFallback: () =>
+        showNotice(
+          "この画像は IPFS から取得できなかったため、サーバー経由で表示しています",
+          8_000,
+        ),
+      onSource: (source) => recordContentSource(cid, source, label),
+    })
       .then(
         (url) =>
           new Promise<Texture>((resolve, reject) => {
@@ -46,7 +48,7 @@ function useImageTexture(cid: string, retryKey: string): Texture | null {
       disposed = true;
       loaded?.dispose();
     };
-  }, [cid, retryKey]);
+  }, [cid, retryKey, label]);
 
   return texture;
 }
@@ -54,7 +56,7 @@ function useImageTexture(cid: string, retryKey: string): Texture | null {
 /** ワールドに置かれた画像。鉛直な板で、画像は CID から IPFS で取得してテクスチャにする。 */
 export function ImagePlane({ object }: { object: ImageObject }) {
   const retryKey = `${object.stored ? "stored" : "pending"}:${object.offline ? "offline" : "online"}`;
-  const texture = useImageTexture(object.cid, retryKey);
+  const texture = useImageTexture(object.cid, retryKey, object.name);
   return (
     <ObjectFrame object={object} width={object.width} height={object.height}>
       {/* map の有無でシェーダーが変わるため key で作り直す */}

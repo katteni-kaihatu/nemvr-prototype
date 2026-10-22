@@ -131,6 +131,14 @@ defmodule ProtoServer.ProtocolTest do
   end
 
   describe "parse/1 read requests" do
+    test "accepts ping and rejects a non-integer id" do
+      assert parse(%{"type" => "space_ping", "id" => 42}) ==
+               {:ok, %{"type" => "space_ping", "id" => 42}}
+
+      assert parse(%{"type" => "space_ping", "id" => "42"}) == :error
+      assert parse(%{"type" => "space_ping"}) == :error
+    end
+
     test "accepts query, subscribe and unsubscribe" do
       filter = %{"all" => [%{"dim" => "session.id", "eq" => "main"}]}
 

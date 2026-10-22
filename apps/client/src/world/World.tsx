@@ -122,6 +122,16 @@ function HUD({
   const grabbedId = useInteraction((s) => s.grabbedId);
   const grabMode = useInteraction((s) => s.grabMode);
   const directPeers = useNet((s) => s.directPeers);
+  const rtt = useNet((s) => s.rtt);
+  const logs = useNet((s) => s.logs);
+  const contentSources = useNet((s) => s.contentSources);
+  const sourceCounts = Object.values(contentSources).reduce(
+    (counts, source) => {
+      counts[source] += 1;
+      return counts;
+    },
+    { ipfs: 0, server: 0 },
+  );
   const ipfsLabel =
     { idle: "-", starting: "接続中...", ready: "接続済み", error: "接続失敗" }[ipfs] +
     (ipfs === "ready" ? ` (P2P ${directPeers})` : "");
@@ -140,7 +150,10 @@ function HUD({
       }}
     >
       <div>
-        {self?.name} / 接続中: {count} 人 / IPFS: {ipfsLabel}
+        {self?.name} / 接続中: {count} 人 / IPFS: {ipfsLabel} / RTT: {rtt === null ? "--" : `${rtt} ms`}
+      </div>
+      <div style={{ opacity: 0.85 }}>
+        取得元: IPFS {sourceCounts.ipfs} / サーバー {sourceCounts.server}
       </div>
       <div style={{ opacity: 0.7 }}>クリックで視点操作開始 / WASD で移動 / Shift (押している間) で走る / Space でジャンプ / C・Ctrl (押している間) でしゃがみ / Q・E (押している間) でリーン / Esc で解除</div>
       <div style={{ opacity: 0.7 }}>ファイルや画像をドロップ、または Ctrl+V で URL を貼って配置 (視点操作中は Esc で解除してから)</div>
@@ -171,6 +184,26 @@ function HUD({
         鏡: {mirrorEnabled ? "ON" : "OFF"} (M)
       </button>
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
+      {logs.length > 0 && (
+        <div
+          style={{
+            marginTop: 4,
+            paddingTop: 4,
+            borderTop: "1px solid rgba(255,255,255,0.2)",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.4,
+            maxWidth: 680,
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {logs.map((line, index) => (
+            <div key={`${index}-${line}`} style={{ opacity: 0.9 }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

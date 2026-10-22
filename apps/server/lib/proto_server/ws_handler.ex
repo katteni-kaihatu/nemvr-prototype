@@ -125,6 +125,11 @@ defmodule ProtoServer.WsHandler do
     end
   end
 
+  defp dispatch(%{"type" => "space_ping", "id" => id}, state) do
+    send(self(), {:proto_send, Protocol.encode(%{"type" => "space_pong", "id" => id})})
+    state
+  end
+
   defp dispatch(%{"type" => "space_join"} = message, %{joined: false} = state) do
     template_id = Map.get(message, "templateId")
     schema_version = Map.get(message, "schemaVersion")

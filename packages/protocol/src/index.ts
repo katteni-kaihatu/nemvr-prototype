@@ -177,6 +177,7 @@ export type ClientMessage =
       templateId: string;
       schemaVersion: number;
     }
+  | { type: "space_ping"; id: number }
   | { type: "space_query"; requestId: string; filter: SpaceFilter; limit?: number }
   | { type: "space_subscribe"; subscriptionId: string; filter: SpaceFilter }
   | { type: "space_unsubscribe"; subscriptionId: string }
@@ -194,6 +195,7 @@ export type ClientMessage =
   | { type: "file_request"; commandId: string; entityId: string };
 
 export type ServerMessage =
+  | { type: "space_pong"; id: number }
   | {
       type: "space_welcome";
       self: SpaceSelf;

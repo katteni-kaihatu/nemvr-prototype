@@ -519,7 +519,12 @@ export async function fetchBlob(
 }
 
 /** CID の画像を取得して、テクスチャ読み込み用の blob URL を返す (CID ごとにキャッシュ)。 */
-export function getImageUrl(cid: string, onFallback?: () => void): Promise<string> {
+export interface ImageSourceCallbacks {
+  onFallback?: () => void;
+  onSource?: (source: "ipfs" | "server") => void;
+}
+
+export function getImageUrl(cid: string, callbacks: ImageSourceCallbacks = {}): Promise<string> {
   let url = imageUrls.get(cid);
   if (!url) {
     // IPFS が第一経路。取得できない場合だけ、サーバーが保持しているコピーへ切り替える。
@@ -530,13 +535,15 @@ export function getImageUrl(cid: string, onFallback?: () => void): Promise<strin
     })
       .then((blob) => {
         console.info(`[image] source=ipfs ${cid}`);
+        callbacks.onSource?.("ipfs");
         return URL.createObjectURL(blob);
       })
       .catch(async (ipfsError: unknown) => {
         const response = await fetch(`/media/${encodeURIComponent(cid)}`, { cache: "no-store" });
         if (!response.ok) throw ipfsError;
         console.info(`[image] source=server ${cid}`);
-        onFallback?.();
+        callbacks.onSource?.("server");
+        callbacks.onFallback?.();
         return URL.createObjectURL(await response.blob());
       });
     imageUrls.set(cid, url);
