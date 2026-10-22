@@ -1,5 +1,7 @@
-import { useEffect, useMemo, type RefObject } from "react";
-import { CanvasTexture, SRGBColorSpace, type Group } from "three";
+import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
+import { CanvasTexture, RepeatWrapping, SRGBColorSpace, type Group, type Sprite } from "three";
+
+import { NAMEPLATE_LAYER, NAMEPLATE_MIRROR_LAYER } from "./layers";
 
 import { EYE_HEIGHT } from "./movement";
 
@@ -58,7 +60,7 @@ const TAG_HEIGHT = 0.3; // ワールド上の高さ (m)
  * タグが消えることがあったため使わない。
  */
 function NameTag({ name }: { name: string }) {
-  const { texture, aspect } = useMemo(() => {
+  const { texture, mirrorTexture, aspect } = useMemo(() => {
     const font = "bold 48px system-ui, sans-serif";
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d")!;
@@ -78,14 +80,46 @@ function NameTag({ name }: { name: string }) {
     ctx.fillText(name, w / 2, h / 2 + 3);
     const texture = new CanvasTexture(canvas);
     texture.colorSpace = SRGBColorSpace;
-    return { texture, aspect: w / h };
+
+    // 鏡の反射はシーン全体を左右反転する。反射カメラ用には、あらかじめ
+    // 左右反転したテクスチャを別レイヤーで描き、二重反転で読めるようにする。
+    const mirrorTexture = texture.clone();
+    mirrorTexture.wrapS = RepeatWrapping;
+    mirrorTexture.repeat.x = -1;
+    mirrorTexture.offset.x = 1;
+    mirrorTexture.colorSpace = SRGBColorSpace;
+    mirrorTexture.needsUpdate = true;
+
+    return { texture, mirrorTexture, aspect: w / h };
   }, [name]);
 
-  useEffect(() => () => texture.dispose(), [texture]);
+  useEffect(() => () => {
+    texture.dispose();
+    mirrorTexture.dispose();
+  }, [texture, mirrorTexture]);
+
+  const normalRef = useRef<Sprite>(null);
+  const mirrorRef = useRef<Sprite>(null);
+
+  useLayoutEffect(() => {
+    if (normalRef.current) {
+      normalRef.current.layers.set(NAMEPLATE_LAYER);
+      normalRef.current.userData.isNameplate = true;
+    }
+    if (mirrorRef.current) {
+      mirrorRef.current.layers.set(NAMEPLATE_MIRROR_LAYER);
+      mirrorRef.current.userData.isNameplate = true;
+    }
+  }, [texture, mirrorTexture]);
 
   return (
-    <sprite scale={[TAG_HEIGHT * aspect, TAG_HEIGHT, 1]}>
-      <spriteMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
-    </sprite>
+    <>
+      <sprite ref={normalRef} scale={[TAG_HEIGHT * aspect, TAG_HEIGHT, 1]}>
+        <spriteMaterial map={texture} transparent depthWrite={false} toneMapped={false} />
+      </sprite>
+      <sprite ref={mirrorRef} scale={[TAG_HEIGHT * aspect, TAG_HEIGHT, 1]}>
+        <spriteMaterial map={mirrorTexture} transparent depthWrite={false} toneMapped={false} />
+      </sprite>
+    </>
   );
 }

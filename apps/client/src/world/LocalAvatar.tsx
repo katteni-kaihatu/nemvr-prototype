@@ -41,9 +41,12 @@ export function LocalAvatar() {
     setFailed(false);
   }, [cid]);
 
-  // 自分のアバター全体を、メインカメラが描かないレイヤーへ
+  // 自分のアバター全体を、メインカメラが描かないレイヤーへ。
+  // 名前タグは鏡用の反転レイヤーを持つので、ここでは触らない。
   useLayoutEffect(() => {
-    wrapperRef.current?.traverse((object) => object.layers.set(LOCAL_AVATAR_LAYER));
+    wrapperRef.current?.traverse((object) => {
+      if (!object.userData.isNameplate) object.layers.set(LOCAL_AVATAR_LAYER);
+    });
   }, [cid, self?.name]);
 
   // 開発時のみ: E2E から、ローカルアバターの状態と、メインカメラのレイヤーを確認できるようにする

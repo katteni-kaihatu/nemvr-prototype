@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useThree } from "@react-three/fiber";
 import { PlaneGeometry, type Camera, type Material } from "three";
-import { LOCAL_AVATAR_LAYER } from "./layers";
+import { LOCAL_AVATAR_LAYER, NAMEPLATE_LAYER, NAMEPLATE_MIRROR_LAYER } from "./layers";
 import { Reflector } from "three/examples/jsm/objects/Reflector.js";
 
 /** 鏡の大きさ (m) と、置く位置。ワールドの北側 (z = -20) に、スポーンから見えるように立てる。 */
@@ -39,19 +39,26 @@ export function Mirror({ enabled }: { enabled: boolean }) {
   }, [reflector]);
 
   useEffect(() => {
+    // メインカメラは通常の名前タグを描く (鏡 OFF でも表示する)。
+    camera.layers.enable(NAMEPLATE_LAYER);
+
     if (!reflector) {
       if (import.meta.env.DEV) {
         (window as unknown as { __mirror: unknown }).__mirror = { enabled, hasReflector: false, reflectionLayers: null };
       }
       return;
     }
+
     // 鏡の反射カメラ (メインカメラの複製) に、ローカルアバターのレイヤーを加える。
+    // 名前タグは通常レイヤーを外し、反転済みの鏡用レイヤーだけを描く。
     // メインカメラ (一人称) はレイヤー 0 だけなので、自分の体はメイン視点には出ず、鏡の中だけに映る。
     const getReflectionCamera = (
       reflector as unknown as { getReflectionCamera(camera: Camera): Camera }
     ).getReflectionCamera;
     const reflectionCamera = getReflectionCamera.call(reflector, camera);
     reflectionCamera.layers.enable(LOCAL_AVATAR_LAYER);
+    reflectionCamera.layers.disable(NAMEPLATE_LAYER);
+    reflectionCamera.layers.enable(NAMEPLATE_MIRROR_LAYER);
     if (import.meta.env.DEV) {
       // E2E から、反射が有効か (Reflector を作ったか) と、反射カメラのレイヤーを確認できるようにする
       (window as unknown as { __mirror: unknown }).__mirror = {
