@@ -85,7 +85,7 @@ async function prepareImage(file: File): Promise<Prepared | null> {
 
 /**
  * ドロップされたファイルを、画像 (板) かファイル (アイコン) かに振り分ける。
- * 画像として表示できるもの (PNG / JPEG / GIF / WebP で、5MB 以下、読み込める) だけが画像で、
+ * 画像として表示できるもの (PNG / JPEG / GIF / WebP で、24MB 以下、読み込める) だけが画像で、
  * それ以外はすべてファイルとして置く。置けないもの (大きすぎる) は null。
  */
 async function prepare(file: File): Promise<Prepared | null> {

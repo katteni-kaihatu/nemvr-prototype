@@ -15,7 +15,7 @@ defmodule ProtoServer.MediaHandler do
   alias ProtoServer.{Content, Ipfs, Media}
   alias ProtoServer.Space.Store
 
-  @max_image_bytes 5 * 1024 * 1024
+  @max_image_bytes 24 * 1024 * 1024
 
   @impl :cowboy_handler
   def init(req, state) do

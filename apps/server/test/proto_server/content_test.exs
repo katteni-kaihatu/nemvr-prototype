@@ -29,8 +29,8 @@ defmodule ProtoServer.ContentTest do
   describe "limits/1" do
     test "uses the documented limits and messages" do
       image = Content.limits(:image)
-      assert image.max_bytes == 5 * @mebibyte
-      assert image.too_large_message == "画像が大きすぎます (上限 5.0 MB)"
+      assert image.max_bytes == 24 * @mebibyte
+      assert image.too_large_message == "画像が大きすぎます (上限 24 MB)"
 
       file = Content.limits(:file)
       assert file.max_bytes == 2 * 1024 * @mebibyte
@@ -60,8 +60,8 @@ defmodule ProtoServer.ContentTest do
     end
 
     test "rejects sizes over the limit for each kind" do
-      assert {:error, "画像が大きすぎます (上限 5.0 MB)"} ==
-               Content.check(:image, 5 * @mebibyte + 1, @png)
+      assert {:error, "画像が大きすぎます (上限 24 MB)"} ==
+               Content.check(:image, 24 * @mebibyte + 1, @png)
 
       assert {:error, "ファイルが大きすぎます (上限 2.0 GB)"} ==
                Content.check(:file, 2 * 1024 * @mebibyte + 1, "")

@@ -14,7 +14,7 @@ defmodule ProtoServer.Content do
 
   alias ProtoServer.{Config, Ipfs, Media}
 
-  @image_max_bytes 5 * 1024 * 1024
+  @image_max_bytes 24 * 1024 * 1024
   @file_max_bytes 2 * 1024 * 1024 * 1024
   @avatar_max_bytes 64 * 1024 * 1024
   @gc_delay_ms 1_000

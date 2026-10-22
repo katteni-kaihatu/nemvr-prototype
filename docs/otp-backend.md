@@ -45,7 +45,7 @@ Removed: `ProtoServer.Room`, the legacy world protocol, `crdt-v1`, `sync_*`,
 The OTP backend serves the **space v2 protocol** plus:
 
 - `/media/<cid>` HTTP streaming (files and stored images)
-- `POST /media/upload` (fallback for images Kubo cannot fetch from the uploader; max 5 MiB, validated and pinned)
+- `POST /media/upload` (fallback for images Kubo cannot fetch from the uploader; max 24 MiB, validated and pinned)
 - TURN credentials
 - URL import (`space_import_url`)
 - Kubo-backed content storage and retrieval
@@ -389,7 +389,7 @@ Constants from `packages/protocol`:
 
 | Constant | Value |
 | --- | --- |
-| `MAX_IMAGE_BYTES` | 5 MiB |
+| `MAX_IMAGE_BYTES` | 24 MiB |
 | `MAX_FILE_BYTES` | 2 GiB |
 | `MAX_AVATAR_BYTES` | 64 MiB |
 | `EAGER_FILE_MAX_BYTES` | 16 MiB |
@@ -427,7 +427,7 @@ Port `urlFetch.ts` semantics:
   CGNAT, multicast and documentation ranges.
 - Resolve DNS and reject if **any** resolved address is private. Follow at most
   three redirects manually, validating every hop.
-- Timeout: 120 s total. Image limit 5 MiB; audio/video limit 128 MiB. Other
+- Timeout: 120 s total. Image limit 24 MiB; audio/video limit 128 MiB. Other
   content becomes a `link` without reading the body.
 - Detect media from `Content-Type` or a known extension. Images must sniff and
   have readable dimensions; fit the long edge to 2.5 m (minimum side 0.1 m).

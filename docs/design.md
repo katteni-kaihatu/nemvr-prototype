@@ -222,9 +222,9 @@ sequenceDiagram
 - **クライアントの IPFS ノード**: ブラウザ内の Helia ノード。入室 (`space_welcome`) 後に起動し、`space_welcome.ipfs` とページのホスト名から組み立てた
   `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` で Kubo に接続する。`peerId` は Kubo の peer ID。
   トランスポートは WebSocket / WebRTC / circuit relay。ルーティング (DHT・公開ゲートウェイ) は使わない。
-- **取得**: CID を `unixfs.cat` で取得し (上限 5MB・30 秒)、Blob → blob URL → `TextureLoader` で読み込む。CID ごとにキャッシュする。
+- **取得**: CID を `unixfs.cat` で取得し (上限 24MB・30 秒)、Blob → blob URL → `TextureLoader` で読み込む。CID ごとにキャッシュする。
   失敗したら灰色の板のままにする。
-- **検証 (server)**: `place_image` は CID のサイズと先頭バイトを Kubo から確認し、5MB を超える場合は拒否する。先頭バイトが PNG / JPEG / GIF / WebP でなければ拒否 (SVG は不可)。
+- **検証 (server)**: `place_image` は CID のサイズと先頭バイトを Kubo から確認し、24MB を超える場合は拒否する。先頭バイトが PNG / JPEG / GIF / WebP でなければ拒否 (SVG は不可)。
   Kubo が応答しない場合は HTTP タイムアウトで拒否する。通ったら Kubo に pin する (pin 済みの CID は何もしない)。
   同じ人の分は 1 件ずつ順に、全体では同時に 4 件まで取り込む (順番待ち。後述)。オブジェクト数の上限は 100。
 - **CID の形式**: UnixFS ファイルの CID (codec は dag-pb / raw、ハッシュは sha2-256) のみ。サーバーは正規化した文字列を保持する。
@@ -240,8 +240,8 @@ sequenceDiagram
 任意のファイルをドロップすると、ファイルの形のアイコン (`FileObject`) として置かれる。音声・映像は専用のアイコンで、種類が分かる。
 
 **画像かファイルか (クライアントの振り分け)**
-- PNG / JPEG / GIF / WebP で、5MB 以下で、画像として読み込めるもの (極端な縦横比でないもの) だけが画像 (`place_image`) になる。
-- それ以外はすべてファイル (`place_file`)。SVG (スクリプトを含み得るので表示しない)、5MB を超える画像、読み込めない画像も、ファイルとして置かれる。
+- PNG / JPEG / GIF / WebP で、24MB 以下で、画像として読み込めるもの (極端な縦横比でないもの) だけが画像 (`place_image`) になる。
+- それ以外はすべてファイル (`place_file`)。SVG (スクリプトを含み得るので表示しない)、24MB を超える画像、読み込めない画像も、ファイルとして置かれる。
 - 2 GiB (`MAX_FILE_BYTES`) を超えるものは置かない (HUD に通知)。フォルダは置けない (中身を読めないので、通知して無視する)。
 - ファイルのアイコンは、画像と同じ「置いた人の方を向く・横並び」の規則で置き、床から 0.6m 浮かせる (正面を向いたまま狙いやすい高さ)。
 
@@ -349,7 +349,7 @@ sequenceDiagram
 - サーバー (`ProtoServer.Place.place_url` + `ProtoServer.UrlFetch`) は URL を取得して種類を決める:
   - http(s) だけ。認証情報を含む URL、localhost / `.local` / プライベート・ループバック・リンクローカルなどの IP は拒否する。
     ホスト名は DNS で解決して検査する。リダイレクトは手動で最大 3 回まで追い、各ホップを同じように検査する。全体のタイムアウトは 120 秒。
-  - Content-Type と URL の拡張子から、画像 / 動画 / 音声 / その他を判定する。画像は 5MiB、動画・音声は 128MiB まで。
+  - Content-Type と URL の拡張子から、画像 / 動画 / 音声 / その他を判定する。画像は 24MiB、動画・音声は 128MiB まで。
     それ以外 (HTML など) は本文を読まずにリンクにする。
   - 画像は先頭のヘッダーから大きさを求める (PNG / JPEG / GIF / WebP)。クライアントのドロップと同じく長辺 2.5m に合わせる。
     極端な縦横比・未対応形式はリンクにする。

@@ -554,9 +554,9 @@ export function getImageUrl(cid: string, callbacks: ImageSourceCallbacks = {}): 
 }
 
 /**
- * Upload an image (max 5 MiB) to the server before placing it. The server
- * validates and pins it, so other clients do not depend on this browser's
- * IPFS connection or on a slow browser-to-Kubo transfer.
+ * Upload an image (max 24 MiB) to the server as a fallback when Kubo cannot
+ * fetch it from this browser. The server pins it so other clients do not depend
+ * on this browser's IPFS connection.
  */
 export async function uploadImage(file: Blob): Promise<string> {
   const response = await fetch("/media/upload", {

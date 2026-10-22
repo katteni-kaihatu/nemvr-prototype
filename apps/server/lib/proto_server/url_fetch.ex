@@ -17,7 +17,7 @@ defmodule ProtoServer.UrlFetch do
   @max_url_length 2_048
   @fetch_timeout_ms 120_000
   @max_redirects 3
-  @image_max_bytes 5 * 1024 * 1024
+  @image_max_bytes 24 * 1024 * 1024
   @media_max_bytes 128 * 1024 * 1024
   @image_long_edge 2.5
   @min_object_size 0.1

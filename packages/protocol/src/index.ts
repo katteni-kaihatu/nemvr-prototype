@@ -23,7 +23,7 @@ export const MAX_URL_LENGTH = 2048;
 export const MAX_ABS_POSITION = 1000;
 
 // 画像オブジェクト (画像本体は IPFS で共有し、ワールドには CID だけを載せる)
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 1 枚あたりの上限
+export const MAX_IMAGE_BYTES = 24 * 1024 * 1024; // 1 枚あたりの上限
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024; // ファイル 1 個あたりの上限 (2 GiB)
 // VRM アバター (ブラウザが IPFS にアップロードする) の 1 個あたりの上限
 export const MAX_AVATAR_BYTES = 64 * 1024 * 1024;
