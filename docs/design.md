@@ -177,6 +177,12 @@ sequenceDiagram
 サーバーは Kubo の HTTP API / ゲートウェイだけを使い、libp2p / bitswap / pin / blockstore は持たない。
 以下の流れと検証は画像の場合 (`place_image`)。ファイル (`place_file`) の違いは、次の「ファイルの配置とダウンロード」を参照。
 
+> **space v2 の画像**: クライアントは `space_mutate create` の前に、5MB 以下の画像を
+> `POST /media/upload` へ送る。サーバーは形式を検証して Kubo に追加・pin し、返した CID を
+> `space_mutate create` で配置する。画像は先に表示され、サーバー側の保持が終わるまでは
+> `content.stored=false` として置いた人のブラウザからも配れる。他のクライアントは
+> `GET /media/<cid>` を優先して取得する。
+
 ```mermaid
 sequenceDiagram
     participant A as Client A (置く人)

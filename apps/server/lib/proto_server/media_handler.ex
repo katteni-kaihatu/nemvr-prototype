@@ -1,11 +1,11 @@
 defmodule ProtoServer.MediaHandler do
   @moduledoc """
-  HTTP handler for `GET|HEAD /media/<cid>`.
+  HTTP handler for `GET|HEAD /media/<cid>` and `POST /media/upload`.
 
-  Looks up a stored file object in the room, parses one `Range: bytes=...`
-  header and streams only that range from the Kubo gateway. The content
-  reference is retained for the duration of the response and released in all
-  cases.
+  `GET|HEAD` looks up a stored file or image, parses one `Range: bytes=...`
+  header and streams only that range from the Kubo gateway. `POST /media/upload`
+  validates and pins a small image before it is placed, so clients do not depend
+  on the uploader's browser staying connected for images.
   """
 
   @behaviour :cowboy_handler
