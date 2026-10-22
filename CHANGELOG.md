@@ -9,6 +9,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 画像は IPFS を第一経路とし、Kubo が複数ブロック DAG を取得できない場合だけ
+  `file_failed` (`role=fallback`) でサーバーアップロードへ切り替える。切り替えたことは HUD に表示する。
+  `/media/<cid>` は画像の生バイト長を `content-length` に使い、HTTP/2 のストリームを壊さない。
+
 ### Changed
 
 - **ワールド同期を space v2 (n次元エンティティ基盤) に置き換えた。**

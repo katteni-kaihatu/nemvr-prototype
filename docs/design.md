@@ -179,10 +179,16 @@ sequenceDiagram
 
 > **space v2 の画像**: クライアントは `space_mutate create` の前に、画像をブラウザ内の IPFS に追加して
 > CID だけを送る。画像は先に表示され、サーバー側の保持が終わるまでは `content.stored=false` として
-> 置いた人のブラウザからも配られる。Kubo が複数ブロックの DAG を取得できない場合 (bitswap の
-> セッション / プロバイダ探索の制約) は、サーバーが `file_failed` (`role=fallback`) を送り、
-> 置いた人が `POST /media/upload` で本体を送る。サーバーは保持済みにして、他のクライアントは
-> `GET /media/<cid>` を使う。フォールバックしたことはクライアントにメッセージで表示する。
+> 置いた人のブラウザからも配られる。
+>
+> **Kubo の制約**: 2026-10-22 の検証では、Helia から Kubo への単一ブロック (raw CID) の pin は成功したが、
+> 2MiB の複数ブロック UnixFS DAG は、MemoryBlockstore / FileBackedBlockstore のどちらでも子ブロックが
+> 取得されず pin がタイムアウトした (ルートブロックだけは転送される)。Kubo の再帰 pin が使う bitswap
+> セッション / プロバイダ探索が、プロバイダレコードを公開しないブラウザノードの子ブロック取得に
+> 対応していないことが原因と考えられる。このため、画像の pin が失敗した場合は
+> サーバーが `file_failed` (`role=fallback`) を送り、置いた人が `POST /media/upload` で本体を送る。
+> サーバーは保持済みにして、他のクライアントは `GET /media/<cid>` を使う。フォールバックしたことは
+> クライアントにメッセージで表示する。
 
 ```mermaid
 sequenceDiagram
