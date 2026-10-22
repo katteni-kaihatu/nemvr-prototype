@@ -570,6 +570,7 @@ function refreshWorld(at: number): void {
       } else if (object.kind === "image") {
         const name = pendingUploads.get(object.cid);
         pendingUploads.delete(object.cid);
+        if (!object.stored && object.owner === selfId) keepServing(object.cid);
         if (name) showNotice(`${name}: 置きました`, 4_000);
       }
     }
