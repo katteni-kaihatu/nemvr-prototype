@@ -87,10 +87,11 @@ defmodule ProtoServer.MediaHandler do
 
           true ->
             case Ipfs.add_bytes(body) do
-              {:ok, cid, size} ->
-                # If the image was already placed from IPFS but Kubo could not
-                # fetch its child blocks, mark the existing provisional image as
-                # stored so every client switches to the server copy.
+              {:ok, cid, _dag_size} ->
+                # `add_bytes` reports the cumulative UnixFS DAG size, which is
+                # not the file length. HTTP content-length and range requests
+                # need the raw byte length.
+                size = byte_size(body)
                 Store.mark_image_stored("main", cid, size)
                 reply_json(req, state, 200, %{"cid" => cid, "size" => size})
 
