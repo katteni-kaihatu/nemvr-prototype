@@ -8,7 +8,7 @@ import { ObjectFrame } from "./ObjectFrame";
  * CID の画像を IPFS から取得してテクスチャにする。
  * 取得前・失敗時は null (例外は投げない)。
  */
-function useImageTexture(cid: string): Texture | null {
+function useImageTexture(cid: string, retryKey: string): Texture | null {
   const [texture, setTexture] = useState<Texture | null>(null);
 
   useEffect(() => {
@@ -32,21 +32,22 @@ function useImageTexture(cid: string): Texture | null {
         setTexture(t);
       })
       .catch((err: unknown) => {
-        // 取得失敗時はプレースホルダーのままにする
+        // 取得失敗時はプレースホルダーのままにする。stored に変わったら再試行する
         console.warn(`[image] ${cid}:`, err);
       });
     return () => {
       disposed = true;
       loaded?.dispose();
     };
-  }, [cid]);
+  }, [cid, retryKey]);
 
   return texture;
 }
 
 /** ワールドに置かれた画像。鉛直な板で、画像は CID から IPFS で取得してテクスチャにする。 */
 export function ImagePlane({ object }: { object: ImageObject }) {
-  const texture = useImageTexture(object.cid);
+  const retryKey = `${object.stored ? "stored" : "pending"}:${object.offline ? "offline" : "online"}`;
+  const texture = useImageTexture(object.cid, retryKey);
   return (
     <ObjectFrame object={object} width={object.width} height={object.height}>
       {/* map の有無でシェーダーが変わるため key で作り直す */}

@@ -515,12 +515,49 @@ export async function fetchBlob(
 export function getImageUrl(cid: string): Promise<string> {
   let url = imageUrls.get(cid);
   if (!url) {
-    url = fetchBlob(cid, { maxBytes: MAX_IMAGE_BYTES }).then((blob) => URL.createObjectURL(blob));
+    // Prefer the server copy. It is available to every client and does not
+    // depend on the uploader's browser being online. Fall back to the local
+    // IPFS node for images that the server has not pinned yet.
+    url = fetch(`/media/${encodeURIComponent(cid)}`, { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`image ${response.status}`);
+        return response.blob();
+      })
+      .catch(() => fetchBlob(cid, { maxBytes: MAX_IMAGE_BYTES }))
+      .then((blob) => URL.createObjectURL(blob));
     imageUrls.set(cid, url);
     // 失敗はキャッシュしない
     url.catch(() => imageUrls.delete(cid));
   }
   return url;
+}
+
+/**
+ * Upload an image (max 5 MiB) to the server before placing it. The server
+ * validates and pins it, so other clients do not depend on this browser's
+ * IPFS connection or on a slow browser-to-Kubo transfer.
+ */
+export async function uploadImage(file: Blob): Promise<string> {
+  const response = await fetch("/media/upload", {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: file,
+  });
+
+  if (!response.ok) {
+    let message = `画像をアップロードできませんでした (${response.status})`;
+    try {
+      const body = (await response.json()) as { error?: unknown };
+      if (typeof body.error === "string") message = body.error;
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+
+  const body = (await response.json()) as { cid?: unknown };
+  if (typeof body.cid !== "string") throw new Error("サーバーが CID を返しませんでした");
+  return body.cid;
 }
 
 // 開発時のみ、ブラウザのコンソールや E2E テストから動作確認できるようにする

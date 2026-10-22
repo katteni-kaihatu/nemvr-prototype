@@ -118,6 +118,11 @@ defmodule ProtoServer.Space.Store do
     GenServer.call(store_name(session_id), {:find_file, :stored, cid})
   end
 
+  @spec find_stored_image(session_id(), binary()) :: {:ok, map()} | :error
+  def find_stored_image(session_id, cid) do
+    GenServer.call(store_name(session_id), {:find_image, cid})
+  end
+
   @spec find_unstored_file(session_id(), binary()) :: {:ok, map()} | :error
   def find_unstored_file(session_id, cid) do
     GenServer.call(store_name(session_id), {:find_file, :unstored, cid})
@@ -369,6 +374,23 @@ defmodule ProtoServer.Space.Store do
 
         if Map.get(dims, "entity.kind") == "file" and Map.get(dims, "content.cid") == cid and
              matches_storedness do
+          {:ok, Entity.to_legacy(entity)}
+        else
+          nil
+        end
+      end)
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:find_image, cid}, _from, state) do
+    result =
+      Enum.find_value(state.entities, :error, fn {_id, entity} ->
+        dims = Entity.dims(entity)
+
+        if Map.get(dims, "entity.kind") == "image" and
+             Map.get(dims, "content.cid") == cid and
+             Map.get(dims, "content.stored") == true do
           {:ok, Entity.to_legacy(entity)}
         else
           nil

@@ -12,7 +12,7 @@ import {
   formatBytes,
 } from "@proto/protocol";
 import { expectUpload, sendPlaceFile, sendPlaceImage, sendPlaceUrl, showNotice } from "../net/connection";
-import { addContent } from "../net/ipfs";
+import { addContent, uploadImage } from "../net/ipfs";
 import { isPasteShortcut, shouldHandlePaste } from "./pasteShortcut";
 
 const IMAGE_LONG_EDGE = 2.5; // 置く画像の長辺 (m)
@@ -112,16 +112,24 @@ async function placeFiles(files: File[], point: Vector3, from: Vector3): Promise
     const center = point.clone().addScaledVector(right, cursor + p.width / 2);
     cursor += p.width + GAP;
     try {
-      // 大きなファイルは、ブラウザ内の IPFS ノードへ追加するだけでも時間がかかるので、進捗を表示する
-      let lastNoticeAt = 0;
-      const cid = await addContent(p.file, {
-        onProgress: (loaded, total) => {
-          const now = performance.now();
-          if (total < PROGRESS_NOTICE_BYTES || now - lastNoticeAt < PROGRESS_INTERVAL_MS) return;
-          lastNoticeAt = now;
-          showNotice(`${p.file.name}: IPFS に追加中 ${Math.floor((loaded / total) * 100)}%`, 8000);
-        },
-      });
+      // 画像はサーバーへ直接アップロードして pin してもらう。こうすると、
+      // 置いた人のブラウザの IPFS 接続に依存せず、他の人にも表示できる。
+      let cid: string;
+      if (p.kind === "image") {
+        showNotice(`${p.file.name}: アップロード中...`, 8000);
+        cid = await uploadImage(p.file);
+      } else {
+        // 大きなファイルは、ブラウザ内の IPFS ノードへ追加するだけでも時間がかかるので、進捗を表示する
+        let lastNoticeAt = 0;
+        cid = await addContent(p.file, {
+          onProgress: (loaded, total) => {
+            const now = performance.now();
+            if (total < PROGRESS_NOTICE_BYTES || now - lastNoticeAt < PROGRESS_INTERVAL_MS) return;
+            lastNoticeAt = now;
+            showNotice(`${p.file.name}: IPFS に追加中 ${Math.floor((loaded / total) * 100)}%`, 8000);
+          },
+        });
+      }
       expectUpload(cid, p.file.name); // サーバーからの転送の進捗に、ファイル名を付ける
       if (p.kind === "image") {
         sendPlaceImage({

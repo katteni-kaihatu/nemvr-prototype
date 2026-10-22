@@ -15,6 +15,8 @@ defmodule ProtoServer.MediaHandler do
   alias ProtoServer.{Content, Ipfs, Media}
   alias ProtoServer.Space.Store
 
+  @max_image_bytes 5 * 1024 * 1024
+
   @impl :cowboy_handler
   def init(req, state) do
     try do
@@ -35,6 +37,9 @@ defmodule ProtoServer.MediaHandler do
     path = :cowboy_req.path(req)
 
     cond do
+      method == "POST" and path == "/media/upload" ->
+        upload(req, state)
+
       not String.starts_with?(path, "/media/") ->
         reply_not_found(req, state)
 
@@ -66,8 +71,43 @@ defmodule ProtoServer.MediaHandler do
     end
   end
 
+  defp upload(req, state) do
+    case :cowboy_req.read_body(req, %{length: @max_image_bytes, period: 10_000}) do
+      {:ok, body, req} ->
+        cond do
+          byte_size(body) == 0 ->
+            reply_json(req, state, 400, %{"error" => "empty body"})
+
+          byte_size(body) > @max_image_bytes ->
+            reply_json(req, state, 413, %{"error" => "image too large"})
+
+          is_nil(Media.sniff_image_type(body)) ->
+            reply_json(req, state, 415, %{"error" => "unsupported image format"})
+
+          true ->
+            case Ipfs.add_bytes(body) do
+              {:ok, cid, size} ->
+                # The image is uploaded before `space_mutate create`; it is pinned
+                # here so every client can fetch it without the uploader's browser.
+                reply_json(req, state, 200, %{"cid" => cid, "size" => size})
+
+              {:error, reason} ->
+                Logger.warning("[media] image upload failed: #{inspect(reason)}")
+                reply_json(req, state, 502, %{"error" => "IPFS add failed"})
+            end
+        end
+
+      {:more, _partial, _req} ->
+        reply_json(req, state, 413, %{"error" => "image too large"})
+
+      {:error, reason} ->
+        Logger.warning("[media] upload request failed: #{inspect(reason)}")
+        reply_json(req, state, 400, %{"error" => "invalid request"})
+    end
+  end
+
   defp serve(req, state, cid, method) do
-    case Store.find_stored_file("main", cid) do
+    case find_content(cid) do
       {:ok, %{"size" => size} = object} when is_integer(size) and size > 0 ->
         name = Map.get(object, "name") || cid
 
@@ -168,6 +208,13 @@ defmodule ProtoServer.MediaHandler do
     {:ok, req, state}
   end
 
+  defp find_content(cid) do
+    case Store.find_stored_file("main", cid) do
+      {:ok, object} -> {:ok, object}
+      :error -> Store.find_stored_image("main", cid)
+    end
+  end
+
   defp gateway_available?(cid) do
     case Ipfs.stat(cid) do
       {:ok, _size} -> :ok
@@ -188,6 +235,18 @@ defmodule ProtoServer.MediaHandler do
         404,
         %{"content-type" => "text/plain; charset=utf-8"},
         "not found",
+        req
+      )
+
+    {:ok, req, state}
+  end
+
+  defp reply_json(req, state, status, body) do
+    req =
+      :cowboy_req.reply(
+        status,
+        %{"content-type" => "application/json; charset=utf-8"},
+        Jason.encode!(body),
         req
       )
 

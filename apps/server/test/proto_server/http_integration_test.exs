@@ -28,6 +28,13 @@ defmodule ProtoServer.HttpIntegrationTest do
     assert header(headers, "allow") == "GET, HEAD"
   end
 
+  test "image upload rejects empty and non-image bodies without contacting Kubo", %{port: port} do
+    assert {400, _headers, %{"error" => "empty body"}} = request(port, "/media/upload", :post, nil, "")
+
+    assert {415, _headers, %{"error" => "unsupported image format"}} =
+             request(port, "/media/upload", :post, nil, "not an image")
+  end
+
   test "an unsatisfiable range returns 416 without contacting the gateway", %{port: port} do
     assert {:ok, _object} =
              Store.add_file("main", %{
@@ -59,19 +66,26 @@ defmodule ProtoServer.HttpIntegrationTest do
     assert {500, _headers, "internal server error"} = request(port, "/media/bafy-gateway")
   end
 
-  defp request(port, path, method \\ :get, range \\ nil) do
+  defp request(port, path, method \\ :get, range \\ nil, body \\ nil) do
     headers =
       case range do
         nil -> []
         value -> [{"range", value}]
       end
 
-    request = Finch.build(method, "http://127.0.0.1:#{port}" <> path, headers)
+    request = Finch.build(method, "http://127.0.0.1:#{port}" <> path, headers, body)
 
     {:ok, %{status: status, headers: response_headers, body: body}} =
       Finch.request(request, ProtoServer.Finch, receive_timeout: 5_000)
 
-    {status, response_headers, body}
+    {status, response_headers, decode_body(body)}
+  end
+
+  defp decode_body(body) do
+    case Jason.decode(body) do
+      {:ok, value} -> value
+      _ -> body
+    end
   end
 
   defp header(headers, name) do

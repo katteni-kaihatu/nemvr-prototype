@@ -184,7 +184,27 @@ async function main() {
     "avatar clear delta",
   );
 
-  const imageCid = process.env.SMOKE_IMAGE_CID;
+  let imageCid = process.env.SMOKE_IMAGE_CID;
+  let uploadedImage = false;
+  let uploadedBytes = null;
+
+  if (process.env.SMOKE_UPLOAD_IMAGE === "1") {
+    uploadedBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const upload = await fetch(`${HTTP_URL}/media/upload`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: uploadedBytes,
+    });
+    assert.equal(upload.status, 200, "image upload status");
+    const body = await upload.json();
+    assert.match(body.cid, /^[A-Za-z0-9]+$/, "uploaded image cid");
+    imageCid = body.cid;
+    uploadedImage = true;
+  }
+
   if (imageCid) {
     const imageId = crypto.randomUUID();
     const imageCommandId = crypto.randomUUID();
@@ -225,8 +245,32 @@ async function main() {
     );
 
     const imageEntity = imageDelta.changes.find((change) => change.entity?.id === imageId).entity;
-    assert.equal(imageEntity.dimensions["content.stored"], false, "image is placed before pinning");
-    assert.equal(imageEntity.dimensions["content.owner"], selfId, "image is served by its owner");
+
+    if (!uploadedImage) {
+      assert.equal(imageEntity.dimensions["content.stored"], false, "image is placed before pinning");
+      assert.equal(imageEntity.dimensions["content.owner"], selfId, "image is served by its owner");
+    }
+
+    if (uploadedImage) {
+      if (imageEntity.dimensions["content.stored"] !== true) {
+        await observer.waitFor(
+          (m) =>
+            m.type === "space_delta" &&
+            m.changes.some(
+              (change) =>
+                change.op === "upsert" &&
+                change.entity?.id === imageId &&
+                change.entity.dimensions["content.stored"] === true,
+            ),
+          "image stored delta",
+        );
+      }
+
+      const stored = await fetch(`${HTTP_URL}/media/${encodeURIComponent(imageCid)}`);
+      assert.equal(stored.status, 200, "stored image is available over HTTP");
+      const bytes = new Uint8Array(await stored.arrayBuffer());
+      assert.equal(bytes.length, uploadedBytes.length, "stored image bytes");
+    }
 
     primary.send({
       type: "space_mutate",
