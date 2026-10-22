@@ -705,19 +705,29 @@ defmodule ProtoServer.Place do
         Notify.ack(peer, command_id, peer)
 
       true ->
+        # The avatar CID is visible immediately. Pinning it in Kubo is best
+        # effort: a large VRM can exceed the pin timeout, but the owner (and
+        # peers connected over IPFS) can still load it. Do not hide the avatar
+        # just because the server-side pin failed.
+        Store.set_peer_avatar(@session, peer, cid)
+        Notify.ack(peer, command_id, peer)
+        if current, do: Content.release(current)
+        GenServer.call(__MODULE__, {:put_avatar, peer, cid})
+
         case ensure_content(cid, :avatar, peer) do
           {:ok, info} ->
-            if current, do: Content.release(current)
-            GenServer.call(__MODULE__, {:put_avatar, peer, cid})
-            Store.set_peer_avatar(@session, peer, cid)
-            Notify.ack(peer, command_id, peer)
-
-            Logger.info("[avatar] #{cid} pinned for #{peer} (#{Media.format_bytes(info.size)})")
+            if Store.get_object(@session, peer) == :error do
+              Content.release(cid)
+              GenServer.call(__MODULE__, {:delete_avatar, peer})
+            else
+              Logger.info("[avatar] #{cid} pinned for #{peer} (#{Media.format_bytes(info.size)})")
+            end
 
             :ok
 
           {:error, message} ->
-            send_error(peer, "アバターを取得できませんでした: #{message}", command_id)
+            Logger.warning("[avatar] #{cid} could not be pinned for #{peer}: #{message}")
+            :ok
         end
     end
   end

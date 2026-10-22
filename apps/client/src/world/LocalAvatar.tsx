@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Quaternion, Vector3, type Group } from "three";
 import type { Pose } from "@proto/protocol";
-import { useNet } from "../net/connection";
+import { useNet, showNotice } from "../net/connection";
 import { Avatar } from "./Avatar";
 import { LOCAL_AVATAR_LAYER } from "./layers";
 import { EYE_HEIGHT, eyeHeightFor, leanPose } from "./movement";
@@ -102,7 +102,10 @@ export function LocalAvatar() {
           layer={LOCAL_AVATAR_LAYER}
           poseRef={poseRef}
           onLoadedChange={setLoaded}
-          onError={() => setFailed(true)}
+          onError={(error) => {
+            setFailed(true);
+            showNotice(`アバターを読み込めませんでした: ${error.message}`, 10_000);
+          }}
         />
       ) : self ? (
         <Avatar

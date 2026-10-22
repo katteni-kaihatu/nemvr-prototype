@@ -86,6 +86,7 @@ let socket: WebSocket | null = null;
 let serverTimeOffset: number | null = null;
 let lastName = "";
 let pendingAvatarFile: File | null = null;
+let pendingAvatar: { commandId: string; cid: string; previous?: string } | null = null;
 let avatarEpoch = 0;
 let connectionEpoch = 0;
 let selfEntityId: string | null = null;
@@ -121,8 +122,8 @@ export function sendPose(pose: Pose): void {
 }
 
 /** 自分の VRM アバターの CID をサーバーへ知らせる (null なら簡易アバターに戻す)。 */
-export function sendSetAvatar(cid: string | null): void {
-  writer.setAvatar(cid);
+export function sendSetAvatar(cid: string | null): string {
+  return writer.setAvatar(cid);
 }
 
 /** 動画の再生状態をサーバーへ知らせる (サーバーが全員に配る)。 */
@@ -250,6 +251,7 @@ function reset(): void {
   for (const id of [...prepareWaits.keys()]) settlePrepare(id, new Error("サーバーとの接続が切れました"));
   pendingUploads.clear();
   pendingAvatarFile = null;
+  pendingAvatar = null;
   avatarEpoch += 1;
   reader.reset();
   knownObjectIds.clear();
@@ -388,10 +390,22 @@ function handleMessage(msg: ServerMessage, ws: WebSocket, epoch: number): boolea
     }
 
     case "space_ack": {
+      if (pendingAvatar && msg.commandId === pendingAvatar.commandId) {
+        pendingAvatar = null;
+        showNotice("アバターを設定しました", 4000);
+      }
       return true;
     }
 
     case "space_error": {
+      if (pendingAvatar && msg.commandId === pendingAvatar.commandId) {
+        const failed = pendingAvatar;
+        pendingAvatar = null;
+        releaseUpload(failed.cid);
+        useNet.setState((s) => (s.self ? { self: { ...s.self, avatarCid: failed.previous } } : s));
+        showNotice(`アバターを設定できませんでした: ${msg.message}`, 10_000);
+        return true;
+      }
       if (msg.code === "held_by_other") {
         useInteraction.setState({ grabbedId: null });
       }
@@ -465,8 +479,22 @@ function refreshWorld(at: number): void {
   if (selfId) delete peers[selfId];
 
   const objects = projected.objects;
+  const currentSelf = useNet.getState().self;
+
+  if (pendingAvatar && selfPeer?.avatarCid === pendingAvatar.cid) {
+    pendingAvatar = null;
+    showNotice("アバターを設定しました", 4000);
+  }
+
   const self = selfBase
-    ? { ...selfBase, ...(selfPeer ?? {}), id: selfBase.id, name: selfPeer?.name ?? selfBase.name, color: selfPeer?.color ?? selfBase.color }
+    ? {
+        ...selfBase,
+        ...(selfPeer ?? {}),
+        id: selfBase.id,
+        name: selfPeer?.name ?? selfBase.name,
+        color: selfPeer?.color ?? selfBase.color,
+        avatarCid: selfPeer?.avatarCid ?? currentSelf?.avatarCid,
+      }
     : selfPeer ?? null;
 
   useNet.setState({
@@ -603,10 +631,11 @@ async function uploadPendingAvatar(): Promise<void> {
   }
   const previous = useNet.getState().self?.avatarCid;
   keepServing(cid);
-  sendSetAvatar(cid);
+  const commandId = sendSetAvatar(cid);
+  pendingAvatar = { commandId, cid, previous };
   useNet.setState((s) => (s.self ? { self: { ...s.self, avatarCid: cid } } : s));
   if (previous && previous !== cid) releaseUpload(previous);
-  showNotice("アバターを設定しました");
+  showNotice("アバターを設定しています...", 60_000);
 }
 
 // 開発時のみ、E2E テストやコンソールから状態を確認できるようにする

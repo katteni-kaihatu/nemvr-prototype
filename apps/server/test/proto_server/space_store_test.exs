@@ -25,6 +25,18 @@ defmodule ProtoServer.Space.StoreTest do
     assert {:ok, %{"kind" => "peer", "name" => "alice"}} = Store.get_object(session, peer_id)
   end
 
+  test "sets and clears a peer avatar even when pinning is not available", %{
+    session: session,
+    peer_id: peer_id
+  } do
+    assert :ok = Store.set_peer_avatar(session, peer_id, "bafy-avatar")
+    assert {:ok, %{"avatarCid" => "bafy-avatar"}} = Store.get_object(session, peer_id)
+
+    assert :ok = Store.set_peer_avatar(session, peer_id, nil)
+    assert {:ok, peer} = Store.get_object(session, peer_id)
+    refute Map.has_key?(peer, "avatarCid")
+  end
+
   test "creates, patches and deletes a box", %{session: session, peer_id: peer_id, scope: scope} do
     id = Uuid.v4()
 
