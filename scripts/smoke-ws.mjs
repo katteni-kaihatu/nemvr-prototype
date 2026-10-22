@@ -211,7 +211,7 @@ async function main() {
       "image space_ack (is SMOKE_IMAGE_CID available to Kubo?)",
     );
 
-    await observer.waitFor(
+    const imageDelta = await observer.waitFor(
       (m) =>
         m.type === "space_delta" &&
         m.changes.some(
@@ -223,6 +223,10 @@ async function main() {
         ),
       "image delta",
     );
+
+    const imageEntity = imageDelta.changes.find((change) => change.entity?.id === imageId).entity;
+    assert.equal(imageEntity.dimensions["content.stored"], false, "image is placed before pinning");
+    assert.equal(imageEntity.dimensions["content.owner"], selfId, "image is served by its owner");
 
     primary.send({
       type: "space_mutate",

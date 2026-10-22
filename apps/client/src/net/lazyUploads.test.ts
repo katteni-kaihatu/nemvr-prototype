@@ -46,10 +46,16 @@ describe("needsLocalFile", () => {
     expect(needsLocalFile(objects, "cid-a", "me")).toBe(true);
   });
 
-  it("ignores files that someone else is serving, other contents, and images", () => {
+  it("ignores files that someone else is serving, other contents, and images not owned by me", () => {
     const image: ImageObject = { id: "i", kind: "image", cid: "cid-a", position: [0, 0, 0], yaw: 0, width: 1, height: 1 };
     const objects = world(file("1", { owner: "someone-else" }), file("2", { cid: "cid-b" }), image);
     expect(needsLocalFile(objects, "cid-a", "me")).toBe(false);
+  });
+
+  it("keeps serving a provisional image I placed until the server pins it", () => {
+    const provisional = image("i", { cid: "cid-a", owner: "me", stored: false });
+    expect(needsLocalFile(world(provisional), "cid-a", "me")).toBe(true);
+    expect(needsLocalFile(world({ ...provisional, stored: true, owner: undefined }), "cid-a", "me")).toBe(false);
   });
 
   it("keeps serving a stored video that I placed, while the tab is open (for browser-to-browser P2P)", () => {
@@ -73,6 +79,16 @@ describe("uploadsToRelease", () => {
   it("releases images and stored files that are no longer needed", () => {
     const objects = world(image("i", { cid: "cid-a" }), file("1", { cid: "cid-b", stored: true, owner: undefined }));
     expect(uploadsToRelease(objects, "me", servingAll)).toEqual(["cid-a", "cid-b"]);
+  });
+
+  it("keeps an unstored image that I placed", () => {
+    expect(uploadsToRelease(world(image("i", { cid: "cid-a", owner: "me", stored: false })), "me", servingAll)).toEqual([]);
+  });
+
+  it("releases a stored image", () => {
+    expect(
+      uploadsToRelease(world(image("i", { cid: "cid-a", owner: undefined, stored: true })), "me", servingAll),
+    ).toEqual(["cid-a"]);
   });
 
   it("keeps an unstored file that I placed", () => {

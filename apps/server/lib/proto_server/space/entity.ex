@@ -27,6 +27,10 @@ defmodule ProtoServer.Space.Entity do
           |> put_value("content.name", Map.get(object, "name"))
           |> put_number("content.width", Map.get(object, "width"))
           |> put_number("content.height", Map.get(object, "height"))
+          |> put_number("content.size", Map.get(object, "size"))
+          |> put_value("content.stored", Map.get(object, "stored"))
+          |> put_value("content.owner", Map.get(object, "owner"))
+          |> put_value("content.offline", Map.get(object, "offline"))
 
         "file" ->
           dimensions
@@ -83,6 +87,9 @@ defmodule ProtoServer.Space.Entity do
         |> Map.put("name", Map.get(dimensions, "content.name"))
         |> Map.put("width", Map.get(dimensions, "content.width"))
         |> Map.put("height", Map.get(dimensions, "content.height"))
+        |> Map.put("stored", Map.get(dimensions, "content.stored", false))
+        |> maybe_put("owner", Map.get(dimensions, "content.owner"))
+        |> maybe_put("offline", Map.get(dimensions, "content.offline"))
 
       "file" ->
         base

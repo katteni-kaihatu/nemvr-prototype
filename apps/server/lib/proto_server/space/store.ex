@@ -808,7 +808,8 @@ defmodule ProtoServer.Space.Store do
     Enum.reduce(state.entities, state, fn {_id, entity}, acc ->
       dims = Entity.dims(entity)
 
-      if Map.get(dims, "entity.kind") == "file" and Map.get(dims, "content.stored") != true and
+      if Map.get(dims, "entity.kind") in ["file", "image"] and
+           Map.get(dims, "content.stored") != true and
            Map.get(dims, "content.owner") == owner_id and Map.get(dims, "content.offline") != true do
         put_entity(acc, %{
           entity

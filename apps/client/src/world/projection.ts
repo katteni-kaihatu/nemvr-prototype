@@ -74,6 +74,9 @@ export function projectEntity(entity: SpaceEntity): WorldObject | null {
         width: asNumber(dims["content.width"], 1),
         height: asNumber(dims["content.height"], 1),
         name: asString(dims["content.name"]) || undefined,
+        stored: asBoolean(dims["content.stored"]),
+        owner: asString(dims["content.owner"]) || undefined,
+        offline: asBoolean(dims["content.offline"]) || undefined,
       };
     case "file":
       return {

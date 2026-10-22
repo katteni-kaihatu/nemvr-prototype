@@ -102,6 +102,10 @@ export interface ImageObject extends ObjectBase {
   width: number;
   height: number;
   name?: string;
+  /** サーバーが内容を取得して保持しているか。未取得でも、置いた人のブラウザから配れる。 */
+  stored?: boolean;
+  owner?: string;
+  offline?: boolean;
 }
 
 /**
