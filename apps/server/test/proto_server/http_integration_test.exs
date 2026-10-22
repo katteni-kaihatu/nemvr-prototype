@@ -1,11 +1,13 @@
 defmodule ProtoServer.HttpIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias ProtoServer.{Content, Room}
+  alias ProtoServer.Content
+  alias ProtoServer.Space.Store
 
   setup do
     start_supervised!(
-      {Room,
+      {Store,
+       session_id: "main",
        seed: false,
        ipfs_info: %{"peerId" => "test", "wsPort" => 8081},
        ice_servers_fun: fn _ -> nil end}
@@ -28,7 +30,7 @@ defmodule ProtoServer.HttpIntegrationTest do
 
   test "an unsatisfiable range returns 416 without contacting the gateway", %{port: port} do
     assert {:ok, _object} =
-             Room.add_file(%{
+             Store.add_file("main", %{
                "cid" => "bafy-range",
                "name" => "clip.mp4",
                "position" => [0, 0, 0],
@@ -44,7 +46,7 @@ defmodule ProtoServer.HttpIntegrationTest do
 
   test "a stored file returns 500 when the Kubo gateway is unreachable", %{port: port} do
     assert {:ok, _object} =
-             Room.add_file(%{
+             Store.add_file("main", %{
                "cid" => "bafy-gateway",
                "name" => "clip.mp4",
                "position" => [0, 0, 0],

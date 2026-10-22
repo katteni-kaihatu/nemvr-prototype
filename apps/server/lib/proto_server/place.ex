@@ -12,8 +12,10 @@ defmodule ProtoServer.Place do
 
   require Logger
 
-  alias ProtoServer.{Content, Ipfs, Media, Queue, Room, UrlFetch}
+  alias ProtoServer.{Content, Ipfs, Media, Protocol, Queue, UrlFetch}
+  alias ProtoServer.Space.{Notify, Store}
 
+  @session "main"
   @eager_file_max_bytes 16 * 1024 * 1024
   @progress_interval_ms 10_000
   @sniff_bytes 16
@@ -32,12 +34,13 @@ defmodule ProtoServer.Place do
   @spec place_url(binary(), map()) :: :ok
   def place_url(peer, place), do: GenServer.cast(__MODULE__, {:place_url, peer, place})
 
-  @spec set_avatar(binary(), binary() | nil) :: :ok
-  def set_avatar(peer, cid), do: GenServer.cast(__MODULE__, {:set_avatar, peer, cid})
+  @spec set_avatar(binary(), binary() | nil, binary() | nil) :: :ok
+  def set_avatar(peer, cid, command_id \\ nil),
+    do: GenServer.cast(__MODULE__, {:set_avatar, peer, cid, command_id})
 
-  @spec request_file(binary(), binary()) :: :ok
-  def request_file(peer, object_id),
-    do: GenServer.cast(__MODULE__, {:request_file, peer, object_id})
+  @spec request_file(binary(), binary(), binary() | nil) :: :ok
+  def request_file(peer, object_id, command_id \\ nil),
+    do: GenServer.cast(__MODULE__, {:request_file, peer, object_id, command_id})
 
   @spec cancel_peer(binary()) :: :ok
   def cancel_peer(peer), do: GenServer.cast(__MODULE__, {:cancel_peer, peer})
@@ -78,13 +81,13 @@ defmodule ProtoServer.Place do
     {:noreply, state}
   end
 
-  def handle_cast({:set_avatar, peer, cid}, state) do
+  def handle_cast({:set_avatar, peer, cid, command_id}, state) do
     schedule(
       peer,
-      fn -> run_set_avatar(peer, cid) end,
+      fn -> run_set_avatar(peer, cid, command_id) end,
       %{
         on_full: fn ->
-          Room.send_error(peer, "順番待ちが多すぎます。しばらくしてからやり直してください")
+          send_error(peer, "順番待ちが多すぎます。しばらくしてからやり直してください", command_id)
         end
       }
     )
@@ -92,12 +95,13 @@ defmodule ProtoServer.Place do
     {:noreply, state}
   end
 
-  def handle_cast({:request_file, peer, object_id}, state) do
-    case Room.get_object(object_id) do
+  def handle_cast({:request_file, peer, object_id, command_id}, state) do
+    case Store.get_object(@session, object_id) do
       {:ok, %{"kind" => "file"} = object} ->
         {:noreply, do_stage_file(peer, object, state)}
 
       _ ->
+        send_error(peer, "ファイルが見つかりません", command_id)
         {:noreply, state}
     end
   end
@@ -168,14 +172,12 @@ defmodule ProtoServer.Place do
 
   defp do_place_image(peer, place) do
     cid = Map.get(place, "cid")
+    command_id = Map.get(place, "commandId")
 
     callbacks = %{
-      queued: fn -> Room.send_place_progress(peer, cid, 0, nil, true) end,
+      queued: fn -> send_place_progress(peer, cid, 0, nil, true) end,
       on_full: fn ->
-        Room.send_error(
-          peer,
-          "順番待ちの画像が多すぎます。いくつか終わってから再来してください"
-        )
+        send_error(peer, "順番待ちの画像が多すぎます。いくつか終わってから再来してください", command_id)
       end
     }
 
@@ -183,34 +185,42 @@ defmodule ProtoServer.Place do
   end
 
   defp run_place_image(peer, place, cid) do
+    place =
+      case Map.get(place, "name") do
+        name when is_binary(name) -> Map.put(place, "name", Protocol.sanitize_file_name(name))
+        _ -> place
+      end
+
     case ensure_content(cid, :image, peer) do
       {:ok, info} ->
-        case Room.add_image(place) do
-          {:ok, _object} ->
+        case Store.add_image(@session, place) do
+          {:ok, object} ->
             Logger.info("[place_image] #{cid} (#{Media.format_bytes(info.size)}) by #{peer}")
-
+            ack(peer, place, object)
             :ok
 
           :full ->
             Content.release(cid)
-            Room.send_error(peer, "これ以上オブジェクトを置けません")
+            send_error(peer, "これ以上オブジェクトを置けません", Map.get(place, "commandId"))
+
+          {:error, code} ->
+            Content.release(cid)
+            send_error(peer, "画像の次元が不正です (#{code})", Map.get(place, "commandId"))
         end
 
       {:error, message} ->
-        Room.send_error(peer, message)
+        send_error(peer, message, Map.get(place, "commandId"))
     end
   end
 
   defp do_place_file(peer, place) do
     cid = Map.get(place, "cid")
+    command_id = Map.get(place, "commandId")
 
     callbacks = %{
-      queued: fn -> Room.send_place_progress(peer, cid, 0, nil, true) end,
+      queued: fn -> send_place_progress(peer, cid, 0, nil, true) end,
       on_full: fn ->
-        Room.send_error(
-          peer,
-          "順番待ちのファイルが多すぎます。いくつか終わってからやり直してください"
-        )
+        send_error(peer, "順番待ちのファイルが多すぎます。いくつか終わってからやり直してください", command_id)
       end
     }
 
@@ -218,7 +228,9 @@ defmodule ProtoServer.Place do
   end
 
   defp run_place_file(peer, place, cid) do
-    name = Map.get(place, "name", "file")
+    name = Protocol.sanitize_file_name(Map.get(place, "name", "file"))
+    command_id = Map.get(place, "commandId")
+    place = Map.put(place, "name", name)
 
     with {:ok, probe} <- probe(cid, :file) do
       category = Media.classify_file(name, probe.head)
@@ -233,17 +245,21 @@ defmodule ProtoServer.Place do
             "owner" => peer
           })
 
-        case Room.add_file(object) do
+        case Store.add_file(@session, object) do
           {:ok, placed} ->
             Logger.info(
               "[place_file] #{cid} (#{Media.format_bytes(probe.size)}, placed; " <>
                 "fetching in the background) by #{peer}"
             )
 
+            ack(peer, place, placed)
             stage_file(nil, placed)
 
           :full ->
-            Room.send_error(peer, "これ以上オブジェクトを置けません")
+            send_error(peer, "これ以上オブジェクトを置けません", command_id)
+
+          {:error, code} ->
+            send_error(peer, "ファイルの次元が不正です (#{code})", command_id)
         end
       else
         case ensure_content(cid, :file, peer) do
@@ -255,33 +271,38 @@ defmodule ProtoServer.Place do
                 "stored" => true
               })
 
-            case Room.add_file(object) do
-              {:ok, _placed} ->
+            case Store.add_file(@session, object) do
+              {:ok, placed} ->
                 Logger.info("[place_file] #{cid} (#{Media.format_bytes(info.size)}) by #{peer}")
-
+                ack(peer, place, placed)
                 :ok
 
               :full ->
                 Content.release(cid)
-                Room.send_error(peer, "これ以上オブジェクトを置けません")
+                send_error(peer, "これ以上オブジェクトを置けません", command_id)
+
+              {:error, code} ->
+                Content.release(cid)
+                send_error(peer, "ファイルの次元が不正です (#{code})", command_id)
             end
 
           {:error, message} ->
-            Room.send_error(peer, message)
+            send_error(peer, message, command_id)
         end
       end
     else
-      {:error, message} -> Room.send_error(peer, message)
+      {:error, message} -> send_error(peer, message, command_id)
     end
   end
 
   defp do_place_url(peer, place) do
     url = Map.get(place, "url")
+    command_id = Map.get(place, "commandId")
 
     callbacks = %{
       queued: fn -> :ok end,
       on_full: fn ->
-        Room.send_error(peer, "順番待ちが多すぎます。しばらくしてからやり直してください")
+        send_error(peer, "順番待ちが多すぎます。しばらくしてからやり直してください", command_id)
       end
     }
 
@@ -297,23 +318,30 @@ defmodule ProtoServer.Place do
           object = %{
             "url" => Map.get(fetched, "url"),
             "position" => Map.get(place, "position"),
-            "yaw" => Map.get(place, "yaw")
+            "yaw" => Map.get(place, "yaw"),
+            "pitch" => Map.get(place, "pitch"),
+            "objectId" => Map.get(place, "objectId"),
+            "commandId" => Map.get(place, "commandId")
           }
 
-          case Room.add_link(object) do
-            {:ok, _placed} ->
+          case Store.add_link(@session, object) do
+            {:ok, placed} ->
               Logger.info("[url] #{Map.get(fetched, "url")} -> link")
+              ack(peer, place, placed)
               :ok
 
             :full ->
-              Room.send_error(peer, "これ以上オブジェクトを置けません")
+              send_error(peer, "これ以上オブジェクトを置けません", Map.get(place, "commandId"))
+
+            {:error, code} ->
+              send_error(peer, "リンクの次元が不正です (#{code})", Map.get(place, "commandId"))
           end
         else
           add_fetched_media(peer, place, fetched, kind)
         end
 
       {:error, message} ->
-        Room.send_error(peer, message)
+        send_error(peer, message, Map.get(place, "commandId"))
     end
   end
 
@@ -330,7 +358,7 @@ defmodule ProtoServer.Place do
 
           {:error, message} ->
             safe_unpin(cid)
-            Room.send_error(peer, message)
+            send_error(peer, message, Map.get(place, "commandId"))
         end
 
       {:error, reason} ->
@@ -338,58 +366,78 @@ defmodule ProtoServer.Place do
           "[url] add_bytes failed for #{Map.get(fetched, "url")}: #{inspect(reason)}"
         )
 
-        Room.send_error(peer, "URL の内容を取得できませんでした")
+        send_error(peer, "URL の内容を取得できませんでした", Map.get(place, "commandId"))
     end
   end
 
   defp add_fetched_object(peer, place, fetched, "image", cid, _info) do
+    name = Protocol.sanitize_file_name(Map.get(fetched, "name"))
+
     object = %{
       "cid" => cid,
-      "name" => Map.get(fetched, "name"),
+      "name" => name,
       "position" => Map.get(place, "position"),
       "yaw" => Map.get(place, "yaw"),
+      "pitch" => Map.get(place, "pitch"),
       "width" => Map.get(fetched, "width", 1),
-      "height" => Map.get(fetched, "height", 1)
+      "height" => Map.get(fetched, "height", 1),
+      "objectId" => Map.get(place, "objectId"),
+      "commandId" => Map.get(place, "commandId")
     }
 
-    case Room.add_image(object) do
-      {:ok, _placed} ->
+    case Store.add_image(@session, object) do
+      {:ok, placed} ->
         Logger.info(
           "[url] #{Map.get(fetched, "url")} -> image #{cid} " <>
             "(#{Map.get(fetched, "width")}x#{Map.get(fetched, "height")})"
         )
 
+        ack(peer, place, placed)
         :ok
 
       :full ->
         Content.release(cid)
-        Room.send_error(peer, "これ以上オブジェクトを置けません")
+        send_error(peer, "これ以上オブジェクトを置けません", Map.get(place, "commandId"))
+
+      {:error, code} ->
+        Content.release(cid)
+        send_error(peer, "画像の次元が不正です (#{code})", Map.get(place, "commandId"))
     end
   end
 
   defp add_fetched_object(peer, place, fetched, kind, cid, info) do
+    name = Protocol.sanitize_file_name(Map.get(fetched, "name"))
+
     object = %{
       "cid" => cid,
-      "name" => Map.get(fetched, "name"),
+      "name" => name,
       "position" => Map.get(place, "position"),
       "yaw" => Map.get(place, "yaw"),
+      "pitch" => Map.get(place, "pitch"),
       "size" => info.size,
       "category" => kind,
-      "stored" => true
+      "stored" => true,
+      "objectId" => Map.get(place, "objectId"),
+      "commandId" => Map.get(place, "commandId")
     }
 
-    case Room.add_file(object) do
-      {:ok, _placed} ->
+    case Store.add_file(@session, object) do
+      {:ok, placed} ->
         Logger.info(
           "[url] #{Map.get(fetched, "url")} -> #{kind} #{cid} " <>
             "(#{Media.format_bytes(info.size)})"
         )
 
+        ack(peer, place, placed)
         :ok
 
       :full ->
         Content.release(cid)
-        Room.send_error(peer, "これ以上オブジェクトを置けません")
+        send_error(peer, "これ以上オブジェクトを置けません", Map.get(place, "commandId"))
+
+      {:error, code} ->
+        Content.release(cid)
+        send_error(peer, "ファイルの次元が不正です (#{code})", Map.get(place, "commandId"))
     end
   end
 
@@ -504,7 +552,7 @@ defmodule ProtoServer.Place do
 
       Map.get(object, "offline") == true or is_nil(Map.get(object, "owner")) ->
         if requester do
-          Room.send_prepare_failed(
+          send_prepare_failed(
             requester,
             cid,
             "アップロードした人が退室しているため、取得できません"
@@ -559,7 +607,7 @@ defmodule ProtoServer.Place do
   defp run_staging(cid, owner) do
     case ensure_content(cid, :file, owner) do
       {:ok, info} ->
-        updated = Room.mark_stored(cid, info.size)
+        updated = Store.mark_stored(@session, cid, info.size)
 
         if updated == [] do
           Content.release(cid)
@@ -584,11 +632,11 @@ defmodule ProtoServer.Place do
   defp send_staging_progress(state, cid, loaded, total, queued) do
     case Map.fetch(state.staging, cid) do
       {:ok, %{owner: owner, waiters: waiters}} ->
-        Room.send_place_progress(owner, cid, loaded, total, queued)
+        send_place_progress(owner, cid, loaded, total, queued)
 
         Enum.each(waiters, fn waiter ->
           if waiter != owner do
-            Room.send_prepare_progress(waiter, cid, loaded, total, queued)
+            send_prepare_progress(waiter, cid, loaded, total, queued)
           end
         end)
 
@@ -601,11 +649,11 @@ defmodule ProtoServer.Place do
     case GenServer.call(__MODULE__, {:take_staging, cid}) do
       {:ok, %{owner: owner, waiters: waiters, name: name}} ->
         Enum.each(waiters, fn waiter ->
-          Room.send_prepare_failed(waiter, cid, message)
+          send_prepare_failed(waiter, cid, message)
         end)
 
-        if Room.remove_unstored(cid) > 0 do
-          Room.send_error(owner, "#{name}: #{message}")
+        if Store.remove_unstored(@session, cid) > 0 do
+          send_error(owner, "#{name}: #{message}")
         end
 
         :ok
@@ -624,11 +672,11 @@ defmodule ProtoServer.Place do
 
       {%{owner: owner, waiters: waiters, name: name}, staging} ->
         Enum.each(waiters, fn waiter ->
-          Room.send_prepare_failed(waiter, cid, message)
+          send_prepare_failed(waiter, cid, message)
         end)
 
-        if Room.remove_unstored(cid) > 0 do
-          Room.send_error(owner, "#{name}: #{message}")
+        if Store.remove_unstored(@session, cid) > 0 do
+          send_error(owner, "#{name}: #{message}")
         end
 
         %{state | staging: staging}
@@ -640,7 +688,7 @@ defmodule ProtoServer.Place do
     :ok
   end
 
-  defp run_set_avatar(peer, cid) do
+  defp run_set_avatar(peer, cid, command_id) do
     current = GenServer.call(__MODULE__, {:get_avatar, peer})
 
     cond do
@@ -650,24 +698,26 @@ defmodule ProtoServer.Place do
           GenServer.call(__MODULE__, {:delete_avatar, peer})
         end
 
-        Room.set_avatar(peer, nil)
+        Store.set_peer_avatar(@session, peer, nil)
+        Notify.ack(peer, command_id, peer)
 
       cid == current ->
-        :ok
+        Notify.ack(peer, command_id, peer)
 
       true ->
         case ensure_content(cid, :avatar, peer) do
           {:ok, info} ->
             if current, do: Content.release(current)
             GenServer.call(__MODULE__, {:put_avatar, peer, cid})
-            Room.set_avatar(peer, cid)
+            Store.set_peer_avatar(@session, peer, cid)
+            Notify.ack(peer, command_id, peer)
 
             Logger.info("[avatar] #{cid} pinned for #{peer} (#{Media.format_bytes(info.size)})")
 
             :ok
 
           {:error, message} ->
-            Room.send_error(peer, "アバターを取得できませんでした: #{message}")
+            send_error(peer, "アバターを取得できませんでした: #{message}", command_id)
         end
     end
   end
@@ -687,7 +737,7 @@ defmodule ProtoServer.Place do
         :ok
     after
       @progress_interval_ms ->
-        safe_room(fn -> Room.send_place_progress(peer, cid, 0, total, false) end)
+        safe_call(fn -> send_place_progress(peer, cid, 0, total, false) end)
         heartbeat_loop(peer, cid, total)
     end
   end
@@ -721,7 +771,7 @@ defmodule ProtoServer.Place do
     :ok
   end
 
-  defp safe_room(fun) do
+  defp safe_call(fun) do
     try do
       fun.()
     rescue
@@ -729,6 +779,26 @@ defmodule ProtoServer.Place do
     catch
       _, _ -> :ok
     end
+  end
+
+  defp ack(peer, place, object) do
+    Notify.ack(peer, Map.get(place, "commandId"), Map.get(object, "id"))
+  end
+
+  defp send_error(peer, message, command_id \\ nil) do
+    Notify.error(peer, "content_failed", message, command_id)
+  end
+
+  defp send_place_progress(peer, cid, loaded, total, queued) do
+    Notify.file_progress(peer, nil, cid, loaded, total, queued, "place")
+  end
+
+  defp send_prepare_progress(peer, cid, loaded, total, queued) do
+    Notify.file_progress(peer, nil, cid, loaded, total, queued, "prepare")
+  end
+
+  defp send_prepare_failed(peer, cid, message) do
+    Notify.file_failed(peer, nil, cid, message)
   end
 
   defp start_task(fun) do

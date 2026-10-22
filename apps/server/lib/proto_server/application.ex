@@ -8,9 +8,10 @@ defmodule ProtoServer.Application do
     children = [
       {Finch, name: ProtoServer.Finch},
       {Task.Supervisor, name: ProtoServer.TaskSupervisor},
+      {Registry, keys: :unique, name: ProtoServer.Space.Registry},
       ProtoServer.Ipfs,
-      ProtoServer.Room,
       ProtoServer.Content,
+      {ProtoServer.Space.Store, session_id: "main", seed: true},
       ProtoServer.Queue,
       ProtoServer.Place,
       ProtoServer.HttpServer

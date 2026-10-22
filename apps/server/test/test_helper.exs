@@ -1,12 +1,12 @@
 ExUnit.start()
 
 # The test suite starts these children with its own options and names (for
-# example `Room` with seeding disabled), so stop the application-owned instances
-# first. `HttpServer` and `Finch` keep running for integration tests.
+# example the space store with seeding disabled), so stop the application-owned
+# instances first. `HttpServer` and `Finch` keep running for integration tests.
 if Process.whereis(ProtoServer.Supervisor) do
   for child <- [
         ProtoServer.Ipfs,
-        ProtoServer.Room,
+        ProtoServer.Space.Store,
         ProtoServer.Content,
         ProtoServer.Queue,
         ProtoServer.Place

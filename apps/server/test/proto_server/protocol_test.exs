@@ -4,11 +4,10 @@ defmodule ProtoServer.ProtocolTest do
   alias ProtoServer.Protocol
 
   @uuid "123e4567-e89b-42d3-a456-426614174000"
+  @uuid2 "223e4567-e89b-42d3-a456-426614174000"
   @dag_pb_cid "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
   @raw_cid "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy"
   @v0_cid "QmRN6wdp1S2A5EtjW9A3M1vKSBuQQGcgvuhoMUoEz4iiT5"
-
-  # Generated with Python's base32 encoder from the sha256("hello") digest.
   @raw_hello_cid "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq"
   @dag_pb_hello_cid "bafybeibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq"
   @raw_hello_z "zb2rhZfjRh2FHHB2RkHVEvL2vJnCTcu7kwRqgVsf9gpkLgteo"
@@ -20,486 +19,191 @@ defmodule ProtoServer.ProtocolTest do
 
   defp parse(message), do: Protocol.parse(Jason.encode!(message))
 
-  describe "parse/1 join" do
-    test "accepts join with and without a name" do
-      assert parse(%{"type" => "join", "name" => "bob"}) ==
-               {:ok, %{"type" => "join", "name" => "bob"}}
+  describe "parse/1 space_join" do
+    test "accepts a v2 join and an optional session id" do
+      base = %{
+        "type" => "space_join",
+        "name" => "alice",
+        "templateId" => "vr-sns-3d",
+        "schemaVersion" => 1
+      }
 
-      assert parse(%{"type" => "join"}) == {:ok, %{"type" => "join", "name" => ""}}
-      assert parse(%{"type" => "join", "name" => 5}) == {:ok, %{"type" => "join", "name" => ""}}
+      assert parse(base) == {:ok, base}
+
+      with_session = Map.put(base, "sessionId", "main")
+      assert parse(with_session) == {:ok, with_session}
+    end
+
+    test "rejects malformed joins" do
+      valid = %{
+        "type" => "space_join",
+        "name" => "alice",
+        "templateId" => "vr-sns-3d",
+        "schemaVersion" => 1
+      }
+
+      for patch <- [
+            %{"name" => 5},
+            %{"templateId" => nil},
+            %{"schemaVersion" => "1"},
+            %{"sessionId" => 5}
+          ] do
+        assert parse(Map.merge(valid, patch)) == :error
+      end
+    end
+
+    test "recognizes removed legacy messages" do
+      for type <- ~w(join pose place_image place_file place_box place_url request_file ipfs_peer set_avatar video_control grab_object move_object release_object delete_object duplicate_object sync_hello sync_update sync_part claim claim_release) do
+        assert parse(%{"type" => type}) == {:legacy, type}
+      end
     end
   end
 
-  describe "parse/1 pose" do
-    test "normalizes the quaternion and preserves position" do
+  describe "parse/1 space_mutate" do
+    test "accepts a create mutation" do
       message = %{
-        "type" => "pose",
-        "pose" => %{"position" => [1, 2, 3], "head" => [0, 0, 0, 2]}
+        "type" => "space_mutate",
+        "mutation" => %{
+          "commandId" => @uuid,
+          "op" => "create",
+          "entityId" => @uuid2,
+          "dimensions" => %{
+            "entity.kind" => "box",
+            "space.position" => [0, 0, 0],
+            "space.yaw" => 0,
+            "box.size" => 1,
+            "box.color" => "#aabbcc"
+          }
+        }
       }
 
-      assert parse(message) ==
-               {:ok,
-                %{
-                  "type" => "pose",
-                  "pose" => %{"position" => [1, 2, 3], "head" => [0.0, 0.0, 0.0, 1.0]}
-                }}
+      assert {:ok, %{"type" => "space_mutate", "mutation" => mutation}} = parse(message)
+      assert mutation["entityId"] == @uuid2
+      assert mutation["dimensions"]["entity.kind"] == "box"
     end
 
-    test "normalizes a non-axis quaternion" do
-      {:ok, %{"pose" => pose}} =
-        parse(%{
-          "type" => "pose",
-          "pose" => %{"position" => [0, 0, 0], "head" => [0, 0, 0, 4]}
-        })
+    test "accepts a patch mutation with conditions" do
+      mutation = %{
+        "commandId" => @uuid,
+        "op" => "patch",
+        "entityId" => @uuid2,
+        "set" => %{"space.position" => [1, 0, 2]},
+        "unset" => ["space.scale"],
+        "if" => [%{"dim" => "interaction.heldBy", "eq" => @uuid}],
+        "ifVersion" => 3
+      }
 
-      [x, y, z, w] = pose["head"]
-      assert x == 0.0 and y == 0.0 and z == 0.0
-      assert_in_delta w, 1.0, 1.0e-12
+      assert {:ok, %{"mutation" => parsed}} = parse(%{"type" => "space_mutate", "mutation" => mutation})
+      assert parsed["ifVersion"] == 3
+      assert parsed["unset"] == ["space.scale"]
     end
 
-    test "clamps optional crouch and lean and omits them when absent" do
-      base = %{"position" => [0, 0, 0], "head" => [0, 0, 0, 1]}
-
-      {:ok, %{"pose" => pose}} =
-        parse(%{"type" => "pose", "pose" => Map.put(base, "crouch", 7)})
-
-      assert pose["crouch"] == 1
-
-      {:ok, %{"pose" => pose}} =
-        parse(%{"type" => "pose", "pose" => Map.put(base, "crouch", -3)})
-
-      assert pose["crouch"] == 0
-
-      {:ok, %{"pose" => pose}} =
-        parse(%{"type" => "pose", "pose" => Map.put(base, "lean", 9)})
-
-      assert pose["lean"] == 1
-
-      {:ok, %{"pose" => pose}} =
-        parse(%{"type" => "pose", "pose" => Map.put(base, "lean", -9)})
-
-      assert pose["lean"] == -1
-
-      {:ok, %{"pose" => pose}} = parse(%{"type" => "pose", "pose" => base})
-      refute Map.has_key?(pose, "crouch")
-      refute Map.has_key?(pose, "lean")
-
-      {:ok, %{"pose" => pose}} =
-        parse(%{"type" => "pose", "pose" => Map.merge(base, %{"crouch" => 0.5, "lean" => 0.25})})
-
-      assert pose["crouch"] == 0.5
-      assert pose["lean"] == 0.25
+    test "accepts claim, release, duplicate and delete mutations" do
+      for mutation <- [
+            %{"commandId" => @uuid, "op" => "claim", "entityId" => @uuid2},
+            %{"commandId" => @uuid, "op" => "release", "entityId" => @uuid2},
+            %{
+              "commandId" => @uuid,
+              "op" => "duplicate",
+              "entityId" => @uuid2,
+              "newEntityId" => "323e4567-e89b-42d3-a456-426614174000"
+            },
+            %{"commandId" => @uuid, "op" => "delete", "entityId" => @uuid2}
+          ] do
+        assert {:ok, _} = parse(%{"type" => "space_mutate", "mutation" => mutation})
+      end
     end
 
-    test "rejects malformed poses" do
-      base = %{"position" => [0, 0, 0], "head" => [0, 0, 0, 1]}
-
-      for pose <- [
+    test "rejects malformed mutations" do
+      for mutation <- [
             nil,
             %{},
-            Map.put(base, "position", [0, 0]),
-            Map.put(base, "position", [0, 0, "0"]),
-            Map.put(base, "position", [1001, 0, 0]),
-            Map.put(base, "head", [0, 0, 0]),
-            Map.put(base, "head", [0, 0, 0, 0]),
-            Map.put(base, "head", [0, 0, 0, 1.0e-9]),
-            Map.put(base, "crouch", "1"),
-            Map.put(base, "crouch", nil),
-            Map.put(base, "lean", "1"),
-            Map.put(base, "lean", nil)
+            %{"commandId" => "nope", "op" => "claim", "entityId" => @uuid2},
+            %{"commandId" => @uuid, "op" => "explode", "entityId" => @uuid2},
+            %{"commandId" => @uuid, "op" => "create", "entityId" => "nope", "dimensions" => %{}},
+            %{"commandId" => @uuid, "op" => "patch", "entityId" => @uuid2, "set" => []},
+            %{"commandId" => @uuid, "op" => "patch", "entityId" => @uuid2, "unset" => "x"},
+            %{"commandId" => @uuid, "op" => "duplicate", "entityId" => @uuid2, "newEntityId" => "nope"}
           ] do
-        assert parse(%{"type" => "pose", "pose" => pose}) == :error
+        assert parse(%{"type" => "space_mutate", "mutation" => mutation}) == :error
       end
     end
   end
 
-  describe "parse/1 object operations" do
-    test "accepts the documented id-only messages" do
-      for type <- ~w(grab_object release_object delete_object duplicate_object request_file) do
-        assert parse(%{"type" => type, "id" => @uuid}) ==
-                 {:ok, %{"type" => type, "id" => @uuid}}
-      end
+  describe "parse/1 read requests" do
+    test "accepts query, subscribe and unsubscribe" do
+      filter = %{"all" => [%{"dim" => "session.id", "eq" => "main"}]}
+
+      assert parse(%{"type" => "space_query", "requestId" => "q1", "filter" => filter, "limit" => 10}) ==
+               {:ok, %{"type" => "space_query", "requestId" => "q1", "filter" => filter, "limit" => 10}}
+
+      assert parse(%{"type" => "space_subscribe", "subscriptionId" => "sub-1", "filter" => filter}) ==
+               {:ok, %{"type" => "space_subscribe", "subscriptionId" => "sub-1", "filter" => filter}}
+
+      assert parse(%{"type" => "space_unsubscribe", "subscriptionId" => "sub-1"}) ==
+               {:ok, %{"type" => "space_unsubscribe", "subscriptionId" => "sub-1"}}
     end
 
-    test "rejects malformed ids" do
-      for type <- ~w(grab_object release_object delete_object duplicate_object request_file) do
-        assert parse(%{"type" => type, "id" => "nope"}) == :error
-        assert parse(%{"type" => type}) == :error
-        assert parse(%{"type" => type, "id" => 5}) == :error
-        assert parse(%{"type" => type, "id" => String.upcase(@uuid)}) == :error
-      end
-    end
-  end
-
-  describe "parse/1 video_control" do
-    test "accepts valid playback state" do
-      message = %{
-        "type" => "video_control",
-        "id" => @uuid,
-        "playing" => true,
-        "time" => 12.5
-      }
-
-      assert parse(message) == {:ok, message}
-      assert parse(%{message | "time" => 0}) == {:ok, %{message | "time" => 0}}
-      assert parse(%{message | "time" => 86_400}) == {:ok, %{message | "time" => 86_400}}
-    end
-
-    test "rejects invalid playback state" do
-      valid = %{"type" => "video_control", "id" => @uuid, "playing" => true, "time" => 1}
-
-      for patch <- [
-            %{"playing" => "yes"},
-            %{"playing" => nil},
-            %{"time" => -1},
-            %{"time" => 86_401},
-            %{"time" => "1"},
-            %{"time" => nil},
-            %{"id" => "nope"}
-          ] do
-        assert parse(Map.merge(valid, patch)) == :error
-      end
-
-      assert parse(Map.delete(valid, "playing")) == :error
-      assert parse(Map.delete(valid, "time")) == :error
+    test "rejects malformed read requests" do
+      assert parse(%{"type" => "space_query", "requestId" => 5, "filter" => %{}}) == :error
+      assert parse(%{"type" => "space_subscribe", "subscriptionId" => "sub-1", "filter" => []}) == :error
+      assert parse(%{"type" => "space_unsubscribe"}) == :error
     end
   end
 
-  describe "parse/1 move_object" do
-    test "accepts placement and omits absent optional fields" do
-      message = %{"type" => "move_object", "id" => @uuid, "position" => [1, 0, -2], "yaw" => 0.5}
-
-      assert parse(message) == {:ok, message}
-
-      {:ok, parsed} = parse(message)
-      refute Map.has_key?(parsed, "pitch")
-      refute Map.has_key?(parsed, "scale")
-    end
-
-    test "accepts optional pitch and scale" do
+  describe "parse/1 content commands" do
+    test "accepts URL import" do
       message = %{
-        "type" => "move_object",
-        "id" => @uuid,
-        "position" => [1, 2, -2],
-        "yaw" => 0.5,
-        "pitch" => -0.7,
-        "scale" => 2.5
-      }
-
-      assert parse(message) == {:ok, message}
-    end
-
-    test "rejects invalid placement and scale" do
-      valid = %{"type" => "move_object", "id" => @uuid, "position" => [1, 0, -2], "yaw" => 0.5}
-
-      for patch <- [
-            %{"position" => [1, 0]},
-            %{"position" => [5000, 0, 0]},
-            %{"position" => [nil, 0, 0]},
-            %{"yaw" => "1"},
-            %{"yaw" => nil},
-            %{"pitch" => "1"},
-            %{"pitch" => nil},
-            %{"scale" => 0},
-            %{"scale" => 0.05},
-            %{"scale" => 10.5},
-            %{"scale" => "2"},
-            %{"scale" => nil},
-            %{"id" => "nope"}
-          ] do
-        assert parse(Map.merge(valid, patch)) == :error
-      end
-    end
-  end
-
-  describe "parse/1 place_box" do
-    test "accepts a box and omits an absent objectId" do
-      message = %{
-        "type" => "place_box",
-        "position" => [1, 0, 2],
-        "yaw" => 0,
-        "size" => 1.5,
-        "color" => "#aabbcc"
-      }
-
-      assert parse(message) == {:ok, message}
-      {:ok, parsed} = parse(message)
-      refute Map.has_key?(parsed, "objectId")
-    end
-
-    test "accepts an optional pitch and objectId" do
-      message = %{
-        "type" => "place_box",
-        "position" => [1, 0, 2],
-        "yaw" => 0,
-        "pitch" => -0.5,
-        "size" => 1,
-        "color" => "#AABBCC",
-        "objectId" => @uuid
-      }
-
-      assert parse(message) == {:ok, message}
-    end
-
-    test "rejects invalid size, color, placement and objectId" do
-      valid = %{
-        "type" => "place_box",
-        "position" => [1, 0, 2],
-        "yaw" => 0,
-        "size" => 1,
-        "color" => "#aabbcc"
-      }
-
-      for patch <- [
-            %{"size" => 0},
-            %{"size" => 0.09},
-            %{"size" => 1000},
-            %{"size" => "1"},
-            %{"color" => "red"},
-            %{"color" => "#12345"},
-            %{"position" => [1, 2]},
-            %{"pitch" => "x"},
-            %{"objectId" => "nope"},
-            %{"objectId" => 5}
-          ] do
-        assert parse(Map.merge(valid, patch)) == :error
-      end
-    end
-  end
-
-  describe "parse/1 place_image" do
-    test "accepts an image and omits an absent name and objectId" do
-      message = %{
-        "type" => "place_image",
-        "cid" => @dag_pb_cid,
-        "position" => [1, 0, -2],
-        "yaw" => 1.5,
-        "width" => 2,
-        "height" => 1.5
-      }
-
-      assert parse(message) == {:ok, message}
-      {:ok, parsed} = parse(message)
-      refute Map.has_key?(parsed, "name")
-      refute Map.has_key?(parsed, "objectId")
-
-      assert parse(%{message | "cid" => @raw_cid}) == {:ok, %{message | "cid" => @raw_cid}}
-    end
-
-    test "sanitizes an optional name and omits unusable names" do
-      base = %{
-        "type" => "place_image",
-        "cid" => @dag_pb_cid,
-        "position" => [0, 0, 0],
-        "yaw" => 0,
-        "width" => 2,
-        "height" => 1
-      }
-
-      assert {:ok, %{"name" => "cat.png"}} =
-               parse(Map.put(base, "name", "cat.png"))
-
-      assert {:ok, %{"name" => "a_b.png"}} = parse(Map.put(base, "name", "a/b.png"))
-
-      {:ok, parsed} = parse(Map.put(base, "name", "..."))
-      refute Map.has_key?(parsed, "name")
-
-      {:ok, parsed} = parse(Map.put(base, "name", 5))
-      refute Map.has_key?(parsed, "name")
-    end
-
-    test "accepts an optional objectId" do
-      message = %{
-        "type" => "place_image",
-        "cid" => @dag_pb_cid,
-        "position" => [0, 0, 0],
-        "yaw" => 0,
-        "width" => 2,
-        "height" => 1,
-        "objectId" => @uuid
-      }
-
-      assert parse(message) == {:ok, message}
-      assert parse(Map.put(message, "objectId", "nope")) == :error
-    end
-
-    test "rejects invalid cid, placement and dimensions" do
-      valid = %{
-        "type" => "place_image",
-        "cid" => @dag_pb_cid,
-        "position" => [1, 0, -2],
-        "yaw" => 1.5,
-        "width" => 2,
-        "height" => 1.5
-      }
-
-      for patch <- [
-            %{"cid" => "../etc/passwd"},
-            %{"cid" => @uuid},
-            %{"cid" => nil},
-            %{"position" => [1, 0]},
-            %{"position" => [5000, 0, 0]},
-            %{"yaw" => "1"},
-            %{"width" => 0},
-            %{"width" => 0.09},
-            %{"height" => 1000},
-            %{"width" => nil}
-          ] do
-        assert parse(Map.merge(valid, patch)) == :error
-      end
-    end
-  end
-
-  describe "parse/1 place_file" do
-    test "accepts a file and sanitizes the name" do
-      message = %{
-        "type" => "place_file",
-        "cid" => @dag_pb_cid,
-        "name" => "report.pdf",
-        "position" => [1, 0.4, -2],
-        "yaw" => 0.5
-      }
-
-      assert parse(message) == {:ok, message}
-
-      assert {:ok, %{"name" => "_.._evilgpj.exe"}} =
-               parse(Map.put(message, "name", "../../evil\u202Egpj.exe"))
-
-      assert {:ok, %{"name" => "file"}} =
-               parse(Map.delete(message, "name"))
-
-      assert {:ok, %{"name" => "file"}} =
-               parse(Map.put(message, "name", 5))
-    end
-
-    test "accepts an objectId and ignores client size/category" do
-      message = %{
-        "type" => "place_file",
-        "cid" => @dag_pb_cid,
-        "name" => "report.pdf",
-        "position" => [1, 0.4, -2],
-        "yaw" => 0.5,
-        "objectId" => @uuid,
-        "size" => 1,
-        "category" => "video"
-      }
-
-      assert {:ok, parsed} = parse(message)
-      assert parsed["objectId"] == @uuid
-      refute Map.has_key?(parsed, "size")
-      refute Map.has_key?(parsed, "category")
-    end
-
-    test "rejects invalid cid, placement and objectId" do
-      valid = %{
-        "type" => "place_file",
-        "cid" => @dag_pb_cid,
-        "name" => "report.pdf",
-        "position" => [0, 0, 0],
-        "yaw" => 0
-      }
-
-      for patch <- [
-            %{"cid" => "nope"},
-            %{"position" => [0, 0]},
-            %{"position" => [9999, 0, 0]},
-            %{"yaw" => "1"},
-            %{"objectId" => "nope"}
-          ] do
-        assert parse(Map.merge(valid, patch)) == :error
-      end
-    end
-  end
-
-  describe "parse/1 place_url" do
-    test "accepts http and https URLs" do
-      https = %{
-        "type" => "place_url",
+        "type" => "space_import_url",
+        "commandId" => @uuid,
+        "entityId" => @uuid2,
         "url" => "https://example.com/a.png",
         "position" => [1, 0, 2],
         "yaw" => 0.5
       }
 
-      assert parse(https) == {:ok, https}
-
-      http = %{https | "url" => "http://example.com/"}
-      assert parse(http) == {:ok, http}
-
-      uppercase = %{https | "url" => "HTTPS://EXAMPLE.COM/a.png"}
-      assert parse(uppercase) == {:ok, uppercase}
+      assert parse(message) == {:ok, message}
     end
 
-    test "accepts objectId and pitch" do
-      message = %{
-        "type" => "place_url",
+    test "rejects unsafe URL import" do
+      valid = %{
+        "type" => "space_import_url",
+        "commandId" => @uuid,
+        "entityId" => @uuid2,
         "url" => "https://example.com/",
         "position" => [1, 0, 2],
-        "yaw" => 0,
-        "pitch" => 0.5,
-        "objectId" => @uuid
-      }
-
-      assert parse(message) == {:ok, message}
-    end
-
-    test "rejects bad schemes, lengths, placement and objectId" do
-      valid = %{
-        "type" => "place_url",
-        "url" => "https://example.com/a.png",
-        "position" => [1, 0, 2],
         "yaw" => 0.5
       }
 
-      max_url = "https://" <> String.duplicate("a", 2048 - 8)
-      too_long = max_url <> "a"
-      assert parse(Map.put(valid, "url", max_url)) != :error
-      assert parse(Map.put(valid, "url", too_long)) == :error
-
       for patch <- [
-            %{"url" => "ftp://example.com/x"},
             %{"url" => "javascript:alert(1)"},
-            %{"url" => 5},
+            %{"url" => "ftp://example.com/"},
             %{"url" => ""},
             %{"position" => [1, 2]},
+            %{"position" => [5000, 0, 0]},
             %{"yaw" => "x"},
-            %{"pitch" => "x"},
-            %{"objectId" => "nope"}
+            %{"entityId" => "nope"}
           ] do
         assert parse(Map.merge(valid, patch)) == :error
       end
     end
-  end
 
-  describe "parse/1 ipfs_peer" do
-    test "accepts a libp2p peer id" do
-      message = %{"type" => "ipfs_peer", "peerId" => "12D3KooWAbCdEfGh"}
-      assert parse(message) == {:ok, message}
+    test "accepts avatar and file request commands" do
+      assert parse(%{"type" => "space_set_avatar", "commandId" => @uuid, "cid" => @dag_pb_cid}) ==
+               {:ok, %{"type" => "space_set_avatar", "commandId" => @uuid, "cid" => @dag_pb_cid}}
+
+      assert parse(%{"type" => "space_set_avatar", "commandId" => @uuid, "cid" => nil}) ==
+               {:ok, %{"type" => "space_set_avatar", "commandId" => @uuid, "cid" => nil}}
+
+      assert parse(%{"type" => "file_request", "commandId" => @uuid, "entityId" => @uuid2}) ==
+               {:ok, %{"type" => "file_request", "commandId" => @uuid, "entityId" => @uuid2}}
     end
 
-    test "rejects malformed peer ids" do
-      for peer_id <- ["short", "has spaces", String.duplicate("a", 129), 5, nil] do
-        assert parse(%{"type" => "ipfs_peer", "peerId" => peer_id}) == :error
-      end
-    end
-  end
-
-  describe "parse/1 set_avatar" do
-    test "accepts file CIDs and null" do
-      for cid <- [@v0_cid, @dag_pb_cid, @raw_cid] do
-        assert parse(%{"type" => "set_avatar", "cid" => cid}) ==
-                 {:ok, %{"type" => "set_avatar", "cid" => cid}}
-      end
-
-      assert parse(%{"type" => "set_avatar", "cid" => nil}) ==
-               {:ok, %{"type" => "set_avatar", "cid" => nil}}
-    end
-
-    test "rejects missing, non-string and non-file CIDs" do
-      for cid <- [5, "nope", "", @uuid, @bad_codec_cid, @bad_hash_cid] do
-        assert parse(%{"type" => "set_avatar", "cid" => cid}) == :error
-      end
-
-      assert parse(%{"type" => "set_avatar"}) == :error
+    test "rejects malformed avatar and file requests" do
+      assert parse(%{"type" => "space_set_avatar", "commandId" => @uuid, "cid" => "nope"}) == :error
+      assert parse(%{"type" => "space_set_avatar", "commandId" => @uuid}) == :error
+      assert parse(%{"type" => "file_request", "commandId" => "nope", "entityId" => @uuid2}) == :error
+      assert parse(%{"type" => "file_request", "commandId" => @uuid}) == :error
     end
   end
 
@@ -509,23 +213,19 @@ defmodule ProtoServer.ProtocolTest do
       assert Protocol.parse("123") == :error
       assert Protocol.parse("null") == :error
       assert Protocol.parse(~s({"type":"nope"})) == :error
-      assert Protocol.parse(~s({"type":"pose","pose":{}})) == :error
       assert Protocol.parse(~s([])) == :error
       assert Protocol.parse(123) == :error
     end
 
-    test "returns unsupported for removed crdt-v1 types" do
-      for type <- ~w(sync_hello sync_update sync_part claim claim_release) do
-        assert Protocol.parse(Jason.encode!(%{"type" => type})) == {:unsupported, type}
-      end
-
-      assert Protocol.parse(~s({"type":"sync_update","update":"AAAA"})) ==
-               {:unsupported, "sync_update"}
-    end
-
     test "encodes string-keyed maps" do
-      assert Protocol.parse(Protocol.encode(%{"type" => "join", "name" => "bob"})) ==
-               {:ok, %{"type" => "join", "name" => "bob"}}
+      message = %{
+        "type" => "space_join",
+        "name" => "bob",
+        "templateId" => "vr-sns-3d",
+        "schemaVersion" => 1
+      }
+
+      assert Protocol.parse(Protocol.encode(message)) == {:ok, message}
     end
   end
 
@@ -607,20 +307,6 @@ defmodule ProtoServer.ProtocolTest do
       assert String.length(name) == 120
       assert String.ends_with?(name, ".txt")
       assert String.length(String.trim_trailing(name, ".txt")) == 116
-
-      upper = Protocol.sanitize_file_name(String.duplicate("a", 200) <> ".TXT")
-      assert String.ends_with?(upper, ".txt")
-      assert String.length(upper) == 120
-
-      no_extension = Protocol.sanitize_file_name(String.duplicate("あ", 200))
-      assert String.length(no_extension) == 120
-    end
-
-    test "ignores unusable extensions when truncating" do
-      name = Protocol.sanitize_file_name(String.duplicate("a", 200) <> ".toolongextension")
-
-      assert String.length(name) == 120
-      refute String.ends_with?(name, ".toolongextension")
     end
   end
 end

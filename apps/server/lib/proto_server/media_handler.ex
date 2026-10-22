@@ -12,7 +12,8 @@ defmodule ProtoServer.MediaHandler do
 
   require Logger
 
-  alias ProtoServer.{Content, Ipfs, Media, Room}
+  alias ProtoServer.{Content, Ipfs, Media}
+  alias ProtoServer.Space.Store
 
   @impl :cowboy_handler
   def init(req, state) do
@@ -66,7 +67,7 @@ defmodule ProtoServer.MediaHandler do
   end
 
   defp serve(req, state, cid, method) do
-    case Room.find_stored_file(cid) do
+    case Store.find_stored_file("main", cid) do
       {:ok, %{"size" => size} = object} when is_integer(size) and size > 0 ->
         name = Map.get(object, "name") || cid
 

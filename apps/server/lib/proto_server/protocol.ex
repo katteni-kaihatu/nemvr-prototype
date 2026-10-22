@@ -1,10 +1,9 @@
 defmodule ProtoServer.Protocol do
   @moduledoc """
-  Parsing and normalization for the legacy client protocol.
+  Parsing and normalization for the space v2 client protocol.
 
-  `parse/1` mirrors `apps/server/src/validate.ts`: it returns a normalized,
-  string-keyed map for accepted messages, `:error` for malformed or unknown
-  messages, and `{:unsupported, type}` for the removed crdt-v1 message types.
+  `parse/1` returns a normalized string-keyed map, `{:legacy, type}` for the
+  removed world protocol messages, or `:error`.
   """
 
   import Bitwise
@@ -13,21 +12,20 @@ defmodule ProtoServer.Protocol do
   @max_file_name_length 120
   @max_url_length 2048
   @max_abs_position 1000
-  @min_object_size 0.1
-  @max_object_size 20
-  @min_object_scale 0.1
-  @max_object_scale 10
   @max_cid_length 128
   @codec_dag_pb 0x70
   @codec_raw 0x55
   @hash_sha2_256 0x12
-  @crdt_types ~w(sync_hello sync_update sync_part claim claim_release)
-  @id_types ~w(grab_object release_object delete_object duplicate_object request_file)
+
+  @legacy_types ~w(
+    join pose place_image place_file place_box place_url request_file ipfs_peer set_avatar
+    video_control grab_object move_object release_object delete_object duplicate_object
+    sync_hello sync_update sync_part claim claim_release
+  )
+  @mutation_ops ~w(create patch delete duplicate claim release)
 
   @uuid_re ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-  @color_re ~r/^#[0-9a-fA-F]{6}$/
   @url_re ~r/^https?:\/\//i
-  @peer_id_re ~r/^[A-Za-z0-9]{10,128}$/
   @illegal_file_chars ~r/[\\\/:*?"<>|]/
   @leading_dots ~r/^\.+/
   @trailing_dots_and_spaces ~r/[ .]+$/
@@ -40,7 +38,7 @@ defmodule ProtoServer.Protocol do
                 |> Map.new()
   @base32_alphabet "abcdefghijklmnopqrstuvwxyz234567"
 
-  @type parse_result :: {:ok, map()} | :error | {:unsupported, binary()}
+  @type parse_result :: {:ok, map()} | :error | {:legacy, binary()}
 
   @spec parse(binary()) :: parse_result()
   def parse(text) when is_binary(text) do
@@ -55,12 +53,6 @@ defmodule ProtoServer.Protocol do
   @spec encode(map()) :: binary()
   def encode(message), do: Jason.encode!(message)
 
-  @doc """
-  Trim and truncate a display name to 24 characters.
-
-  Non-strings become an empty name and therefore fall back to
-  `"Guest-" <> fallback_suffix`.
-  """
   @spec sanitize_name(term(), binary()) :: binary()
   def sanitize_name(raw, fallback_suffix) when is_binary(raw) do
     name = raw |> String.trim() |> String.slice(0, @max_name_length)
@@ -74,9 +66,6 @@ defmodule ProtoServer.Protocol do
 
   def sanitize_name(_raw, fallback_suffix), do: "Guest-" <> to_string(fallback_suffix)
 
-  @doc """
-  Make a file name safe for download while preserving a known extension.
-  """
   @spec sanitize_file_name(term(), binary()) :: binary()
   def sanitize_file_name(raw, fallback \\ "file")
 
@@ -99,9 +88,6 @@ defmodule ProtoServer.Protocol do
 
   def sanitize_file_name(_raw, fallback), do: fallback
 
-  @doc """
-  Validate and normalize a UnixFS CID (dag-pb or raw, sha2-256).
-  """
   @spec normalize_cid(term()) :: binary() | :error
   def normalize_cid(value) when is_binary(value) do
     if value == "" or String.length(value) > @max_cid_length do
@@ -125,343 +111,268 @@ defmodule ProtoServer.Protocol do
 
   def normalize_cid(_), do: :error
 
-  defp parse_message(%{"type" => type}) when is_binary(type) and type in @crdt_types do
-    {:unsupported, type}
+  defp parse_message(%{"type" => type}) when is_binary(type) and type in @legacy_types do
+    {:legacy, type}
   end
 
-  defp parse_message(%{"type" => "join"} = message) do
-    name =
-      case Map.get(message, "name") do
-        name when is_binary(name) -> name
-        _ -> ""
-      end
+  defp parse_message(%{"type" => "space_join"} = message) do
+    name = Map.get(message, "name")
+    template_id = Map.get(message, "templateId")
+    schema_version = Map.get(message, "schemaVersion")
+    session_id = Map.get(message, "sessionId")
 
-    {:ok, %{"type" => "join", "name" => name}}
-  end
+    if is_binary(name) and is_binary(template_id) and is_number(schema_version) and
+         (is_nil(session_id) or is_binary(session_id)) do
+      result = %{
+        "type" => "space_join",
+        "name" => name,
+        "templateId" => template_id,
+        "schemaVersion" => schema_version
+      }
 
-  defp parse_message(%{"type" => "pose"} = message) do
-    case parse_pose(Map.get(message, "pose")) do
-      {:ok, pose} -> {:ok, %{"type" => "pose", "pose" => pose}}
-      :error -> :error
+      {:ok, if(is_binary(session_id), do: Map.put(result, "sessionId", session_id), else: result)}
+    else
+      :error
     end
   end
 
-  defp parse_message(%{"type" => type} = message) when type in @id_types do
-    case parse_object_id(Map.get(message, "id")) do
-      {:ok, id} -> {:ok, %{"type" => type, "id" => id}}
-      :error -> :error
-    end
-  end
+  defp parse_message(%{"type" => "space_query"} = message) do
+    request_id = Map.get(message, "requestId")
+    filter = Map.get(message, "filter", %{})
+    limit = Map.get(message, "limit", 100)
 
-  defp parse_message(%{"type" => "video_control"} = message) do
-    id = parse_object_id(Map.get(message, "id"))
-    playing = Map.get(message, "playing")
-    time = Map.get(message, "time")
-
-    if match?({:ok, _}, id) and is_boolean(playing) and is_number(time) and time >= 0 and
-         time <= 24 * 60 * 60 do
-      {:ok, id} = id
-
+    if is_binary(request_id) and is_map(filter) and is_number(limit) do
       {:ok,
        %{
-         "type" => "video_control",
-         "id" => id,
-         "playing" => playing,
-         "time" => time
+         "type" => "space_query",
+         "requestId" => request_id,
+         "filter" => filter,
+         "limit" => limit
        }}
     else
       :error
     end
   end
 
-  defp parse_message(%{"type" => "move_object"} = message) do
-    id = parse_object_id(Map.get(message, "id"))
-    placement = parse_placement(message)
-    scale = Map.get(message, "scale")
+  defp parse_message(%{"type" => "space_subscribe"} = message) do
+    subscription_id = Map.get(message, "subscriptionId")
+    filter = Map.get(message, "filter", %{})
 
-    scale_valid? =
-      not Map.has_key?(message, "scale") or
-        (is_number(scale) and scale >= @min_object_scale and scale <= @max_object_scale)
-
-    if match?({:ok, _}, id) and match?({:ok, _}, placement) and scale_valid? do
-      {:ok, id} = id
-      {:ok, placement} = placement
-
-      result =
-        placement
-        |> Map.put("type", "move_object")
-        |> Map.put("id", id)
-
-      result =
-        if Map.has_key?(message, "scale"), do: Map.put(result, "scale", scale), else: result
-
-      {:ok, result}
+    if is_binary(subscription_id) and is_map(filter) do
+      {:ok,
+       %{
+         "type" => "space_subscribe",
+         "subscriptionId" => subscription_id,
+         "filter" => filter
+       }}
     else
       :error
     end
   end
 
-  defp parse_message(%{"type" => "place_url"} = message) do
-    with {:ok, placement} <- parse_placement(message),
-         url when is_binary(url) <- Map.get(message, "url"),
-         true <- String.length(url) >= 1 and String.length(url) <= @max_url_length,
-         true <- Regex.match?(@url_re, url) do
-      placement
-      |> Map.put("type", "place_url")
-      |> Map.put("url", url)
-      |> put_object_id(message)
+  defp parse_message(%{"type" => "space_unsubscribe"} = message) do
+    subscription_id = Map.get(message, "subscriptionId")
+
+    if is_binary(subscription_id) do
+      {:ok, %{"type" => "space_unsubscribe", "subscriptionId" => subscription_id}}
+    else
+      :error
+    end
+  end
+
+  defp parse_message(%{"type" => "space_mutate"} = message) do
+    case parse_mutation(Map.get(message, "mutation")) do
+      {:ok, mutation} -> {:ok, %{"type" => "space_mutate", "mutation" => mutation}}
+      :error -> :error
+    end
+  end
+
+  defp parse_message(%{"type" => "space_import_url"} = message) do
+    command_id = Map.get(message, "commandId")
+    entity_id = Map.get(message, "entityId")
+    url = Map.get(message, "url")
+    position = Map.get(message, "position")
+    yaw = Map.get(message, "yaw")
+    pitch = Map.get(message, "pitch")
+
+    with {:ok, command_id} <- parse_uuid(command_id),
+         {:ok, entity_id} <- parse_uuid(entity_id),
+         true <- is_binary(url) and String.length(url) >= 1 and String.length(url) <= @max_url_length,
+         true <- Regex.match?(@url_re, url),
+         true <- finite_vec3?(position),
+         true <- is_number(yaw),
+         true <- is_nil(pitch) or is_number(pitch) do
+      result = %{
+        "type" => "space_import_url",
+        "commandId" => command_id,
+        "entityId" => entity_id,
+        "url" => url,
+        "position" => position,
+        "yaw" => yaw
+      }
+
+      {:ok, if(is_number(pitch), do: Map.put(result, "pitch", pitch), else: result)}
     else
       _ -> :error
     end
   end
 
-  defp parse_message(%{"type" => "place_box"} = message) do
-    with {:ok, placement} <- parse_placement(message),
-         size when is_number(size) <- Map.get(message, "size"),
-         true <- size >= @min_object_size and size <= @max_object_size,
-         color when is_binary(color) <- Map.get(message, "color"),
-         true <- Regex.match?(@color_re, color) do
-      placement
-      |> Map.put("type", "place_box")
-      |> Map.put("size", size)
-      |> Map.put("color", color)
-      |> put_object_id(message)
+  defp parse_message(%{"type" => "space_set_avatar"} = message) do
+    command_id = Map.get(message, "commandId")
+    cid = Map.get(message, "cid")
+
+    with true <- Map.has_key?(message, "cid"),
+         {:ok, command_id} <- parse_uuid(command_id),
+         {:ok, cid} <- parse_nullable_cid(cid) do
+      {:ok, %{"type" => "space_set_avatar", "commandId" => command_id, "cid" => cid}}
     else
       _ -> :error
     end
   end
 
-  defp parse_message(%{"type" => "place_image"} = message) do
-    cid = normalize_cid(Map.get(message, "cid"))
-    placement = parse_placement(message)
-    width = Map.get(message, "width")
-    height = Map.get(message, "height")
+  defp parse_message(%{"type" => "file_request"} = message) do
+    command_id = Map.get(message, "commandId")
+    entity_id = Map.get(message, "entityId")
 
-    if is_binary(cid) and match?({:ok, _}, placement) and object_size?(width) and
-         object_size?(height) do
-      {:ok, placement} = placement
-
-      result =
-        placement
-        |> Map.put("type", "place_image")
-        |> Map.put("cid", cid)
-        |> Map.put("width", width)
-        |> Map.put("height", height)
-
-      result =
-        case Map.get(message, "name") do
-          name when is_binary(name) ->
-            sanitized = sanitize_file_name(name, "")
-
-            if sanitized == "" do
-              result
-            else
-              Map.put(result, "name", sanitized)
-            end
-
-          _ ->
-            result
-        end
-
-      put_object_id(result, message)
+    with {:ok, command_id} <- parse_uuid(command_id),
+         {:ok, entity_id} <- parse_uuid(entity_id) do
+      {:ok, %{"type" => "file_request", "commandId" => command_id, "entityId" => entity_id}}
     else
-      :error
-    end
-  end
-
-  defp parse_message(%{"type" => "place_file"} = message) do
-    cid = normalize_cid(Map.get(message, "cid"))
-    placement = parse_placement(message)
-
-    if is_binary(cid) and match?({:ok, _}, placement) do
-      {:ok, placement} = placement
-
-      placement
-      |> Map.put("type", "place_file")
-      |> Map.put("cid", cid)
-      |> Map.put("name", sanitize_file_name(Map.get(message, "name"), "file"))
-      |> put_object_id(message)
-    else
-      :error
-    end
-  end
-
-  defp parse_message(%{"type" => "ipfs_peer"} = message) do
-    case Map.get(message, "peerId") do
-      peer_id when is_binary(peer_id) ->
-        if Regex.match?(@peer_id_re, peer_id) do
-          {:ok, %{"type" => "ipfs_peer", "peerId" => peer_id}}
-        else
-          :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parse_message(%{"type" => "set_avatar"} = message) do
-    case Map.fetch(message, "cid") do
-      {:ok, nil} ->
-        {:ok, %{"type" => "set_avatar", "cid" => nil}}
-
-      {:ok, cid} ->
-        case normalize_cid(cid) do
-          cid when is_binary(cid) -> {:ok, %{"type" => "set_avatar", "cid" => cid}}
-          :error -> :error
-        end
-
-      :error ->
-        :error
+      _ -> :error
     end
   end
 
   defp parse_message(_), do: :error
 
-  defp parse_pose(pose) when is_map(pose) do
-    position = Map.get(pose, "position")
-    head = Map.get(pose, "head")
+  defp parse_mutation(mutation) when is_map(mutation) do
+    command_id = Map.get(mutation, "commandId")
+    op = Map.get(mutation, "op")
 
-    cond do
-      not finite_array?(position, 3) ->
-        :error
-
-      not finite_array?(head, 4) ->
-        :error
-
-      Enum.any?(position, &(abs(&1) > @max_abs_position)) ->
-        :error
-
-      not optional_number?(pose, "crouch") ->
-        :error
-
-      not optional_number?(pose, "lean") ->
-        :error
-
-      true ->
-        case normalize_quaternion(head) do
-          {:ok, quaternion} ->
-            result = %{"position" => position, "head" => quaternion}
-
-            result =
-              if Map.has_key?(pose, "crouch") do
-                Map.put(result, "crouch", clamp(Map.get(pose, "crouch"), 0, 1))
-              else
-                result
-              end
-
-            result =
-              if Map.has_key?(pose, "lean") do
-                Map.put(result, "lean", clamp(Map.get(pose, "lean"), -1, 1))
-              else
-                result
-              end
-
-            {:ok, result}
-
-          :error ->
-            :error
-        end
+    with {:ok, command_id} <- parse_uuid(command_id),
+         true <- op in @mutation_ops do
+      parse_mutation_op(op, command_id, mutation)
+    else
+      _ -> :error
     end
   end
 
-  defp parse_pose(_), do: :error
+  defp parse_mutation(_mutation), do: :error
 
-  defp parse_placement(message) when is_map(message) do
-    position = Map.get(message, "position")
-    yaw = Map.get(message, "yaw")
+  defp parse_mutation_op("create", command_id, mutation) do
+    entity_id = Map.get(mutation, "entityId")
+    dimensions = Map.get(mutation, "dimensions")
 
-    cond do
-      not finite_array?(position, 3) ->
-        :error
-
-      Enum.any?(position, &(abs(&1) > @max_abs_position)) ->
-        :error
-
-      not is_number(yaw) ->
-        :error
-
-      not optional_number?(message, "pitch") ->
-        :error
-
-      true ->
-        result = %{"position" => position, "yaw" => yaw}
-
-        result =
-          if Map.has_key?(message, "pitch") do
-            Map.put(result, "pitch", Map.get(message, "pitch"))
-          else
-            result
-          end
-
-        {:ok, result}
+    with {:ok, entity_id} <- parse_uuid(entity_id),
+         true <- is_map(dimensions) do
+      {:ok,
+       %{
+         "commandId" => command_id,
+         "op" => "create",
+         "entityId" => entity_id,
+         "dimensions" => dimensions
+       }}
+    else
+      _ -> :error
     end
   end
 
-  defp parse_placement(_), do: :error
+  defp parse_mutation_op("patch", command_id, mutation) do
+    entity_id = Map.get(mutation, "entityId")
+    set = Map.get(mutation, "set", %{})
+    unset = Map.get(mutation, "unset", [])
+    conditions = Map.get(mutation, "if", [])
+    if_version = Map.get(mutation, "ifVersion")
 
-  defp parse_object_id(value) when is_binary(value) do
+    with {:ok, entity_id} <- parse_uuid(entity_id),
+         true <- is_map(set),
+         true <- is_list(unset) and Enum.all?(unset, &is_binary/1),
+         true <- is_list(conditions),
+         true <- is_nil(if_version) or is_number(if_version) do
+      result = %{
+        "commandId" => command_id,
+        "op" => "patch",
+        "entityId" => entity_id,
+        "set" => set,
+        "unset" => unset,
+        "if" => conditions
+      }
+
+      {:ok, if(is_number(if_version), do: Map.put(result, "ifVersion", if_version), else: result)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_mutation_op("delete", command_id, mutation) do
+    entity_id = Map.get(mutation, "entityId")
+    conditions = Map.get(mutation, "if", [])
+    if_version = Map.get(mutation, "ifVersion")
+
+    with {:ok, entity_id} <- parse_uuid(entity_id),
+         true <- is_list(conditions),
+         true <- is_nil(if_version) or is_number(if_version) do
+      result = %{
+        "commandId" => command_id,
+        "op" => "delete",
+        "entityId" => entity_id,
+        "if" => conditions
+      }
+
+      {:ok, if(is_number(if_version), do: Map.put(result, "ifVersion", if_version), else: result)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_mutation_op("duplicate", command_id, mutation) do
+    entity_id = Map.get(mutation, "entityId")
+    new_entity_id = Map.get(mutation, "newEntityId")
+
+    with {:ok, entity_id} <- parse_uuid(entity_id),
+         {:ok, new_entity_id} <- parse_uuid(new_entity_id) do
+      {:ok,
+       %{
+         "commandId" => command_id,
+         "op" => "duplicate",
+         "entityId" => entity_id,
+         "newEntityId" => new_entity_id
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_mutation_op(op, command_id, mutation) when op in ["claim", "release"] do
+    entity_id = Map.get(mutation, "entityId")
+
+    with {:ok, entity_id} <- parse_uuid(entity_id) do
+      {:ok, %{"commandId" => command_id, "op" => op, "entityId" => entity_id}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_uuid(value) when is_binary(value) do
     if Regex.match?(@uuid_re, value), do: {:ok, value}, else: :error
   end
 
-  defp parse_object_id(_), do: :error
+  defp parse_uuid(_value), do: :error
 
-  defp put_object_id(result, message) do
-    case Map.fetch(message, "objectId") do
-      :error ->
-        {:ok, result}
+  defp parse_nullable_cid(nil), do: {:ok, nil}
 
-      {:ok, value} ->
-        case parse_object_id(value) do
-          {:ok, id} -> {:ok, Map.put(result, "objectId", id)}
-          :error -> :error
-        end
+  defp parse_nullable_cid(value) do
+    case normalize_cid(value) do
+      cid when is_binary(cid) -> {:ok, cid}
+      :error -> :error
     end
   end
 
-  defp finite_array?(value, length) when is_list(value) do
-    length(value) == length and Enum.all?(value, &is_number/1)
+  defp finite_vec3?(value) when is_list(value) do
+    length(value) == 3 and Enum.all?(value, &is_number/1) and
+      Enum.all?(value, &(abs(&1) <= @max_abs_position))
   end
 
-  defp finite_array?(_value, _length), do: false
-
-  defp optional_number?(map, key) do
-    not Map.has_key?(map, key) or is_number(Map.get(map, key))
-  end
-
-  defp object_size?(value) do
-    is_number(value) and value >= @min_object_size and value <= @max_object_size
-  end
-
-  defp clamp(value, minimum, maximum) do
-    value |> Kernel.max(minimum) |> Kernel.min(maximum)
-  end
-
-  defp normalize_quaternion([x, y, z, w]) do
-    values = [x, y, z, w]
-    max_abs = values |> Enum.map(&abs/1) |> Enum.max()
-
-    if max_abs == 0 do
-      :error
-    else
-      scaled_square =
-        Enum.reduce(values, 0.0, fn value, acc ->
-          scaled = value / max_abs
-          acc + scaled * scaled
-        end)
-
-      scaled_length = :math.sqrt(scaled_square)
-
-      length_ok? =
-        max_abs >= 1.0e-6 or max_abs * scaled_length >= 1.0e-6
-
-      if length_ok? do
-        {:ok, Enum.map(values, fn value -> value / max_abs / scaled_length end)}
-      else
-        :error
-      end
-    end
-  end
+  defp finite_vec3?(_value), do: false
 
   defp nfc(value) do
     case :unicode.characters_to_nfc_binary(value) do
@@ -549,16 +460,13 @@ defmodule ProtoServer.Protocol do
          true <- hash_code == @hash_sha2_256,
          true <- digest_length == 32,
          <<digest::binary-size(32)>> <- rest do
-      canonical =
-        "b" <>
-          base32_encode(
-            encode_varint(version) <>
-              encode_varint(codec) <>
-              encode_varint(hash_code) <>
-              encode_varint(digest_length) <> digest
-          )
-
-      canonical
+      "b" <>
+        base32_encode(
+          encode_varint(version) <>
+            encode_varint(codec) <>
+            encode_varint(hash_code) <>
+            encode_varint(digest_length) <> digest
+        )
     else
       _ -> :error
     end
