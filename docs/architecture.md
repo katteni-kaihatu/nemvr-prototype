@@ -21,7 +21,7 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 ## 1. 方針
 
 - **簡素さ最優先**。プロトタイプなので、認証・永続化・スケールアウト・最適化は行わない。
-- **ブラウザだけで動く** (Three.js / React Three Fiber)。WebXR は後続フェーズで追加する。
+- **ネイティブアプリとして動く** (Rust / Bevy)。PC VR (OpenXR) は後続フェーズで追加する。
 - **サーバーは薄いリレー**。ワールドの状態は「接続中ユーザーの姿勢」と「置かれたオブジェクト」だけをメモリに持つ。
 - **IPFS は外部の Kubo に委譲する**。サーバーは Kubo の HTTP API / ゲートウェイを使い、libp2p / bitswap / pin / blockstore は持たない。
 - クライアント / サーバー間で **型を共有** し、プロトコルの不整合を防ぐ。
@@ -51,11 +51,11 @@ WebXR / VR コントローラ、ボイスチャット、ファイルのプレビ
 
 ```mermaid
 graph LR
-    subgraph Browser A
-        CA[client<br/>Vite + R3F + Helia]
+    subgraph Native A
+        CA[client<br/>Rust + Bevy + rust-ipfs]
     end
-    subgraph Browser B
-        CB[client<br/>Vite + R3F + Helia]
+    subgraph Native B
+        CB[client<br/>Rust + Bevy + rust-ipfs]
     end
     subgraph Server
         S["proto-server<br/>Elixir/OTP (Cowboy)<br/>Space.Store / Reader / Writer / Content / Queue / Place / Ipfs"]
@@ -68,31 +68,30 @@ graph LR
     CB <-->|WebSocket / JSON| S
     S -->|"Kubo HTTP API"| K
     S -->|"Gateway (Range)"| K
-    CA <-->|"libp2p WebSocket<br/>bitswap"| K
-    CB <-->|"libp2p WebSocket<br/>bitswap"| K
-    CA <-.->|WebRTC (直接)<br/>bitswap| CB
+    CA <-->|"libp2p TCP 4001<br/>bitswap"| K
+    CB <-->|"libp2p TCP 4001<br/>bitswap"| K
 ```
 
 - クライアントは自分の姿勢を一定間隔でサーバーに送る。
 - サーバーは全員の姿勢をまとめて (スナップショット) 一定間隔で全員に配信する。
 - クライアントは受信した他人の姿勢を補間して描画する。自分自身はローカルで即時反映する。
 - 画像・ファイルは Kubo が持つ IPFS ノードで共有する。ワールドの同期 (WebSocket) には CID だけを載せ、
-  本体は libp2p の bitswap で取得する。取得元は Kubo (常時接続・pin 済み) と、直接つながった他のブラウザ (WebRTC)。
-- サーバーは Kubo の peer ID を `space_welcome.ipfs` でクライアントに伝える。クライアントは `IPFS_PUBLIC_PORT`
-  (開発 8081 / 開発 VPS 8443) と組み合わせて接続先を組み立てる。
+  本体は libp2p の bitswap で取得する。取得元は Kubo (常時接続・pin 済み)。
+- サーバーは Kubo の peer ID を `space_welcome.ipfs` でクライアントに伝える。ネイティブクライアントは
+  ホスト名を解決し、TCP 4001 の swarm を優先して接続する。WebSocket 経路も候補に残す。
 
 ## 4. 技術選定
 
 | 領域 | 採用 | 理由 |
 |---|---|---|
-| 言語 (client) | TypeScript | 共有型と UI / 3D を同じ言語で扱う |
+| 言語 (client) | Rust | Bevy ECS と描画・入力・IPFS を 1 プロセスで扱う |
 | 言語 (server) | Elixir / OTP | 軽量プロセスと supervision で、接続ごとの状態と障害分離を素直に書ける |
 | パッケージ管理 | pnpm workspace | 共有パッケージを簡単に扱える |
-| クライアント | Vite + React + three + @react-three/fiber + @react-three/drei | 宣言的な 3D、開発サイクルが速い |
-| XR (後続) | @react-three/xr | WebXR のラッパー |
+| クライアント | Bevy 0.19 + rust-ipfs | ECS / 描画 / 入力 / XR を同じ実行モデルで扱える |
+| XR (後続) | bevy_mod_openxr + OpenXR | PC VR のネイティブ経路 |
 | サーバー | Elixir/OTP + Cowboy | HTTP と WebSocket を 1 リスナーで扱う。GenServer で Space.Store / Content などを分離 |
 | メッセージ形式 | JSON | デバッグ容易。必要になったらバイナリ化 |
-| 画像の共有 | IPFS (Kubo + ブラウザの Helia + libp2p) | 内容アドレス (CID) で扱い、ブラウザ同士 (WebRTC) でも配れる |
+| 画像の共有 | IPFS (Kubo + ネイティブ rust-ipfs + libp2p) | 内容アドレス (CID) で扱い、クライアント間 / Kubo 間で配れる |
 | サーバーの IPFS 境界 | Kubo HTTP API + Gateway | サーバーの再起動で blockstore / pin / peer ID を失わない。API は localhost に閉じる |
 
 > Node / pnpm のバージョンは実装着手時に確認して `package.json` の `engines` に記載する。
@@ -104,8 +103,12 @@ graph LR
 ├─ package.json
 ├─ pnpm-workspace.yaml
 ├─ flake.nix            # Elixir / Kubo / Node / pnpm の開発シェル
+├─ Cargo.toml           # Rust workspace
+├─ crates/space-protocol/ # space v2 の型・スキーマ・fixture
 ├─ scripts/
-│  └─ smoke-ws.mjs      # Kubo なしでも動く WS / media の smoke test
+│  ├─ smoke-ws.mjs      # Kubo なしでも動く WS / media の smoke test
+│  ├─ e2e-client.mjs    # 2 つのネイティブ headless クライアント
+│  └─ package-*.sh      # AppImage / Windows zip
 ├─ docs/
 │  ├─ architecture.md   # このファイル
 │  ├─ design.md         # プロトコル・同期・シーンの詳細設計
@@ -117,7 +120,7 @@ graph LR
 │  └─ world-sync/       # (削除済み) 旧 CRDT 実験
 ├─ apps/
 │  ├─ server/           # Elixir/OTP サーバー (mix.exs / lib / test / config)
-│  └─ client/           # Vite + R3F クライアント
+│  └─ client/           # Rust + Bevy クライアント
 └─ deploy/              # VPS 構築・デプロイスクリプト
 ```
 
@@ -136,18 +139,19 @@ graph LR
 
 ### client (`apps/client`)
 
-- 入室画面 (名前入力) → 3D シーン。
-- `SpaceReader` でエンティティを購読し、`SpaceWriter` で操作を送る。
-- `vr-sns-3d@1` 写像が `space.*` / `content.*` / `peer.*` を既存の `WorldObject` / `PeerState` に変換する。
+- 入室画面 (名前・サーバー URL) → 3D シーン。
+- `SpaceStore` でエンティティを購読し、`SpaceWriter` 相当のメッセージで操作を送る。
+- `vr-sns-3d@1` 写像が `space.*` / `content.*` / `peer.*` を `WorldObject` / `PeerInfo` に変換する。
 - ローカルプレイヤーの入力処理と移動 (クライアント権威)。姿勢は自分の peer エンティティへの patch として 20Hz で送る。
-- ブラウザ内で Helia ノードを動かし、Kubo (と他のブラウザ) に接続する。
-- 画像・ファイルのドロップ、つかむ・移動・複製・削除、動画再生、URL 取り込みを Writer 経由で行う。
+- 別スレッドの rust-ipfs ノードで Kubo に接続し、UnixFS / bitswap でコンテンツを追加・取得する。
+- 画像・ファイルのドロップ、つかむ・移動・複製・削除、ダウンロードを Writer 経由で行う。
+  URL 取り込み・動画・VRM・XR は後続。
 
 ### Kubo
 
 - libp2p ノード、blockstore、pin、bitswap、circuit relay を持つ。
 - API は `127.0.0.1:5001`、ゲートウェイは `127.0.0.1:8082`、libp2p は `0.0.0.0:4001` と `0.0.0.0:8081/ws`。
-- ブラウザは Caddy の `:8443` 経由で libp2p WebSocket に接続する。
+- ネイティブクライアントは Kubo の TCP 4001 に接続する。Caddy の `:8443` は WebSocket 経路のフォールバック。
 - API は絶対に外部公開しない。
 
 ### protocol (`packages/protocol`)
@@ -155,6 +159,9 @@ graph LR
 - client / server 間のメッセージ型と定数 (送信間隔など) を定義する。
 
 ## 7. 設計上の判断
+
+> 7 節以降の WebRTC / Helia / ブラウザ前提の記述は、Web クライアント時代の設計判断と経緯である。
+> 現在のネイティブクライアントは Kubo の TCP 4001 に接続し、ブラウザ間 WebRTC は使わない。
 
 | 判断 | 内容 | 理由 / トレードオフ |
 |---|---|---|

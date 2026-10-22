@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Proto SNS</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: #121c21;
+        --text: #e6f0f3;
+        --muted: #9fb0b8;
+        --accent: #38a77a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 30% 10%, #163039, var(--bg) 60%);
+        color: var(--text);
+        font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif;
+        padding: 24px;
+      }
+      main {
+        width: min(680px, 100%);
+        background: var(--panel);
+        border: 1px solid #26353c;
+        border-radius: 18px;
+        padding: 28px;
+      }
+      h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: 0.02em; }
+      p { color: var(--muted); line-height: 1.7; }
+      code, .url {
+        display: block;
+        padding: 10px 12px;
+        background: #0b1418;
+        border: 1px solid #2c3d45;
+        border-radius: 8px;
+        color: #b9efd7;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .grid { display: grid; gap: 12px; margin-top: 18px; }
+      a.button {
+        display: block;
+        padding: 14px 16px;
+        border-radius: 10px;
+        background: var(--accent);
+        color: #04120c;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      a.secondary {
+        background: #26353c;
+        color: var(--text);
+      }
+      .small { font-size: 12px; color: var(--muted); margin-top: 18px; }
+      h2 { font-size: 15px; margin: 24px 0 6px; color: #cfe0e6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Proto SNS</h1>
+      <p>
+        ネイティブ Bevy クライアントで接続する開発用 VR SNS プロトタイプです。
+        Linux / Windows のクライアントをダウンロードできます。
+      </p>
+
+      <h2>接続先</h2>
+      <code class="url" id="ws">wss://HOST/ws</code>
+      <p class="small">
+        クライアントの Lobby の「サーバー」欄にこの URL を入力してください。
+      </p>
+
+      <h2>ダウンロード</h2>
+      <div class="grid">
+        <a class="button" href="downloads/ProtoSNS-x86_64.AppImage">
+          Linux (AppImage, x86_64)
+        </a>
+        <a class="button secondary" href="downloads/ProtoSNS-windows-x86_64.zip">
+          Windows (zip, x86_64)
+        </a>
+      </div>
+
+      <p class="small">
+        コード署名はしていません。Linux は Vulkan ドライバ、Windows は
+        Vulkan または DirectX 12 のドライバが必要です。
+        詳細はリポジトリの docs/packaging.md を参照してください。
+      </p>
+    </main>
+    <script>
+      document.getElementById("ws").textContent =
+        `wss://${location.hostname}/ws`;
+    </script>
+  </body>
+</html>

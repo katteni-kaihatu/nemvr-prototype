@@ -1,0 +1,9 @@
+Migu 1M
+=======
+
+This application bundles `migu-1m-regular.ttf` for Japanese UI text.
+
+The font is distributed under the IPA Font License 1.0.
+See https://moji.or.jp/ipafont/ipa/ipa01/ for the license text.
+
+Migu is based on the IPAex Font / IPA Font series.

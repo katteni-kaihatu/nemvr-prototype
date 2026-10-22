@@ -1,0 +1,59 @@
+{
+  "type": "space_welcome",
+  "self": {
+    "peerId": "peer-self",
+    "entityId": "peer-self",
+    "name": "alice",
+    "color": "#e57373"
+  },
+  "sessionId": "main",
+  "templateId": "vr-sns-3d",
+  "schemaVersion": 1,
+  "scope": {
+    "sessionId": "main",
+    "read": {
+      "dims": ["entity.kind", "space.position", "space.yaw"],
+      "filter": { "all": [{ "dim": "session.id", "eq": "main" }] }
+    },
+    "write": {
+      "dims": ["space.position", "space.head", "space.crouch", "space.lean"],
+      "filter": { "all": [{ "dim": "session.id", "eq": "main" }] },
+      "canCreate": true,
+      "canDelete": true,
+      "maxEntities": 100
+    }
+  },
+  "dimensions": {},
+  "subscriptionId": "sub-1",
+  "version": 10,
+  "seq": 10,
+  "at": 1700000000000,
+  "entities": [
+    {
+      "id": "peer-self",
+      "version": 3,
+      "dimensions": {
+        "entity.kind": "peer",
+        "session.id": "main",
+        "space.position": [0, 0, 0],
+        "space.head": [0, 0, 0, 1],
+        "peer.name": "alice",
+        "peer.color": "#e57373"
+      }
+    },
+    {
+      "id": "box-1",
+      "version": 2,
+      "dimensions": {
+        "entity.kind": "box",
+        "session.id": "main",
+        "space.position": [1, 0, -2],
+        "space.yaw": 0.5,
+        "box.size": 1,
+        "box.color": "#4a5a4a"
+      }
+    }
+  ],
+  "ipfs": { "peerId": "kubo-peer", "wsPort": 8081 },
+  "tickRate": 20
+}

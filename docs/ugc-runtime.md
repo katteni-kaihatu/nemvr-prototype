@@ -30,25 +30,25 @@ UGCの振る舞いをElixirで記述し、クライアントとサーバーに�
 
 ### 現状からの差分
 
-現在はReact / Three.js / TypeScriptのWebクライアントと、Elixir/OTP（Cowboy）+ TypeScriptクライアントで構成される。space v2の次元エンティティ、Reader / Writer、ケーパビリティの基盤はあるが、スクリプト添付、WASM実行基盤、プログラム用Reader / Writer、プログラムへのインターネット接続、UGC用権限モデルは存在しない。本提案のBehaviorやcomponentは追加設計である。UGCプログラムをWASM実行環境で動かすという要件は `docs/n-dim-client-original.md` を正とする。
+現在はRust / Bevyのネイティブクライアントと、Elixir/OTP（Cowboy）サーバーで構成される。space v2の次元エンティティ、Reader / Writer、ケーパビリティの基盤はあるが、スクリプト添付、WASM実行基盤、プログラム用Reader / Writer、プログラムへのインターネット接続、UGC用権限モデルは存在しない。本提案のBehaviorやcomponentは追加設計である。UGCプログラムをWASM実行環境で動かすという要件は `docs/n-dim-client-original.md` を正とする。
 
 既存の同期モードには次の違いがある。
 
 | 項目 | 既定のlegacy | 実験用`crdt-v1` |
 | --- | --- | --- |
-| オブジェクト状態 | サーバーメモリ内で管理 | ブラウザ・サーバーのYjs文書 |
+| オブジェクト状態 | サーバーメモリ内で管理 | クライアント・サーバーのYjs文書 (実験当時) |
 | つかみの競合 | サーバーで排他 | 期限付きのadvisory claim。厳密な分散ロックではない |
 | 永続化 | 再起動で消失 | 文書をIndexedDB / サーバーファイルへ保存 |
 | UGC確定状態の用途 | 新しい認可・保存経路が必要 | 生のYjs更新をそのまま権威ある状態に使えない |
 
 表示名による参加のみでアカウント認証はなく、現状のつかみ排他は永続的な所有権・編集権限ではない。公開UGCを有効化する前に、認証済みセッション、ワールド管理者、パッケージ公開者、entity単位の認可を追加する必要がある。既存の少人数・信頼グループ向け実験を、そのまま公開マルチテナント基盤とみなさない。
 
-IPFS / Heliaは引き続きコンテンツの配布に使える。パッケージもCIDで運べるが、CIDは内容の識別・検証であり、作者の認証や実行許可ではない。既存のメディア用Service WorkerをUGCの実行環境として転用しない。
+IPFS (Kubo / rust-ipfs) は引き続きコンテンツの配布に使える。パッケージもCIDで運べるが、CIDは内容の識別・検証であり、作者の認証や実行許可ではない。動画再生用のメディア経路 (将来実装) をUGCの実行環境として転用しない。
 
 導入時の主な接続先:
 
-- `apps/client/src/world/World.tsx`: オブジェクトへのBehavior添付と、ホスト側effectの反映。描画コードをUGCへ渡さない。
-- `apps/client/src/net/connection.ts` / `crdt.ts`: モードごとのUGC transport adapter。姿勢同期・既存編集とはメッセージを分離する。
+- `apps/client/src/world/`: オブジェクトへのBehavior添付と、ホスト側effectの反映。描画コードをUGCへ渡さない。
+- `apps/client/src/net/`: UGC transport adapter。姿勢同期・既存編集とはメッセージを分離する。
 - `apps/server/lib/proto_server/space/store.ex`: UGC更新要求とStoreの整合。認可は新規に追加する。
 - `apps/server/lib/proto_server/space/writer.ex`: UGCプログラム用のWriterスコープとcommand検証を追加する。
 - `packages/protocol/src/index.ts`: バージョン付きUGCメッセージの型と上限。Elixir側でも実行時検証する。

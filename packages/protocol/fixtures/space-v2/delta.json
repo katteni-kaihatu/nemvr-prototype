@@ -1,0 +1,29 @@
+{
+  "type": "space_delta",
+  "subscriptionId": "sub-1",
+  "version": 11,
+  "seq": 11,
+  "at": 1700000000050,
+  "changes": [
+    {
+      "op": "upsert",
+      "entity": {
+        "id": "peer-self",
+        "version": 4,
+        "dimensions": {
+          "entity.kind": "peer",
+          "session.id": "main",
+          "space.position": [0.1, 0, -0.2],
+          "space.head": [0, 0.04997917, 0, 0.99875027],
+          "peer.name": "alice",
+          "peer.color": "#e57373"
+        }
+      }
+    },
+    {
+      "op": "remove",
+      "id": "box-1",
+      "version": 5
+    }
+  ]
+}

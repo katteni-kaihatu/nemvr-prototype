@@ -14,7 +14,7 @@
 #   - ファイアウォール (22, 80, 443, 8443, 4001, 3478, TURN の中継ポート範囲のみ許可)
 #
 # 公開構成:
-#   https://$PROTO_HOST/      -> /srv/proto-client (静的ファイル)
+#   https://$PROTO_HOST/      -> /srv/proto-client (ランディング / ダウンロード)
 #   wss://$PROTO_HOST/ws      -> 127.0.0.1:8080 (ワールド同期 / メディア)
 #   https://$PROTO_HOST/media/* -> 127.0.0.1:8080 (Kubo ゲートウェイ経由のストリーミング)
 #   wss://$PROTO_HOST:8443    -> 127.0.0.1:8081 (Kubo の libp2p WebSocket)
@@ -250,7 +250,6 @@ ${PROTO_HOST} {
 	}
 	handle {
 		root * /srv/proto-client
-		try_files {path} /index.html
 		file_server
 	}
 }

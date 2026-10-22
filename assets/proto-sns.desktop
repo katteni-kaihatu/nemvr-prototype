@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Proto SNS
+GenericName=VR Social Prototype
+Comment=Native Bevy client for the Proto SNS prototype
+Exec=proto-client
+Icon=proto-sns
+Terminal=false
+Categories=Network;

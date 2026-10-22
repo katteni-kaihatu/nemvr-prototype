@@ -1,5 +1,11 @@
 # 詳細設計
 
+> **2026-10-22: クライアント移行済み。**
+> Web クライアント (Vite / R3F / Helia / Service Worker) は削除され、現在のクライアントは
+> `apps/client` の Rust / Bevy 実装である。本文中の Helia、Service Worker、ブラウザ内 IPFS、
+> WebRTC、`<video>` に関する記述は移行前の設計経緯として残している。
+> 現行クライアントは rust-ipfs で Kubo の TCP 4001 に接続し、取得失敗時は `/media/<cid>` を使う。
+
 `architecture.md` の構成を前提に、プロトコル・同期・クライアント内部の設計を定める。
 実装中に変更してよい。変更した場合はこのドキュメントを更新する。
 
@@ -333,7 +339,7 @@ sequenceDiagram
 - まだ保持していない映像は、これまでの映像のアイコンのまま (サーバーが保持したら、サムネイルと再生の準備をする)。
 - 音声付きの再生がブラウザに止められた場合は、ミュートで再生して、その旨を知らせる。
 - Service Worker は `public/p2p-media-sw.js` (ビルドで `dist` の直下に置かれる)。登録時に `clients.claim()` で、開いているページも制御する。
-  開発時は Vite が `/media` をサーバーへプロキシする。開発 VPS では Caddy が `/media/*` を `127.0.0.1:8080` へ転送する (`deploy/setup-vps.sh`)。
+  開発時はサーバーが直接 `/media` を返す。開発 VPS では Caddy が `/media/*` を `127.0.0.1:8080` へ転送する (`deploy/setup-vps.sh`)。
 - `<video>` が使う Range 要求に、ブラウザ内の IPFS から答えるために SW を使っている。他のファイルは、これまでどおり IPFS (bitswap) で取得する。
 
 - **再生状態の同期**: サーバーが動画ごとの再生状態 (`VideoPlaybackState { playing, time, at }`) を保持する。リングメニューの再生 / 一時停止は
@@ -549,7 +555,7 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
 ## 9. テスト・検証方針
 
 - server: `mix test` (ExUnit)。Protocol / Space.Schema / Space.Store / Content / Queue / Place / URL 取り込み / Range / MIME の単体テスト。
-- client: 補間 (`interpolation`)、写像 (`projection`)、`SpaceReader` / `SpaceWriter` の単体テスト (Vitest)。
+- native: 補間 (`interpolation`)、写像 (`projection`)、`SpaceStore`、移動・衝突・carry の単体テスト (`cargo test`)。
 - protocol: メッセージ型、space スキーマ、ファイル種別の単体テスト。
 - 結合: `scripts/smoke-ws.mjs` で、Kubo なしでも入室・作成・claim・移動・複製・削除・姿勢・旧プロトコル拒否・`/media` の 404 を確認できる。
 - **開発 VPS での結合テスト**: `nemvr.nemnomi.dev` の VPS は開発・検証環境 (本番ではない)。プロトコル、IPFS/Kubo、
@@ -577,8 +583,8 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
   直近 8 行のログを表示する。ダウンロードの進捗は `updateDownload` で 300 ms 間隔に間引いて更新する。
 - **同期ストレステスト**: `CLIENTS=20 pnpm stress:ws` で、20 クライアントが画像を配置・移動し、
   全員が同じ最終状態を観測できることを確認する (既定 20 クライアント、テスト画像は自動削除)。
-- **ブラウザ E2E は、UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更で必須**。
-  `pnpm e2e:browser` が 2 コンテキストで入室・画像 drop・IPFS 取得・HUD の RTT / 取得元 / ログを検証する。
+- **ネイティブ E2E**: `pnpm e2e:client` が 2 つの headless クライアントで入室・配置・ack を検証する。
+  UI・画像・IPFS・HUD・プロトコルに触れる変更では、AppImage / Windows ビルドでの実機確認も行う。
 - 実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
   (2026-10-21、ローカルの `ipfs daemon --offline`)。開発 VPS の `wss://HOST:8443` 経由の libp2p は Node クライアントで確認済み。
   ブラウザ間の WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。

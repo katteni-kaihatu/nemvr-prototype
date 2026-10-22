@@ -2,6 +2,17 @@ node_modules
 dist
 *.log
 .DS_Store
+
+# Rust / Bevy
+target/
+.proto-client-ipfs/
+result
+
+# Packaging
+.cache/
+*.AppImage
+*.AppImage.sha256
+*.run
 # crdt-v1 の実験用データ (文書・コンテンツ台帳・ブロックストア)
 .crdt-data
 

@@ -1,5 +1,9 @@
 # マイルストーン
 
+> **2026-10-22: Web クライアントは削除済み。** 以下の M0〜M6.5 は Web クライアント時代の履歴。
+> 現在のクライアントは `apps/client` の Rust / Bevy 実装で、M7 で置き換えた。
+> 旧実装は Git の `web-client-final` タグに残している。
+
 各マイルストーンは「動くものが手元にある」状態で終わるように区切る。
 
 ## M0: 土台 (1 人で 3D 空間を歩ける)
@@ -126,3 +130,16 @@ Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置�
 ## 判断メモ
 
 - M1 まで終わった時点で、体感品質 (遅延・滑らかさ) と開発の手応えを見て、M7 以降の優先順位を決める。
+
+## M7: ネイティブクライアント移行 (完了)
+
+- [x] Rust workspace / `crates/space-protocol`
+- [x] WebSocket 入室・再接続・再購読、SpaceStore、投影、補間
+- [x] 移動・衝突・carry・簡易アバター・オブジェクト表示・操作
+- [x] 画像・ファイルの IPFS 共有 (Kubo TCP 4001 / HTTP フォールバック)
+- [x] Linux AppImage / Windows zip
+- [x] Wayland 対応 (libxkbcommon / xkb データ / Vulkan ローダ同梱)
+- [x] 日本語フォントと Lobby の接続先編集・状態表示
+- [x] Web クライアント削除、デプロイをランディング + ダウンロードに変更
+
+**次の M8**: VRM、OpenXR / PC VR、動画、URL 取り込み、鏡。

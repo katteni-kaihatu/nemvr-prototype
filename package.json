@@ -3,18 +3,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter \"./apps/*\" run dev",
+    "dev": "pnpm --filter @proto/server dev",
     "dev:server": "pnpm --filter @proto/server dev",
-    "dev:client": "pnpm --filter @proto/client dev",
-    "build": "pnpm -r build",
+    "dev:client": "rustup run 1.95.0 cargo run -p proto-client",
+    "dev:native": "rustup run 1.95.0 cargo run -p proto-client",
+    "build": "rustup run 1.95.0 cargo build --release -p proto-client",
+    "build:native": "rustup run 1.95.0 cargo build --release -p proto-client",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "smoke:ws": "node scripts/smoke-ws.mjs",
-    "e2e:browser": "node scripts/e2e-browser.mjs",
-    "stress:ws": "node scripts/stress-ws.mjs"
+    "e2e:client": "node scripts/e2e-client.mjs",
+    "stress:ws": "node scripts/stress-ws.mjs",
+    "package:linux": "bash scripts/package-linux.sh",
+    "package:windows": "bash scripts/package-windows.sh",
+    "test:native": "rustup run 1.95.0 cargo test --workspace",
+    "clippy:native": "rustup run 1.95.0 cargo clippy --workspace --all-targets -- -D warnings",
+    "fmt:native": "rustup run 1.95.0 cargo fmt --all -- --check"
   },
   "devDependencies": {
-    "playwright-core": "^1.64.1",
     "typescript": "^7.0.2"
   }
 }

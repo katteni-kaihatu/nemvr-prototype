@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.proto.ProtoSNS</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Proto SNS</name>
+  <summary>Native Bevy client for the Proto SNS prototype</summary>
+  <description>
+    <p>
+      A native client for the Proto SNS prototype. It connects to the existing
+      space v2 server and displays a shared 3D world with avatars and
+      IPFS-backed objects.
+    </p>
+  </description>
+  <launchable type="desktop-id">proto-sns.desktop</launchable>
+  <url type="homepage">https://github.com/pluser/prototype-alternative-resonite-1</url>
+  <categories>
+    <category>Network</category>
+  </categories>
+  <releases>
+    <release version="0.1.0" date="2026-10-22"/>
+  </releases>
+</component>

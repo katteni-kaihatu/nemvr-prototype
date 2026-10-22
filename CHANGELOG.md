@@ -21,6 +21,14 @@
 
 ### Changed
 
+- **Web クライアントを削除し、Rust / Bevy のネイティブクライアントに置き換えた。**
+  - `apps/client` は Bevy クライアント。`apps/client-bevy` から改名した。
+  - `crates/space-protocol` に space v2 の型・スキーマ・投影を追加した。
+  - Linux AppImage / Windows zip を `scripts/package-*.sh` で生成する。
+  - Wayland 用に libxkbcommon / xkeyboard-config / Vulkan ローダを同梱し、日本語 UI フォントを埋め込んだ。
+  - VPS はランディングページとダウンロード配信に切り替えた。旧 Web クライアントは `web-client-final` タグに残る。
+- **ネイティブクライアントの IPFS 接続を Kubo の TCP 4001 優先にした。**
+  TLS WebSocket の SNI / transport 制約を避け、失敗時は `/media/<cid>` にフォールバックする。
 - **ワールド同期を space v2 (n次元エンティティ基盤) に置き換えた。**
   - `ProtoServer.Space.Store` がセッションごとのエンティティ、version、購読、フィルタ、上限を保持する。
   - 接続ごとに `Space.Reader` / `Space.Writer` が動き、Reader はスナップショットと差分、Writer はケーパビリティ検証済みの変更を扱う。

@@ -6,9 +6,8 @@
 #   DEPLOY_HOST=root@172.104.89.28 SSH_KEY=~/.ssh/linode.com deploy/deploy.sh
 #   PROTO_HOST=example.com PROTO_USER=root SSH_KEY=~/.ssh/<鍵> deploy/deploy.sh
 #
-# クライアント (Vite) は手元でビルドし、Elixir release は VPS 上でビルドする。
-# Nix の Elixir/OTP で作った release は Nix ストアへの動的リンクを含み、
-# Ubuntu では動かないため、release は必ず VPS の Elixir/OTP で作る。
+# サーバー (Elixir) は VPS 上で release を作る。起動中の Kubo は再起動しない。
+# ネイティブクライアントの配布物 (dist/) があれば、ダウンロード用に一緒に転送する。
 set -euo pipefail
 
 if [ -z "${DEPLOY_HOST:-}" ]; then
@@ -23,11 +22,6 @@ SSH=(ssh -o BatchMode=yes)
 
 cd "$(dirname "$0")/.."
 
-echo "==> build client"
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm --filter @proto/client build
-
 echo "==> upload server source for the remote release build"
 "${SSH[@]}" "$DEPLOY_HOST" "install -d -o proto -g proto /opt/proto/build/apps/server"
 RSYNC_SRC=(rsync -az --delete --chown=proto:proto
@@ -40,7 +34,7 @@ echo "==> build server (Elixir release on the VPS)"
 
 echo "==> prepare remote directories and keep previous versions"
 "${SSH[@]}" "$DEPLOY_HOST" 'set -euo pipefail
-install -d -o proto -g proto /srv/proto-client
+install -d -o proto -g proto /srv/proto-client /srv/proto-client/downloads
 install -d -o proto -g proto /opt/proto/app/apps/server/_build/prod/rel
 REL=/opt/proto/app/apps/server/_build/prod/rel/proto_server
 if [ -d "$REL" ]; then
@@ -52,9 +46,22 @@ if [ -d /srv/proto-client ] && [ -n "$(ls -A /srv/proto-client 2>/dev/null || tr
   cp -a /srv/proto-client /srv/proto-client.prev
 fi'
 
-echo "==> upload client"
-RSYNC=(rsync -az --delete --chown=proto:proto -e "${SSH[*]}")
-"${RSYNC[@]}" apps/client/dist/ "$DEPLOY_HOST:/srv/proto-client/"
+echo "==> upload landing page"
+RSYNC=(rsync -az --delete --exclude downloads --chown=proto:proto -e "${SSH[*]}")
+"${RSYNC[@]}" deploy/landing/ "$DEPLOY_HOST:/srv/proto-client/"
+
+echo "==> upload client packages (if built)"
+for artifact in \
+  dist/ProtoSNS-x86_64.AppImage \
+  dist/ProtoSNS-x86_64.AppImage.sha256 \
+  dist/ProtoSNS-windows-x86_64.zip \
+  dist/ProtoSNS-windows-x86_64.zip.sha256; do
+  if [ -f "$artifact" ]; then
+    rsync -az --chown=proto:proto -e "${SSH[*]}" "$artifact" "$DEPLOY_HOST:/srv/proto-client/downloads/"
+  else
+    echo "  skip: $artifact (not built)"
+  fi
+done
 
 echo "==> install release"
 "${SSH[@]}" "$DEPLOY_HOST" 'set -euo pipefail
@@ -69,3 +76,5 @@ sleep 4
 systemctl is-active proto-server
 journalctl -u proto-server -n 12 --no-pager -o cat'
 echo "==> done"
+echo "    site:      https://${DEPLOY_HOST#*@}/"
+echo "    websocket: wss://${DEPLOY_HOST#*@}/ws"

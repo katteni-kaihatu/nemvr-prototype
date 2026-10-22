@@ -1,0 +1,15 @@
+{
+  "type": "space_mutate",
+  "mutation": {
+    "op": "patch",
+    "commandId": "command-1",
+    "entityId": "peer-self",
+    "set": {
+      "space.position": [0.1, 0, -0.2],
+      "space.head": [0, 0, 0, 1],
+      "space.crouch": 0,
+      "space.lean": 0
+    },
+    "ifVersion": 4
+  }
+}

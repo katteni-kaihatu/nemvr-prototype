@@ -3,6 +3,10 @@
 Ubuntu / Debian の**開発用 VPS** にデプロイし、Kubo / Caddy / TURN を含む実環境に近い結合テストを行うための構成と手順。
 スクリプトは `deploy/setup-vps.sh` (初期構築) と `deploy/deploy.sh` (ビルド・転送・再起動) にある。
 
+> **2026-10-22: Web クライアント削除済み。** 現行クライアントは Rust / Bevy のネイティブアプリで、
+> サーバーとの WebSocket (`/ws`) と Kubo の TCP 4001 を使う。以下の Helia / ブラウザ / WebRTC / TURN の
+> 記述は移行前の設計と検証履歴である。
+
 **このリポジトリが使う VPS (`nemvr.nemnomi.dev` / `root@172.104.89.28`) は開発・検証環境であり、本番環境ではない。**
 ワールド状態はメモリのみで、デプロイ・再起動で消える。Kubo の pin / ブロックはテスト用に残ってよい。
 必要なら VPS を再構築してよい。本番向けの認証・可用性・バックアップ・監視は対象外。
@@ -14,18 +18,15 @@ Ubuntu / Debian の**開発用 VPS** にデプロイし、Kubo / Caddy / TURN �
 
 ```mermaid
 graph LR
-    B[ブラウザ] -->|"https://HOST/ (443)"| C[Caddy<br/>TLS 終端]
+    B[ネイティブクライアント<br/>Bevy + rust-ipfs] -->|"https://HOST/ (443)"| C[Caddy<br/>TLS 終端]
     B -->|"wss://HOST/ws (443)"| C
     B -->|"https://HOST/media/* (443)"| C
-    B -->|"wss://HOST:8443 (libp2p /tls/ws)"| C
-    C -->|静的ファイル| F["/srv/proto-client"]
+    B -->|"libp2p TCP 4001"| K["Kubo :4001<br/>swarm / bitswap"]
+    C -->|ランディング / ダウンロード| F["/srv/proto-client"]
     C -->|"/ws, /media/*"| S["proto-server :8080<br/>Elixir/OTP (Cowboy)"]
-    C -->|":8443"| K["Kubo :8081<br/>libp2p WebSocket"]
+    C -->|":8443"| K2["Kubo :8081<br/>libp2p WebSocket"]
     S -->|"HTTP API :5001"| K
     S -->|"Gateway :8082"| K
-    K <-->|"libp2p :4001"| P[他の Kubo / ブラウザ]
-    B <-.->|WebRTC 直接| B2[他のブラウザ]
-    B -.->|TURN 3478| T[coturn]
 ```
 
 | 公開ポート | 用途 |
@@ -49,15 +50,14 @@ graph LR
 
 - **Kubo の API (5001) は必ず localhost に置く**。API には pin / add / repo 操作の権限があるため、外部に公開してはいけない。
   ゲートウェイ (8082) も外部公開しない。公開するのは Caddy の 443 / 8443 だけ。
-- **HTTPS が必須**: ブラウザ内の Helia / libp2p は Web Crypto を使うため、ページが安全なコンテキスト (HTTPS か localhost) でないと動かない
-  (`architecture.md` の「想定する制約」参照)。
+- **公開時は HTTPS / WSS を使う**: Caddy が TLS を終端する。ネイティブクライアントは開発時に `ws://` も使える。
 - **ホスト名が必要**: Let's Encrypt の証明書はホスト名に対して発行される。IP アドレスだけでは取れない。
   Linode の逆引きホスト名は、その IP アドレスに正引きもできるので、独自ドメインが無くても使える。
   独自ドメインを使う場合は A レコードを VPS の IP アドレスに向けて、`PROTO_HOST` をそのドメインにする。
   ホスト名を変えるときは、新しい名前で `setup-vps.sh` を再実行し (`TURN_HOST` も更新される)、`proto-server` を再起動する。
 - アプリ本体は `proto` ユーザー (非 root) の systemd サービス `proto-server` として 127.0.0.1 のみで待ち受ける。外に出るのは Caddy だけ。
-- クライアントは、HTTPS で開かれたときだけ、ワールド同期を `wss://<オリジン>/ws`、libp2p を `/dns4/<host>/tcp/<IPFS_PUBLIC_PORT>/tls/ws/...` に接続する
-  (`apps/client/src/net/connection.ts`, `ipfs.ts`)。HTTP (開発時) の挙動は変わらない。
+- ネイティブクライアントはワールド同期を `wss://<host>/ws`、コンテンツを Kubo の TCP 4001 に接続する。
+  TCP 4001 が使えない場合は `/media/<cid>` にフォールバックする。
 
 ## サーバーの環境変数
 
@@ -183,7 +183,6 @@ HOST {
 	}
 	handle {
 		root * /srv/proto-client
-		try_files {path} /index.html
 		file_server
 	}
 }
@@ -193,7 +192,7 @@ HOST:8443 {
 }
 ```
 
-`/ws` と `/media/*` は proto-server、それ以外は静的ファイル。`:8443` は Kubo の libp2p WebSocket への TLS 終端。
+`/ws` と `/media/*` は proto-server、それ以外はランディングページとダウンロード用ファイル。`:8443` は Kubo の libp2p WebSocket への TLS 終端 (フォールバック)。
 
 ## リリース配置
 
@@ -204,7 +203,7 @@ HOST:8443 {
    ├─ releases/<vsn>/
    ├─ lib/
    └─ erts-<vsn>/          # include_erts: true (Erlang の実行環境を含む)
-/srv/proto-client/          # Vite の dist
+/srv/proto-client/          # ランディング (index.html) と downloads/
 /var/lib/proto/ipfs/        # Kubo のリポジトリ (blocks / pins / config / keystore)
 /var/lib/proto/tmp/         # release の一時ファイル (RELEASE_TMP)
 /etc/proto/server.env       # TURN_* (root:proto 0640)
@@ -260,17 +259,15 @@ DEPLOY_HOST=root@<VPS> SSH_KEY=~/.ssh/<鍵> deploy/deploy.sh
 
 `deploy.sh` は次を行う:
 
-1. 手元で `pnpm install --frozen-lockfile`
-2. `pnpm typecheck`
-3. `pnpm --filter @proto/client build`
-4. `apps/server` のソース (`mix.exs` / `mix.lock` / `config/` / `lib/`) を VPS の `/opt/proto/build/apps/server` へ rsync
-5. VPS 上で `runuser -u proto -- mix deps.get --only prod && mix release --overwrite`
-6. 現在の release とクライアントを `.prev` として VPS 内に退避
-7. `apps/client/dist/` を `/srv/proto-client/` へ rsync
-8. ビルドした release を `/opt/proto/app/apps/server/_build/prod/rel/proto_server/` へ配置
-9. `systemctl restart proto-server` (Kubo は再起動しない)
+1. `apps/server` のソース (`mix.exs` / `mix.lock` / `config/` / `lib/`) を VPS の `/opt/proto/build/apps/server` へ rsync
+2. VPS 上で `runuser -u proto -- mix deps.get --only prod && mix release --overwrite`
+3. 現在の release と `/srv/proto-client` を `.prev` として VPS 内に退避
+4. `deploy/landing/` を `/srv/proto-client/` へ rsync (`downloads/` は保持)
+5. `dist/` に AppImage / Windows zip があれば `/srv/proto-client/downloads/` へ転送
+6. ビルドした release を `/opt/proto/app/apps/server/_build/prod/rel/proto_server/` へ配置
+7. `systemctl restart proto-server` (Kubo は再起動しない)
 
-`node_modules`、`.git`、クライアントの `dist` をアプリのソースツリーへ転送しない。
+`node_modules`、`.git`、`target/` をアプリのソースツリーへ転送しない。
 VPS のソースは `/opt/proto/build/apps/server` にだけ置き、実行する release は
 `/opt/proto/app` に置く。Kubo の設定を変えた場合は、`deploy.sh` ではなく
 `setup-vps.sh` を再実行して Kubo を再起動する。
@@ -294,7 +291,8 @@ ssh root@<VPS> 'journalctl -u kubo -u proto-server -n 30 --no-pager'
 ```
 
 `welcome.ipfs.wsPort` は 8443、`welcome.ipfs.peerId` は `ipfs id` の `ID` と一致する。
-ブラウザで `https://<ホスト名>/` を開き、HUD に「IPFS: 接続済み」と出ることを確認する。
+`https://<ホスト名>/` でランディングページが表示され、`downloads/` からクライアントを取得できることを確認する。
+ネイティブクライアントの Lobby には `wss://<ホスト名>/ws` を入れる。
 
 ### 4. ロールバック
 
@@ -321,6 +319,8 @@ Kubo のリポジトリ (`/var/lib/proto/ipfs`) は削除しない。Kubo の設
 (`IPFS_PORT` / `IPFS_PUBLIC_PORT` / `PROTO_HOST`) を戻して再実行し、`systemctl restart kubo proto-server` する。
 
 ## TURN (WebRTC の中継)
+
+> ネイティブクライアントは TURN を使わない。以下は将来 WebRTC を追加する場合の構成として残している。
 
 ブラウザ同士が直接つながれない環境 (NAT が厳しい、同じ LAN で折り返し通信ができない、UDP が遮断されているなど) では、WebRTC は TURN で中継する。
 VPS に coturn を入れてあり、サーバーが入室 (`welcome`) のたびに ICE サーバー設定 (`iceServers`) を配る。
@@ -360,16 +360,13 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
   SMOKE_CHECK_HTTP_404=0 SMOKE_UPLOAD_IMAGE=1 node scripts/smoke-ws.mjs
 ```
 
-- **ブラウザ E2E は必須**: UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更では、
-  次のヘッドレス Chromium テストを実行する。2 コンテキストが入室し、片方が画像を drop し、
-  両方が `source=ipfs` で画像を読み込むこと、HUD の RTT / 取得元 / ログ行を検証する。
+- **ネイティブ E2E**: UI・画像・IPFS・HUD・プロトコルに触れる変更では、
+  2 つの headless クライアントで入室・配置・ack を検証する。
 
   ```sh
-  nix develop -c bash -lc \
-    'CHROME_PATH=$(nix shell nixpkgs#chromium -c which chromium) pnpm e2e:browser'
+  pnpm build:native
+  WS_URL=wss://<ホスト名>/ws pnpm e2e:client
   ```
-
-  `SITE_URL` で別のデプロイ先を指定できる。テストで置いた `e2e-*` 画像はスクリプト終了時に削除する。
 - **同期ストレステスト**: 20 クライアントが同時に入室し、画像を配置・claim・移動し、全員が
   すべての配置と最終位置を観測できることを確認する。
 
