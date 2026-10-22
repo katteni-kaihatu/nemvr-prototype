@@ -61,6 +61,16 @@ interface NetState {
   rtt: number | null;
   logs: string[];
   contentSources: Record<string, "ipfs" | "server">;
+  downloads: Record<string, DownloadJob>;
+}
+
+export interface DownloadJob {
+  id: string;
+  label: string;
+  loaded: number;
+  total?: number;
+  status: string;
+  startedAt: number;
 }
 
 export const useNet = create<NetState>(() => ({
@@ -77,6 +87,7 @@ export const useNet = create<NetState>(() => ({
   rtt: null,
   logs: [],
   contentSources: {},
+  downloads: {},
 }));
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -98,6 +109,27 @@ export function recordContentSource(cid: string, source: "ipfs" | "server", labe
     contentSources: { ...s.contentSources, [cid]: source },
   }));
   showLog(`${label ?? cid}: 取得元 ${source === "ipfs" ? "IPFS" : "サーバー"}`);
+}
+
+/** Start, update, or clear (null) one active download entry. */
+export function updateDownload(id: string, update: Partial<DownloadJob> | null): void {
+  useNet.setState((s) => {
+    const downloads = { ...s.downloads };
+    if (update === null) {
+      delete downloads[id];
+    } else {
+      downloads[id] = {
+        id,
+        label: id,
+        loaded: 0,
+        status: "取得中",
+        startedAt: Date.now(),
+        ...downloads[id],
+        ...update,
+      };
+    }
+    return { downloads };
+  });
 }
 
 /** 毎フレーム参照される姿勢履歴。React state にはしない。 */
@@ -343,6 +375,7 @@ export function connect(name: string, avatarFile?: File): void {
     rtt: null,
     logs: [],
     contentSources: {},
+    downloads: {},
   });
   openSocket();
 }
@@ -392,6 +425,7 @@ function openSocket(): void {
       rtt: null,
       logs: [],
       contentSources: {},
+      downloads: {},
       message:
         useNet.getState().message ??
         (welcomed ? "サーバーとの接続が切断されました" : "サーバーに接続できませんでした"),
@@ -704,6 +738,7 @@ export function disconnect(): void {
     rtt: null,
     logs: [],
     contentSources: {},
+    downloads: {},
   });
 }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Canvas } from "@react-three/fiber";
+import { formatBytes } from "@proto/protocol";
 import { Grid } from "@react-three/drei";
 import { useNet } from "../net/connection";
 import { useInteraction } from "./interaction";
@@ -125,6 +126,8 @@ function HUD({
   const rtt = useNet((s) => s.rtt);
   const logs = useNet((s) => s.logs);
   const contentSources = useNet((s) => s.contentSources);
+  const downloads = useNet((s) => s.downloads);
+  const activeDownloads = Object.values(downloads);
   const sourceCounts = Object.values(contentSources).reduce(
     (counts, source) => {
       counts[source] += 1;
@@ -184,6 +187,34 @@ function HUD({
         鏡: {mirrorEnabled ? "ON" : "OFF"} (M)
       </button>
       {notice && <div style={{ color: "#ffd180" }}>{notice}</div>}
+      {activeDownloads.length > 0 && (
+        <div
+          style={{
+            marginTop: 4,
+            paddingTop: 4,
+            borderTop: "1px solid rgba(255,255,255,0.2)",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.4,
+          }}
+        >
+          <div style={{ color: "#90caf9" }}>ダウンロード中:</div>
+          {activeDownloads.map((job) => {
+            const percent = job.total
+              ? Math.min(100, Math.floor((job.loaded / job.total) * 100))
+              : null;
+            const progress =
+              job.total !== undefined
+                ? `${percent}% (${formatBytes(job.loaded)} / ${formatBytes(job.total)})`
+                : formatBytes(job.loaded);
+            return (
+              <div key={job.id}>
+                {job.label}: {job.status} {progress}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {logs.length > 0 && (
         <div
           style={{

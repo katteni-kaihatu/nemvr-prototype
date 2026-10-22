@@ -6,7 +6,7 @@ import {
   sanitizeFileName,
   type WorldObject,
 } from "@proto/protocol";
-import { requestStored, showNotice, useNet } from "./connection";
+import { requestStored, showLog, showNotice, updateDownload, useNet } from "./connection";
 import { fetchBlob, isServing, summarizeSources, type FetchSource } from "./ipfs";
 
 const PROGRESS_INTERVAL_MS = 300;
@@ -149,12 +149,23 @@ export async function downloadObject(object: WorldObject): Promise<void> {
   downloading.add(object.id);
 
   const label = downloadName(object);
+  updateDownload(object.id, {
+    label,
+    loaded: 0,
+    total: object.kind === "file" ? object.size : undefined,
+    status: "取得中",
+    startedAt: Date.now(),
+  });
   let lastNoticeAt = 0;
   try {
     showNotice(`ダウンロード中: ${label}`, 60_000);
     const { blob, sources, usedFallback } = await fetchObjectBlob(object, {
-      onStatus: (message) => showNotice(message, 60_000),
+      onStatus: (message) => {
+        updateDownload(object.id, { status: message });
+        showNotice(message, 60_000);
+      },
       onProgress: (loaded, total) => {
+        updateDownload(object.id, { loaded, total });
         const now = performance.now();
         if (now - lastNoticeAt < PROGRESS_INTERVAL_MS) return;
         lastNoticeAt = now;
@@ -167,14 +178,18 @@ export async function downloadObject(object: WorldObject): Promise<void> {
     const name = downloadName(object, head);
     saveBlob(blob, name);
     console.info(`[download] ${name} (${formatBytes(blob.size)}) from: ${describeSources(sources)}${usedFallback ? " (after fallback to request_file)" : ""}`);
-    showNotice(`ダウンロードしました: ${name} (${formatBytes(blob.size)}) / 取得元: ${describeSources(sources)}`, 10_000);
+    const sourceText = `取得元: ${describeSources(sources)}${usedFallback ? " (request_file 後)" : ""}`;
+    showLog(`ダウンロード完了: ${name} (${formatBytes(blob.size)}) / ${sourceText}`);
+    showNotice(`ダウンロードしました: ${name} (${formatBytes(blob.size)}) / ${sourceText}`, 10_000);
     if (import.meta.env.DEV) {
       (window as unknown as { __downloadReports: DownloadReport[] }).__downloadReports.push({ name, size: blob.size, sources, usedFallback });
     }
   } catch (err) {
     console.warn(`[download] failed: ${err instanceof Error ? err.message : String(err)}`, err);
+    showLog(`ダウンロード失敗: ${label}${err instanceof Error ? ` (${err.message})` : ""}`);
     showNotice(`ダウンロードに失敗しました: ${label}${err instanceof Error ? ` (${err.message})` : ""}`, 8000);
   } finally {
+    updateDownload(object.id, null);
     downloading.delete(object.id);
   }
 }

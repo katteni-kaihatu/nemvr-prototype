@@ -573,6 +573,8 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
   1×1 PNG を drop した。両方のページで `[image] source=ipfs` / `[image] loaded` を確認し、
   `source=server` へフォールバックしなかった (2026-10-22)。同じマシン上の 2 コンテキストは
   WebRTC の mDNS により `P2P 0` のままだが、画像表示には影響しない。
+- HUD は、接続 RTT、画像の取得元 (IPFS / サーバー) と枚数、ダウンロード中のファイル名・状態・進捗、
+  直近 8 行のログを表示する。ダウンロードの進捗は `updateDownload` で 300 ms 間隔に間引いて更新する。
 - **ブラウザ E2E は、UI・画像・IPFS/WebRTC・HUD・プロトコルに触れる変更で必須**。
   `pnpm e2e:browser` が 2 コンテキストで入室・画像 drop・IPFS 取得・HUD の RTT / 取得元 / ログを検証する。
 - 実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
