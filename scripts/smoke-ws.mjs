@@ -184,6 +184,59 @@ async function main() {
     "avatar clear delta",
   );
 
+  const imageCid = process.env.SMOKE_IMAGE_CID;
+  if (imageCid) {
+    const imageId = crypto.randomUUID();
+    const imageCommandId = crypto.randomUUID();
+
+    primary.send({
+      type: "space_mutate",
+      mutation: {
+        commandId: imageCommandId,
+        op: "create",
+        entityId: imageId,
+        dimensions: {
+          "entity.kind": "image",
+          "space.position": [4, 1, 4],
+          "space.yaw": 0,
+          "content.cid": imageCid,
+          "content.width": 1,
+          "content.height": 1,
+        },
+      },
+    });
+
+    await primary.waitFor(
+      (m) => m.type === "space_ack" && m.commandId === imageCommandId,
+      "image space_ack (is SMOKE_IMAGE_CID available to Kubo?)",
+    );
+
+    await observer.waitFor(
+      (m) =>
+        m.type === "space_delta" &&
+        m.changes.some(
+          (change) =>
+            change.op === "upsert" &&
+            change.entity?.id === imageId &&
+            change.entity.dimensions["entity.kind"] === "image" &&
+            change.entity.dimensions["content.cid"] === imageCid,
+        ),
+      "image delta",
+    );
+
+    primary.send({
+      type: "space_mutate",
+      mutation: { commandId: crypto.randomUUID(), op: "delete", entityId: imageId },
+    });
+
+    await observer.waitFor(
+      (m) =>
+        m.type === "space_delta" &&
+        m.changes.some((change) => change.op === "remove" && change.id === imageId),
+      "image delete delta",
+    );
+  }
+
   const boxId = crypto.randomUUID();
   const createId = crypto.randomUUID();
   primary.send({

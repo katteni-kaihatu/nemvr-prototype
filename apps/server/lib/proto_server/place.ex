@@ -82,15 +82,9 @@ defmodule ProtoServer.Place do
   end
 
   def handle_cast({:set_avatar, peer, cid, command_id}, state) do
-    schedule(
-      peer,
-      fn -> run_set_avatar(peer, cid, command_id) end,
-      %{
-        on_full: fn ->
-          send_error(peer, "順番待ちが多すぎます。しばらくしてからやり直してください", command_id)
-        end
-      }
-    )
+    # Avatars are best-effort. Do not put the pin in the per-peer content
+    # queue; a slow VRM must not delay images or files placed by the same user.
+    _ = start_task(fn -> run_set_avatar(peer, cid, command_id) end)
 
     {:noreply, state}
   end
@@ -499,7 +493,7 @@ defmodule ProtoServer.Place do
 
   defp fetch_with_reservation(cid, kind, peer, ref, declared) do
     heartbeat = start_heartbeat(kind, peer, cid, declared)
-    pin_result = Ipfs.pin(cid)
+    pin_result = Ipfs.pin(cid, pin_timeout(kind))
     stop_heartbeat(heartbeat)
 
     case pin_result do
@@ -772,6 +766,12 @@ defmodule ProtoServer.Place do
   defp fetch_error(:image), do: "画像を取得できませんでした"
   defp fetch_error(:file), do: "ファイルを取得できませんでした"
   defp fetch_error(:avatar), do: "IPFS から取得できませんでした"
+
+  # An image or avatar that cannot be fetched quickly must not block the
+  # per-peer queue for an hour. Large files still get the long timeout.
+  defp pin_timeout(:image), do: 60_000
+  defp pin_timeout(:avatar), do: 300_000
+  defp pin_timeout(_kind), do: 3_600_000
 
   defp safe_unpin(cid) do
     if Process.whereis(Ipfs) != nil do

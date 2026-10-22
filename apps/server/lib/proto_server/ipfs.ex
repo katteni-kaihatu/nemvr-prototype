@@ -48,8 +48,9 @@ defmodule ProtoServer.Ipfs do
   @spec head(binary(), non_neg_integer()) :: {:ok, binary(), integer()} | {:error, term()}
   def head(cid, count), do: guard("head #{cid}", fn -> do_head(cid, count) end)
 
-  @spec pin(binary()) :: :ok | {:error, term()}
-  def pin(cid), do: guard("pin #{cid}", fn -> do_pin(cid) end)
+  @spec pin(binary(), non_neg_integer()) :: :ok | {:error, term()}
+  def pin(cid, timeout_ms \\ @pin_timeout_ms),
+    do: guard("pin #{cid}", fn -> do_pin(cid, timeout_ms) end)
 
   @spec unpin(binary()) :: :ok | {:error, term()}
   def unpin(cid), do: guard("unpin #{cid}", fn -> do_unpin(cid) end)
@@ -238,14 +239,14 @@ defmodule ProtoServer.Ipfs do
 
   defp do_head(_cid, _count), do: {:error, :invalid_range}
 
-  defp do_pin(cid) do
+  defp do_pin(cid, timeout_ms) do
     request =
       Finch.build(
         :post,
         api_url() <> "/api/v0/pin/add?arg=" <> encode_cid(cid) <> "&recursive=true"
       )
 
-    case Finch.request(request, ProtoServer.Finch, receive_timeout: @pin_timeout_ms) do
+    case Finch.request(request, ProtoServer.Finch, receive_timeout: timeout_ms) do
       {:ok, %{status: 200}} ->
         :ok
 
@@ -327,7 +328,7 @@ defmodule ProtoServer.Ipfs do
     case Finch.request(request, ProtoServer.Finch, receive_timeout: @add_timeout_ms) do
       {:ok, %{status: 200, body: response_body}} ->
         with {:ok, hash, size} <- parse_add_response(response_body),
-             :ok <- do_pin(hash) do
+             :ok <- do_pin(hash, @pin_timeout_ms) do
           {:ok, hash, size}
         end
 
