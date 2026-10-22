@@ -1,12 +1,16 @@
-# デプロイ (VPS)
+# デプロイ (開発 VPS)
 
-Ubuntu / Debian の VPS にインターネット公開するための構成と手順。
+Ubuntu / Debian の**開発用 VPS** にデプロイし、Kubo / Caddy / TURN を含む実環境に近い結合テストを行うための構成と手順。
 スクリプトは `deploy/setup-vps.sh` (初期構築) と `deploy/deploy.sh` (ビルド・転送・再起動) にある。
+
+**このリポジトリが使う VPS (`nemvr.nemnomi.dev` / `root@172.104.89.28`) は開発・検証環境であり、本番環境ではない。**
+ワールド状態はメモリのみで、デプロイ・再起動で消える。Kubo の pin / ブロックはテスト用に残ってよい。
+必要なら VPS を再構築してよい。本番向けの認証・可用性・バックアップ・監視は対象外。
 
 構成は **Caddy (TLS 終端) + Kubo (IPFS) + proto-server (Elixir/OTP release) + coturn (TURN)**。
 `proto-server` は Kubo の HTTP API とゲートウェイにだけ話し、IPFS の libp2p / bitswap / pin は Kubo が持つ。
 
-## 公開構成
+## 開発 VPS の構成
 
 ```mermaid
 graph LR
@@ -237,6 +241,9 @@ for p in 80 443 8443 4001 3478; do timeout 6 bash -c "exec 3<>/dev/tcp/<VPS の 
 
 ### 1. VPS を構築する (初回のみ。何度実行しても同じ結果になる)
 
+このプロジェクトの開発 VPS は `PROTO_HOST=nemvr.nemnomi.dev`、`DEPLOY_HOST=root@172.104.89.28`、
+`SSH_KEY=~/.ssh/linode.com` を使う。以下は一般的なプレースホルダで書いている。
+
 ```sh
 ssh root@<VPS> "PROTO_HOST=<ホスト名> bash -s" < deploy/setup-vps.sh
 ```
@@ -342,5 +349,18 @@ VPS に coturn を入れてあり、サーバーが入室 (`welcome`) のたび�
 - `scripts/smoke-ws.mjs` は、Kubo を起動しない状態でも WebSocket の入室・配置・操作・`/media` の 404 を確認できる。
   この smoke test は Kubo 経由の取得・pin・GC を検証しない。
 - 実 Kubo (`ipfs daemon --offline`) を接続したローカル E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み (2026-10-21)。
-  本番 VPS での `wss://HOST:8443` 経由の libp2p は未検証。
-- 旧 Node サーバーは削除済みで、当時の本番検証結果はこの Elixir/OTP + Kubo 構成には適用されない。
+- 開発 VPS では、実 Kubo / Caddy / TURN に対する次の smoke test を実行できる:
+
+```sh
+WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
+  SMOKE_CHECK_HTTP_404=0 node scripts/smoke-ws.mjs
+
+# 画像のサーバーアップロード経路も確認する
+WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
+  SMOKE_CHECK_HTTP_404=0 SMOKE_UPLOAD_IMAGE=1 node scripts/smoke-ws.mjs
+```
+
+- 複数ブラウザでの P2P / WebRTC / 画像表示は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
+  Firefox は同一マシン内の WebRTC を mDNS で隠すことがあり、その場合は `P2P 0` のままでよい
+  (画像は Kubo / サーバー経由で共有される)。
+- 旧 Node サーバーは削除済みで、当時の検証結果はこの Elixir/OTP + Kubo 構成には適用されない。

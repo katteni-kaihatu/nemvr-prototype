@@ -215,7 +215,7 @@ sequenceDiagram
 
 - **IPFS ノード (Kubo)**: Kubo が libp2p の WebSocket (`0.0.0.0:8081/ws`)、circuit relay、pin 済み画像の提供元を兼ねる。
   サーバーは `IPFS_API_URL` (既定 `http://127.0.0.1:5001`) と `IPFS_GATEWAY_URL` (既定 `http://127.0.0.1:8082`) に HTTP で話す。
-  ブロックストアは Kubo のリポジトリ (本番 `/var/lib/proto/ipfs`) にあり、サーバーの再起動では消えない。
+  ブロックストアは Kubo のリポジトリ (開発 VPS では `/var/lib/proto/ipfs`) にあり、サーバーの再起動では消えない。
   ワールドの状態はメモリのみなので、再起動後に参照のない pin が残ることがある。
 - **クライアントの IPFS ノード**: ブラウザ内の Helia ノード。入室 (`space_welcome`) 後に起動し、`space_welcome.ipfs` とページのホスト名から組み立てた
   `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` で Kubo に接続する。`peerId` は Kubo の peer ID。
@@ -331,7 +331,7 @@ sequenceDiagram
 - まだ保持していない映像は、これまでの映像のアイコンのまま (サーバーが保持したら、サムネイルと再生の準備をする)。
 - 音声付きの再生がブラウザに止められた場合は、ミュートで再生して、その旨を知らせる。
 - Service Worker は `public/p2p-media-sw.js` (ビルドで `dist` の直下に置かれる)。登録時に `clients.claim()` で、開いているページも制御する。
-  開発時は Vite が `/media` をサーバーへプロキシする。本番は Caddy が `/media/*` を `127.0.0.1:8080` へ転送する (`deploy/setup-vps.sh`)。
+  開発時は Vite が `/media` をサーバーへプロキシする。開発 VPS では Caddy が `/media/*` を `127.0.0.1:8080` へ転送する (`deploy/setup-vps.sh`)。
 - `<video>` が使う Range 要求に、ブラウザ内の IPFS から答えるために SW を使っている。他のファイルは、これまでどおり IPFS (bitswap) で取得する。
 
 - **再生状態の同期**: サーバーが動画ごとの再生状態 (`VideoPlaybackState { playing, time, at }`) を保持する。リングメニューの再生 / 一時停止は
@@ -509,7 +509,7 @@ config.ex        runtime.exs の環境変数を動的に読む
 | `HOST` | `0.0.0.0` | 待ち受けアドレス。リバースプロキシの背後では `127.0.0.1` |
 | `PORT` | `8080` | WebSocket (ワールド同期) と `/media` の待受ポート |
 | `IPFS_PORT` | `8081` | Kubo の libp2p WebSocket の待受ポート。ブラウザから到達できる必要がある |
-| `IPFS_PUBLIC_PORT` | `IPFS_PORT` と同じ | ブラウザから見た libp2p のポート (本番は Caddy の 8443) |
+| `IPFS_PUBLIC_PORT` | `IPFS_PORT` と同じ | ブラウザから見た libp2p のポート (開発 VPS は Caddy の 8443) |
 | `IPFS_API_URL` | `http://127.0.0.1:5001` | Kubo の API。localhost のみ |
 | `IPFS_GATEWAY_URL` | `http://127.0.0.1:8082` | Kubo のゲートウェイ。`/media` の Range 中継に使う |
 | `IPFS_PEER_ID` | (なし) | 未指定なら起動時に Kubo から取得する |
@@ -550,8 +550,22 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
 - client: 補間 (`interpolation`)、写像 (`projection`)、`SpaceReader` / `SpaceWriter` の単体テスト (Vitest)。
 - protocol: メッセージ型、space スキーマ、ファイル種別の単体テスト。
 - 結合: `scripts/smoke-ws.mjs` で、Kubo なしでも入室・作成・claim・移動・複製・削除・姿勢・旧プロトコル拒否・`/media` の 404 を確認できる。
-  実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
-  (2026-10-21、ローカルの `ipfs daemon --offline`)。本番の WSS 経由 libp2p は未検証。
+- **開発 VPS での結合テスト**: `nemvr.nemnomi.dev` の VPS は開発・検証環境 (本番ではない)。プロトコル、IPFS/Kubo、
+  WebRTC、デプロイに触れる変更では、開発 VPS へデプロイしたうえで次を実行する。
+
+  ```sh
+  WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
+    SMOKE_CHECK_HTTP_404=0 node scripts/smoke-ws.mjs
+
+  # 画像のサーバーアップロード / フォールバック経路も含める
+  WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
+    SMOKE_CHECK_HTTP_404=0 SMOKE_UPLOAD_IMAGE=1 node scripts/smoke-ws.mjs
+  ```
+
+  ワールド状態はメモリのみで、デプロイ・再起動で消える。テスト用データは残ってよい。必要なら VPS を再構築する。
+- 実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
+  (2026-10-21、ローカルの `ipfs daemon --offline`)。開発 VPS の `wss://HOST:8443` 経由の libp2p は Node クライアントで確認済み。
+  ブラウザ間の WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。
 - ブラウザ: 複数タブで、互いのアバターが見え、動き、退室で消えることを目視確認する。
 
 ## 10. CRDT (歴史的設計・コード削除済み)

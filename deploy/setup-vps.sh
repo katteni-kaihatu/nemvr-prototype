@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# VPS (Ubuntu / Debian) の初期構築。root で実行する。何度実行しても同じ結果になる (冪等)。
+# 開発用 VPS (Ubuntu / Debian) の初期構築。root で実行する。何度実行しても同じ結果になる (冪等)。
+# この VPS は開発・検証環境であり、本番環境ではない (docs/deploy.md 参照)。
 #
 #   ssh root@<VPS> "PROTO_HOST=<ホスト名> bash -s" < deploy/setup-vps.sh
 #

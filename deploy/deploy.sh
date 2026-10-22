@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 手元のリポジトリを VPS に反映する (ビルド → 転送 → 再起動)。
+# 手元のリポジトリを開発用 VPS に反映する (ビルド → 転送 → 再起動)。
+# この VPS は開発・検証環境であり、本番環境ではない (docs/deploy.md 参照)。
 # 初回は先に deploy/setup-vps.sh で VPS を構築しておくこと (README / docs/deploy.md 参照)。
 #
 #   DEPLOY_HOST=root@172.104.89.28 SSH_KEY=~/.ssh/linode.com deploy/deploy.sh

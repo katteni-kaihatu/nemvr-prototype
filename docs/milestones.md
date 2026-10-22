@@ -95,9 +95,9 @@ Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置�
 - [x] crdt-v1 のサーバー実装とクライアントコードを削除
 - [x] Nix flake (`nix develop`)、`scripts/smoke-ws.mjs`、デプロイスクリプト (Kubo + release + Caddy)
 - [x] Kubo を接続したメディア E2E (画像・動画の取得、pin / unpin / GC、Range)。ローカルの `ipfs daemon --offline` で確認済み
-- [ ] 本番 VPS での `wss://HOST:8443` 経由の libp2p
+- [ ] 開発 VPS での `wss://HOST:8443` 経由の libp2p と、2 ブラウザでの WebRTC 目視確認
 
-**完了条件**: 上記の未検証項目を、Kubo を起動した環境と本番構成で確認する。
+**完了条件**: 上記の未検証項目を、Kubo を起動した開発 VPS 構成で確認する。
 
 ## M6.6: n次元クライアント基盤 (space v2、実装済み)
 

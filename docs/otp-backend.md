@@ -4,6 +4,10 @@
 backend for this project, and the Node.js server has been removed. This document
 is the authoritative interface contract for that implementation.
 
+The deployed VPS (`nemvr.nemnomi.dev`) is a **development/test environment**, not
+production. Use it for integration tests with real Kubo, Caddy and TURN. World
+state is memory-only and is lost on restart; test data may be discarded.
+
 ## space v2 implementation
 
 - **Store**: `ProtoServer.Space.Store` is a per-session GenServer. It holds
@@ -439,7 +443,7 @@ Defaults:
 - Kubo gateway: `http://127.0.0.1:8082`
 - libp2p WebSocket swarm listener: `0.0.0.0:8081`
 - Public advertised WS port: `IPFS_PUBLIC_PORT` (default 8081; `8443` behind
-  Caddy in production)
+  Caddy on the development VPS)
 
 Kubo must be configured with:
 

@@ -79,7 +79,7 @@ graph LR
 - 画像・ファイルは Kubo が持つ IPFS ノードで共有する。ワールドの同期 (WebSocket) には CID だけを載せ、
   本体は libp2p の bitswap で取得する。取得元は Kubo (常時接続・pin 済み) と、直接つながった他のブラウザ (WebRTC)。
 - サーバーは Kubo の peer ID を `space_welcome.ipfs` でクライアントに伝える。クライアントは `IPFS_PUBLIC_PORT`
-  (開発 8081 / 本番 8443) と組み合わせて接続先を組み立てる。
+  (開発 8081 / 開発 VPS 8443) と組み合わせて接続先を組み立てる。
 
 ## 4. 技術選定
 
@@ -185,7 +185,7 @@ graph LR
   - **安全なコンテキストが必須**: Web Crypto (`crypto.subtle`) を使うため、HTTPS か `localhost` でしか動かない。
     `http://<LAN の IP>` で開くと `crypto.subtle` が undefined になり、IPFS を起動できない。
     クライアントは起動前にこれを検出して HUD に原因を表示する。対処は README を参照。
-  - ブラウザから接続できるのは WebSocket / WebRTC のみ。本番は Caddy が `wss://HOST:8443` で TLS を終端する。
+  - ブラウザから接続できるのは WebSocket / WebRTC のみ。開発 VPS では Caddy が `wss://HOST:8443` で TLS を終端する。
   - ブラウザ同士の直接接続 (WebRTC) には STUN が必要で、NAT が厳しい環境では TURN の中継が必要になる。
     VPS に coturn を置き、サーバーが入室ごとに時間制限つきの認証情報 (TURN REST API) を配る。
     TURN が使えない環境 (3478 が通らないなど) でも、Kubo 経由 (bitswap) で画像は取得できる。

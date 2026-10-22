@@ -460,7 +460,7 @@ async function main() {
   const mediaResponse = await fetch(`${HTTP_URL}/media/deadbeef`);
   assert.equal(mediaResponse.status, 404, "/media/deadbeef status");
 
-  // 本番の Caddy は /media と /ws 以外を SPA として返すため、この確認は
+  // 開発 VPS の Caddy は /media と /ws 以外を SPA として返すため、この確認は
   // サーバーへ直接つなぐときだけ行う (SMOKE_CHECK_HTTP_404=0 で省略)。
   if (process.env.SMOKE_CHECK_HTTP_404 !== "0") {
     const otherResponse = await fetch(`${HTTP_URL}/not-media`);

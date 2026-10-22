@@ -8,6 +8,11 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 
 ## 開発環境
 
+**このプロジェクトの VPS (`nemvr.nemnomi.dev` / `root@172.104.89.28`) は開発・検証環境であり、本番環境ではない。**
+Kubo / TURN / Caddy を含む実環境に近い結合テストの場所として使う。ワールド状態はメモリのみで、
+デプロイや再起動で消える。テスト用のデータなので、必要なら VPS を再構築・リセットしてよい。
+本番運用を想定した認証・可用性・バックアップはない。
+
 必要なもの:
 
 - [Nix](https://nixos.org/) (推奨): `nix develop` で Elixir / Kubo / Node 24 / pnpm が揃う
@@ -98,10 +103,35 @@ pnpm dev   # Elixir サーバー (ws://localhost:8080, /media) と client (http:
 Kubo の pin / ブロックは残るため、再起動後に同じ CID を置き直せば再取得は不要。クラッシュなどで参照のない pin が残ることがあり、
 その場合は `ipfs pin ls` で確認し、必要なら `ipfs repo gc` で整理する。
 
+### VPS (開発環境) を使った検証
+
+変更がプロトコル・IPFS/Kubo・WebRTC・デプロイに触れる場合は、ローカルのテストに加えて開発 VPS で確認する。
+
+```sh
+# ローカル
+nix develop -c bash -lc 'pnpm typecheck && pnpm test'
+node scripts/smoke-ws.mjs
+
+# 開発 VPS へデプロイ
+nix develop -c bash -lc 'DEPLOY_HOST=root@172.104.89.28 SSH_KEY=$HOME/.ssh/linode.com deploy/deploy.sh'
+
+# 開発 VPS の実 Kubo / Caddy / TURN に対する smoke test
+WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
+  SMOKE_CHECK_HTTP_404=0 node scripts/smoke-ws.mjs
+
+# 画像のサーバーアップロード経路も確認する場合
+WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
+  SMOKE_CHECK_HTTP_404=0 SMOKE_UPLOAD_IMAGE=1 node scripts/smoke-ws.mjs
+```
+
+複数ブラウザでの P2P / WebRTC / 画像表示は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。
+VPS は開発環境なので、テストで作成したオブジェクトや Kubo の pin は残ってよい。不要になったら
+`ipfs pin ls` / `ipfs repo gc` で整理する。
+
 ### `IPFS_PUBLIC_PORT` と `space_welcome.ipfs`
 
 サーバーは入室時の `space_welcome.ipfs` に、Kubo の peer ID と `IPFS_PUBLIC_PORT` を載せる。
-開発では `IPFS_PUBLIC_PORT` の既定は `IPFS_PORT` (8081)。本番は Caddy が TLS を終端する 8443 を指定する。
+開発では `IPFS_PUBLIC_PORT` の既定は `IPFS_PORT` (8081)。開発 VPS では Caddy が TLS を終端する 8443 を指定する。
 クライアントはこの値から libp2p の接続先を組み立てる。
 
 ### URL の貼り付け
@@ -141,7 +171,7 @@ VRM は、待機中は呼吸と頭の微動、歩くと脚と腕を振る (手�
 - **開発用にそのオリジンを許可する**:
   - Firefox: `about:config` の `dom.securecontext.allowlist` に、サーバーのホスト (例: `192.168.16.174`) を追加する。
   - Chrome 系: `chrome://flags/#unsafely-treat-insecure-origin-as-secure` に `http://<サーバーの IP>:5173` を追加して有効にする。
-- **HTTPS / WSS で配信する**: 本番は Caddy が TLS を終端する (`docs/deploy.md`)。開発で HTTPS を使う場合は、ページ・ワールド同期・libp2p のすべてを TLS にする必要がある。
+- **HTTPS / WSS で配信する**: 開発 VPS では Caddy が TLS を終端する (`docs/deploy.md`)。開発で HTTPS を使う場合は、ページ・ワールド同期・libp2p のすべてを TLS にする必要がある。
 
 同じマシンの別タブ / 別ブラウザで `http://localhost:5173` を開く分には、そのまま使える。
 なお Firefox はローカルのアドレスを mDNS で隠すため、同じマシン上のブラウザ同士では WebRTC が通らず `P2P 0` のままになることがある
@@ -185,4 +215,4 @@ pnpm smoke:ws    # サーバー (localhost:8080) を起動した状態で実行
 - [Elixir/OTP バックエンド契約](docs/otp-backend.md) - サーバーのインターフェース、モジュール、制限
 - [CRDT 実験モード (歴史的設計)](docs/crdt-experiment.md) - 停止耐性の設計、設定、障害試験 (サーバーでは未対応)
 - [マイルストーン](docs/milestones.md) - 段階的な進め方
-- [デプロイ (VPS)](docs/deploy.md) - Caddy + Kubo + proto-server + coturn の構成、手順、注意点
+- [デプロイ (開発 VPS)](docs/deploy.md) - Caddy + Kubo + proto-server + coturn の構成、手順、開発 VPS での検証方法
