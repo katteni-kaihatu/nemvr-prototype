@@ -491,10 +491,17 @@ defmodule ProtoServer.Place do
   end
 
   defp fetch_and_acquire(cid, kind, peer) do
+    # `Ipfs.stat` can wait up to a minute for an unknown CID. Images and
+    # avatars must not block the fallback path on that; pin (with a short
+    # timeout) is the operation that tells us whether IPFS can fetch them.
     declared =
-      case Ipfs.stat(cid) do
-        {:ok, size} -> {:ok, size}
-        {:error, _reason} -> :unknown
+      if kind in [:image, :avatar] do
+        :unknown
+      else
+        case Ipfs.stat(cid) do
+          {:ok, size} -> {:ok, size}
+          {:error, _reason} -> :unknown
+        end
       end
 
     case declared do
