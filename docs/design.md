@@ -565,8 +565,8 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
   ワールド状態はメモリのみで、デプロイ・再起動で消える。テスト用データは残ってよい。必要なら VPS を再構築する。
 - 開発 VPS の Kubo に対して 2 つの Helia クライアントを WSS 接続し、2 MiB の画像 DAG を A→B / B→A の
   両方向で bitswap 取得できることを確認済み (2026-10-22)。`/media` は使っていない。
-  この VPS は 4001/tcp が上流ファイアウォールで閉じており、Kubo の relay HOP が無効なため、
-  ブラウザ間 WebRTC は `P2P 0` のままになる。画像は Kubo 経由の IPFS で共有される。
+  4001/tcp を開放して Kubo を再起動した後、`/libp2p/circuit/relay/0.2.0/hop` と公開アドレス
+  `172.104.89.28:4001` が広告されることを確認した。ブラウザ間 WebRTC は 2 ブラウザで目視確認する。
 - 実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
   (2026-10-21、ローカルの `ipfs daemon --offline`)。開発 VPS の `wss://HOST:8443` 経由の libp2p は Node クライアントで確認済み。
   ブラウザ間の WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。

@@ -366,8 +366,8 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
 - **IPFS 相互転送の確認 (2026-10-22)**: 開発 VPS の Kubo に 2 つの Helia クライアントを WSS で接続し、
   それぞれ 2 MiB の画像 DAG を追加して Kubo に pin したうえで、A→B / B→A の両方向を bitswap で取得した。
   取得バイト数は両方向とも 2,097,152 で、元データと一致した。`/media/<cid>` は使っていない。
-- この VPS では上流ファイアウォールで 4001/tcp が閉じており、Kubo は relay HOP を提供していない
-  (`ipfs id` の protocols に `/libp2p/circuit/relay/0.2.0/hop` が無い)。この状態ではブラウザ間の
-  直接 WebRTC は成立せず `P2P 0` になるが、画像は Kubo を経由した IPFS で相互に取得できる。
-  P2P も確認する場合は、クラウド側のファイアウォールで 4001/tcp を開け、Kubo を再起動する。
+- 2026-10-22 に上流ファイアウォールで 4001/tcp を開放し、Kubo を再起動した。`ipfs id` が
+  `/libp2p/circuit/relay/0.2.0/hop` と公開アドレス `172.104.89.28:4001` を広告することを確認した。
+  ブラウザ間の直接 WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
+  4001 を変更した場合は Kubo の再起動が必要 (再起動しないと HOP が広告されない)。
 - 旧 Node サーバーは削除済みで、当時の検証結果はこの Elixir/OTP + Kubo 構成には適用されない。

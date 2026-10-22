@@ -129,9 +129,9 @@ VPS は開発環境なので、テストで作成したオブジェクトや Kub
 `ipfs pin ls` / `ipfs repo gc` で整理する。
 
 開発 VPS では、2 つの Helia クライアント間で 2 MiB の画像 DAG を相互に取得できることを確認済み
-(2026-10-22、Kubo 経由の bitswap、`/media` は未使用)。現在の VPS は 4001/tcp が上流ファイアウォールで
-閉じているため Kubo の relay HOP が無効で、ブラウザ間 WebRTC は `P2P 0` のままになる。
-その場合も画像は Kubo 経由の IPFS で共有される。P2P を有効にするにはクラウド側で 4001/tcp を開ける。
+(2026-10-22、Kubo 経由の bitswap、`/media` は未使用)。4001/tcp を開放して Kubo を再起動した後、
+Kubo が `/libp2p/circuit/relay/0.2.0/hop` と公開アドレス `172.104.89.28:4001` を広告することを確認した。
+ブラウザ間の WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
 
 ### `IPFS_PUBLIC_PORT` と `space_welcome.ipfs`
 
