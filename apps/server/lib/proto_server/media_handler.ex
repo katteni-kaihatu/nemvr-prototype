@@ -5,8 +5,7 @@ defmodule ProtoServer.MediaHandler do
   `GET|HEAD` looks up a stored file or image, parses one `Range: bytes=...`
   header and streams only that range from the Kubo gateway. `POST /media/upload`
   is the fallback for an image that Kubo could not fetch from the uploader's
-  browser (for example a multi-block DAG); it pins the bytes and marks existing
-  provisional images as stored.
+  browser; it pins the bytes and marks existing provisional images as stored.
   """
 
   @behaviour :cowboy_handler
