@@ -566,7 +566,11 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
 - 開発 VPS の Kubo に対して 2 つの Helia クライアントを WSS 接続し、2 MiB の画像 DAG を A→B / B→A の
   両方向で bitswap 取得できることを確認済み (2026-10-22)。`/media` は使っていない。
   4001/tcp を開放して Kubo を再起動した後、`/libp2p/circuit/relay/0.2.0/hop` と公開アドレス
-  `172.104.89.28:4001` が広告されることを確認した。ブラウザ間 WebRTC は 2 ブラウザで目視確認する。
+  `172.104.89.28:4001` が広告されることを確認した。
+- ヘッドレス Chromium (Playwright) の独立した 2 コンテキストでブラウザ E2E を実施し、片方の canvas に
+  1×1 PNG を drop した。両方のページで `[image] source=ipfs` / `[image] loaded` を確認し、
+  `source=server` へフォールバックしなかった (2026-10-22)。同じマシン上の 2 コンテキストは
+  WebRTC の mDNS により `P2P 0` のままだが、画像表示には影響しない。
 - 実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
   (2026-10-21、ローカルの `ipfs daemon --offline`)。開発 VPS の `wss://HOST:8443` 経由の libp2p は Node クライアントで確認済み。
   ブラウザ間の WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて目視確認する。

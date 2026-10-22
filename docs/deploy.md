@@ -363,6 +363,13 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
 - 複数ブラウザでの P2P / WebRTC / 画像表示は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
   Firefox は同一マシン内の WebRTC を mDNS で隠すことがあり、その場合は `P2P 0` のままでよい
   (画像は Kubo / サーバー経由で共有される)。
+- **ブラウザ E2E (2026-10-22)**: ヘッドレス Chromium (Playwright) で独立した 2 コンテキストを
+  `https://nemvr.nemnomi.dev` に接続し、片方の canvas に 1×1 PNG を drop した。両方のページで
+  `[image] source=ipfs` と `[image] loaded` が出て、`source=server` は出なかった。
+  画像はサーバー GET ではなく、Kubo 経由の IPFS で他方のブラウザに届いている。
+  同じマシン上の 2 コンテキストでは WebRTC の mDNS により `P2P 0` のままだが、画像表示には影響しない。
+  再現する場合は、`playwright-core` と Chromium を用意し、2 つのブラウザコンテキストで
+  ロビーから入室して canvas に画像を drop し、コンソールの `[image]` ログを確認する。
 - **IPFS 相互転送の確認 (2026-10-22)**: 開発 VPS の Kubo に 2 つの Helia クライアントを WSS で接続し、
   それぞれ 2 MiB の画像 DAG を追加して Kubo に pin したうえで、A→B / B→A の両方向を bitswap で取得した。
   取得バイト数は両方向とも 2,097,152 で、元データと一致した。`/media/<cid>` は使っていない。
