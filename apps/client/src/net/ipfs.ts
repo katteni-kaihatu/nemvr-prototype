@@ -254,11 +254,16 @@ export async function waitForDialable(): Promise<string> {
   const { helia } = await requireNode();
   const t0 = Date.now();
   while (Date.now() - t0 < RESERVATION_TIMEOUT_MS) {
-    if (helia.libp2p.getMultiaddrs().some((ma) => ma.toString().includes("/p2p-circuit/webrtc/"))) {
+    // libp2p returns e.g. `/.../p2p/<relay>/p2p-circuit/webrtc` or
+    // `/.../p2p-circuit/webrtc/p2p/<self>` depending on the version. Accept
+    // both; requiring a trailing slash here prevented the peer ID from ever
+    // being shared, so direct P2P stayed at 0.
+    if (helia.libp2p.getMultiaddrs().some((ma) => ma.toString().includes("/p2p-circuit/webrtc"))) {
       return helia.libp2p.peerId.toString();
     }
     await new Promise((r) => setTimeout(r, 200));
   }
+  console.warn("[ipfs] no /p2p-circuit/webrtc address", helia.libp2p.getMultiaddrs().map((ma) => ma.toString()));
   throw new Error("中継の予約を作成できませんでした");
 }
 
