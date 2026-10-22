@@ -11,8 +11,14 @@
 
 ### Changed
 
+- **ワールド同期を space v2 (n次元エンティティ基盤) に置き換えた。**
+  - `ProtoServer.Space.Store` がセッションごとのエンティティ、version、購読、フィルタ、上限を保持する。
+  - 接続ごとに `Space.Reader` / `Space.Writer` が動き、Reader はスナップショットと差分、Writer はケーパビリティ検証済みの変更を扱う。
+  - クライアントは `SpaceReader` / `SpaceWriter` と `vr-sns-3d@1` 写像を使う。
+  - 旧 `join` / `pose` / `object_*` / `place_*` / `sync_*` は廃止。旧メッセージには `space_error` (`protocol_mismatch`) を返す。
+  - `ProtoServer.Room` と `packages/world-sync` / クライアントの CRDT コードを削除した。
 - **バックエンドを Node.js / TypeScript から Elixir/OTP (Mix + Cowboy) に置き換えた。**
-  - ワールド同期は `ProtoServer.Room` (GenServer)、WebSocket は `ProtoServer.WsHandler`、`/media` は `ProtoServer.MediaHandler` が担当する。
+  - ワールド同期は `ProtoServer.Space`、WebSocket は `ProtoServer.WsHandler`、`/media` は `ProtoServer.MediaHandler` が担当する。
   - プロトコル検証、TURN 認証情報、Range / MIME 判定、URL 取り込みを Elixir モジュールへ移植した。
   - 配置処理は `ProtoServer.Queue` (peer ごとの直列化、全体同時 4 件)、`ProtoServer.Content` (参照カウント・容量上限・unpin/GC)、`ProtoServer.Place` (画像・ファイル・URL・アバター) に分割した。
   - legacy プロトコル、20 Hz snapshot、grab 排他、複製・削除、動画状態、デモボックスは従来どおり。

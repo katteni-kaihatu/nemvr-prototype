@@ -1,51 +1,50 @@
 # Elixir/OTP backend contract
 
-**Status: implemented.** The Elixir/OTP app in `apps/server` is the backend for
-this project, and the Node.js server has been removed. This document is the
-authoritative interface contract for that implementation. Wave 1 (Mix project,
-configuration, Cowboy listener, UUID helper), Wave 2 (legacy protocol, room,
-validation) and Wave 3 (Kubo, content, queue, placement, media streaming) are
-complete; the implementation was verified with the real Kubo daemon described
-below.
+**Status: implemented (space v2).** The Elixir/OTP app in `apps/server` is the
+backend for this project, and the Node.js server has been removed. This document
+is the authoritative interface contract for that implementation.
 
-## Implementation status and deviations
+## space v2 implementation
 
-The implementation follows the contract below. These are the intentional
-deviations from the original Node behavior or the earlier draft of this
-document:
+- **Store**: `ProtoServer.Space.Store` is a per-session GenServer. It holds
+  entities (`id`, `version`, string-keyed `dimensions`), a monotonic version,
+  and subscriptions. The default session is `main`. State is in memory.
+- **Reader**: `ProtoServer.Space.Reader` is one process per WebSocket. It
+  subscribes with a filter, sends `space_welcome` with the initial snapshot,
+  and batches `space_delta` at 20 Hz. It owns the per-subscription `seq`.
+- **Writer**: `ProtoServer.Space.Writer` is one process per WebSocket. It
+  validates capabilities and schema, applies `space_mutate`, delegates content
+  creation to `ProtoServer.Place`, and sends `space_ack` / `space_error`.
+- **Schema**: `packages/protocol/space-schema.json` is the shared dimension
+  schema. `ProtoServer.Space.Schema` embeds the release-local copy
+  `apps/server/priv/space-schema.json` at compile time. A test enforces that the
+  two files stay identical.
+- **Capabilities**: `ProtoServer.Space.Scope` defines read/write dimensions,
+  filters, create/delete flags and entity limits. The default member scope is
+  not an authentication boundary; it is a structural constraint.
+- **Content**: `Place.prepare_create` semantics are implemented through
+  `Place.place_image/2`, `place_file/2`, `place_url/2`, `set_avatar/3` and
+  `request_file/3`. `Content` reference counting is unchanged.
+- **Media**: `ProtoServer.MediaHandler` resolves stored files through
+  `Space.Store.find_stored_file/2` for the default session.
 
-- `ProtoServer.Protocol.parse/1` returns `{:unsupported, type}` for the removed
-  crdt-v1 message types. `ProtoServer.WsHandler` turns that into a normal
-  `error` message and keeps the connection open.
-- `ProtoServer.Content.acquire/5` performs validation, capacity accounting and
-  reference counting only. It does not fetch or pin content.
-- Content is pinned by `ProtoServer.Place` before it calls
-  `Content.acquire/5` (including avatars). If acquisition fails, `Place` unpins
-  the content and releases any reservation; `Content.release/1` unpins and
-  schedules GC when the last reference goes away.
-- An empty `Range` header value (`""`) is treated as invalid and returns `416`.
-  The Node implementation treated an empty value like an absent header and
-  returned `200`. Non-empty ranges (`bytes=start-end`, `bytes=start-`,
-  `bytes=-suffix`) match the Node behavior.
-- The queue heartbeat interval is read dynamically from the application
-  environment as `Application.get_env(:proto_server, :queue_heartbeat_ms,
-  10_000)`. It is not part of `ProtoServer.Config` / `runtime.exs`; see the
-  queue configuration note below.
+Removed: `ProtoServer.Room`, the legacy world protocol, `crdt-v1`, `sync_*`,
+`claim` / `claim_release` messages, the Yjs client document and
+`packages/world-sync`. A legacy message receives `space_error` with code
+`protocol_mismatch`.
 
 ## Scope
 
-The OTP backend serves the **legacy world protocol** plus:
+The OTP backend serves the **space v2 protocol** plus:
 
 - `/media/<cid>` HTTP streaming
 - TURN credentials
-- URL import (`place_url`)
+- URL import (`space_import_url`)
 - Kubo-backed content storage and retrieval
 
-**crdt-v1 is removed.** The Node server's `sync_*`, `claim` and
-`claim_release` messages are out of scope. A client sending any of those must
-receive a normal `%{"type" => "error", "message" => ...}` response explaining
-that crdt-v1 is not supported; do not close the connection. There is no
-`SYNC_MODE`, `CRDT_DATA_DIR`, world store, content ledger or Yjs document.
+**Not implemented in this foundation:** WASM UGC, program Reader/Writer
+processes, user-defined projection functions, dynamic space partitioning,
+read replicas, persistence, authentication, multiple sessions.
 
 Historical Node reference (the `.ts` sources were removed after parity was
 verified; this table records what each Elixir module was ported from):
@@ -209,30 +208,23 @@ ProtoServer.Turn
   config() :: nil | %{host: binary, port: integer, secret: binary, ttl_seconds: integer}
   ice_servers(binary) :: nil | [map]
 
-ProtoServer.Room
-  join(pid, term) :: {:ok, binary}
-  set_pose(binary, map) :: :ok
-  set_avatar(binary, binary | nil) :: :ok
-  announce_ipfs(binary, binary) :: :ok
-  set_video_state(binary, binary, boolean, number) :: :ok
-  add_image(map) :: {:ok, map} | :full
-  add_file(map) :: {:ok, map} | :full
-  add_link(map) :: {:ok, map} | :full
-  add_box(map) :: {:ok, map} | :full
-  grab_object(binary, binary) :: :ok
-  move_object(binary, binary, [number], number, number | nil, number | nil) :: :ok
-  release_object(binary, binary) :: :ok
-  delete_object(binary, binary) :: {:ok, map} | {:error, :not_found | :held | :forbidden}
-  duplicate_object(binary, binary) :: {:ok, map} | {:error, :not_found | :full | :forbidden}
-  mark_stored(binary, integer) :: [map]
-  remove_unstored(binary) :: non_neg_integer
-  find_stored_file(binary) :: {:ok, map} | :error
-  find_unstored_file(binary) :: {:ok, map} | :error
-  get_object(binary) :: {:ok, map} | :error
-  send_place_progress(binary, binary, integer, integer | nil, boolean) :: :ok
-  send_prepare_progress(binary, binary, integer, integer | nil, boolean) :: :ok
-  send_prepare_failed(binary, binary, binary) :: :ok
-  send_error(binary, binary) :: :ok
+ProtoServer.Space.Store
+  create_peer(session_id, ws_pid, name) :: {:ok, peer_id, self, ice_servers}
+  subscribe(session_id, reader_pid, filter, requested_id) :: {:ok, sub_id, version, entities}
+  unsubscribe(session_id, subscription_id) :: :ok
+  query(session_id, filter, limit) :: {:ok, version, entities}
+  mutate(session_id, actor, scope, mutation) :: {:ok, version, entity} | {:error, code}
+  leave_peer(session_id, peer_id) :: :ok
+  find_stored_file(session_id, cid) :: {:ok, map} | :error
+  get_object(session_id, id) :: {:ok, map} | :error
+
+ProtoServer.Space.Reader
+  start_link(ws_pid:, session_id:, scope:, welcome:) :: GenServer.on_start()
+  client(pid, message) :: :ok
+
+ProtoServer.Space.Writer
+  start_link(ws_pid:, session_id:, peer_id:, scope:) :: GenServer.on_start()
+  client(pid, message) :: :ok
   leave(binary) :: :ok
   ipfs_peer_id(binary) :: binary | nil
   size() :: non_neg_integer
@@ -488,22 +480,24 @@ in-memory); do not add a content ledger.
 ProtoServer.Supervisor (one_for_one)
   Finch (ProtoServer.Finch)
   Task.Supervisor (ProtoServer.TaskSupervisor)
+  Registry (ProtoServer.Space.Registry)
   ProtoServer.Ipfs
-  ProtoServer.Room
   ProtoServer.Content
+  ProtoServer.Space.Store (session_id: "main")
   ProtoServer.Queue
   ProtoServer.Place
   ProtoServer.HttpServer
 ```
 
-Finch starts before Ipfs; `ProtoServer.HttpServer` always starts last. There is
-no separate supervisor module.
+Finch starts before Ipfs; `ProtoServer.HttpServer` always starts last. Reader and
+Writer processes are started per WebSocket by `ProtoServer.WsHandler` and are
+linked to the connection. There is no separate supervisor module.
 
 `ProtoServer.HttpServer` starts the single Cowboy listener `:proto_http` with
 `num_acceptors: 100`, `max_connections: 1000` and `idle_timeout: 60_000`.
-Room and content processes must be registered (named) because the handlers
-call them directly. `ProtoServer.Ipfs` and `ProtoServer.Content` may use
-`Task.Supervisor` for fetch jobs.
+The Space store, Content, Place, Queue and Ipfs processes are registered (named)
+because the handlers call them directly. `ProtoServer.Ipfs` and
+`ProtoServer.Content` may use `Task.Supervisor` for fetch jobs.
 
 ## Implementation notes
 
@@ -512,9 +506,10 @@ call them directly. `ProtoServer.Ipfs` and `ProtoServer.Content` may use
   `EEF-CVE-2026-43966` against cowlib 2.21.0 with no newer release available;
   do not reflect client-controlled strings into response headers, and re-check
   the advisory when upgrading.
-- `Protocol`, `Media` (pure functions), `Turn`, `UrlFetch`, `Room` and the
-  `WsHandler` dispatch are implemented. The 4096-byte frame limit, heartbeat
-  and `/media` routing are preserved, and crdt-v1 is not supported.
+- `Protocol`, `Media` (pure functions), `Turn`, `UrlFetch`, `Space.Store`,
+  `Space.Reader` / `Space.Writer` and the `WsHandler` dispatch are implemented.
+  The 4096-byte frame limit, heartbeat and `/media` routing are preserved.
+  Legacy messages receive `space_error` with code `protocol_mismatch`.
 - `Ipfs`, `Content`, `Queue`, `Place`, `MediaHandler` streaming and the seeded
   demo boxes are implemented and started before `HttpServer` in the
   supervision tree.

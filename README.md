@@ -4,7 +4,7 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 最初のゴールは「複数ユーザーがアクセスできる 3D 空間」。
 
 - スタック: TypeScript / Three.js (React Three Fiber) クライアント、Elixir/OTP (Cowboy) サーバー、Kubo (IPFS / libp2p / bitswap)
-- ステータス: M5 実装済み (複数ユーザーが入室し、ファイルや画像をドラッグ&ドロップで 3D 空間に置ける。IPFS で共有し、つかんで動かす・複製・削除・ダウンロードができる)。バックエンドは Elixir/OTP に置き換え済み。
+- ステータス: M6.5 実装済み (複数ユーザーが入室し、ファイルや画像をドラッグ&ドロップで 3D 空間に置ける。IPFS で共有し、つかんで動かす・複製・削除・ダウンロードができる)。ワールド同期は n次元エンティティストアと Reader / Writer による space v2 プロトコル。
 
 ## 開発環境
 
@@ -98,9 +98,9 @@ pnpm dev   # Elixir サーバー (ws://localhost:8080, /media) と client (http:
 Kubo の pin / ブロックは残るため、再起動後に同じ CID を置き直せば再取得は不要。クラッシュなどで参照のない pin が残ることがあり、
 その場合は `ipfs pin ls` で確認し、必要なら `ipfs repo gc` で整理する。
 
-### `IPFS_PUBLIC_PORT` と `welcome.ipfs`
+### `IPFS_PUBLIC_PORT` と `space_welcome.ipfs`
 
-サーバーは入室時の `welcome.ipfs` に、Kubo の peer ID と `IPFS_PUBLIC_PORT` を載せる。
+サーバーは入室時の `space_welcome.ipfs` に、Kubo の peer ID と `IPFS_PUBLIC_PORT` を載せる。
 開発では `IPFS_PUBLIC_PORT` の既定は `IPFS_PORT` (8081)。本番は Caddy が TLS を終端する 8443 を指定する。
 クライアントはこの値から libp2p の接続先を組み立てる。
 
@@ -162,16 +162,26 @@ pnpm smoke:ws    # サーバー (localhost:8080) を起動した状態で実行
 (例: `WS_URL=ws://127.0.0.1:18080/anything HTTP_URL=http://127.0.0.1:18080 pnpm smoke:ws`)。
 `pnpm` のスクリプトが未定義の環境では `node scripts/smoke-ws.mjs` を同じ環境変数で実行する。
 
-## CRDT について
+## space v2 と n次元エンティティ
 
-クライアントには休止中の CRDT コード (`packages/world-sync`) が残っているが、Elixir/OTP サーバーは `crdt-v1` を実装していない。
-`VITE_SYNC_MODE=crdt-v1` を指定すると、クライアントはサーバーが対応していない旨のエラーを表示する。
-過去の設計と障害試験は [CRDT 実験モード (歴史的設計)](docs/crdt-experiment.md) を参照。
+ワールドは `space v2` プロトコルで同期する。サーバーはセッションごとに 1 つの
+`ProtoServer.Space.Store` を持ち、エンティティを「名前付き次元の値のマップ」として保存する。
+クライアントは `Space.Reader` で購読し、`Space.Writer` で操作する。3D 表示は
+`vr-sns-3d@1` の写像テンプレートが担当する。次元・スコープ・プロトコルの詳細は
+[詳細設計](docs/design.md) と [n次元クライアント構想](docs/n-dim-client-original.md) を参照。
+
+今回の基盤では、WASM UGC、ユーザー定義の写像関数、空間の動的分割、リードレプリカ、
+永続化、アカウント認証は未実装である。ケーパビリティは構造上の制約であり、
+悪意あるクライアントに対する認証境界ではない。
+
+過去の CRDT 実験コードは削除した。設計の記録は
+[CRDT 実験モード (歴史的設計)](docs/crdt-experiment.md) に残している。
 
 ## ドキュメント
 
 - [アーキテクチャ](docs/architecture.md) - スコープ、全体構成、技術選定、設計判断
-- [詳細設計](docs/design.md) - プロトコル、同期方式、クライアント / サーバー内部設計
+- [n次元クライアント構想](docs/n-dim-client-original.md) - 高次元空間、Reader / Writer、写像、UGC の原案
+- [詳細設計](docs/design.md) - space v2 のデータモデル、プロトコル、クライアント / サーバー内部設計
 - [Elixir/OTP バックエンド契約](docs/otp-backend.md) - サーバーのインターフェース、モジュール、制限
 - [CRDT 実験モード (歴史的設計)](docs/crdt-experiment.md) - 停止耐性の設計、設定、障害試験 (サーバーでは未対応)
 - [マイルストーン](docs/milestones.md) - 段階的な進め方

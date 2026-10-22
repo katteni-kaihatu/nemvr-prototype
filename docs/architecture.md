@@ -3,6 +3,21 @@
 VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ。
 **最初のゴールは「複数ユーザーが同時にアクセスできる 3D 空間」** であり、それ以外は意図的にスコープ外とする。
 
+## 0. 現在の実装: space v2 (n次元エンティティ基盤)
+
+現行サーバーは `docs/n-dim-client-original.md` の基盤部分を実装している。
+
+- ワールドは「名前付き次元の値を持つエンティティ」の集合。`entity.kind`、`space.*`、`time.*`、`session.id`、`interaction.*`、`content.*`、`peer.*` などの次元を持つ。
+- セッションごとに `ProtoServer.Space.Store` が 1 プロセス。状態はメモリに置き、`version` で変更を識別する。
+- 接続ごとに `ProtoServer.Space.Reader` と `ProtoServer.Space.Writer` が 1 プロセスずつ動く。
+  - Reader は購読フィルタに合うスナップショットと差分だけを受け取る。
+  - Writer はケーパビリティ（読める次元・書ける次元・値域・対象セッション）を検証してから Store に書き込む。
+- クライアントは Reader / Writer のシェルで、3D 表示は組み込みの写像テンプレート `vr-sns-3d@1` が担当する。
+- プロトコルは `space_join` / `space_query` / `space_subscribe` / `space_mutate` / `space_import_url` / `space_set_avatar` / `file_request` の v2 のみ。旧 `join` / `pose` / `object_*` / `place_*` / `sync_*` は廃止。
+- 1 セッション (`main`)・メモリ保持・1 Store。動的分割、リードレプリカ、永続化、WASM UGC、ユーザー定義写像、認証は未実装。
+
+以下の 1〜9 節は、v2 の 3D テンプレートが満たすべき表示・コンテンツ・IPFS の設計と、そこに至る経緯を残したものである。プロトコルとデータモデルの正本は `docs/design.md` の「space v2」節とする。
+
 ## 1. 方針
 
 - **簡素さ最優先**。プロトタイプなので、認証・永続化・スケールアウト・最適化は行わない。
@@ -43,7 +58,7 @@ graph LR
         CB[client<br/>Vite + R3F + Helia]
     end
     subgraph Server
-        S["proto-server<br/>Elixir/OTP (Cowboy)<br/>Room / Content / Queue / Place / Ipfs"]
+        S["proto-server<br/>Elixir/OTP (Cowboy)<br/>Space.Store / Reader / Writer / Content / Queue / Place / Ipfs"]
     end
     subgraph IPFS
         K["Kubo<br/>API 5001 / Gateway 8082<br/>libp2p ws 8081 / bitswap / pin"]
@@ -63,7 +78,7 @@ graph LR
 - クライアントは受信した他人の姿勢を補間して描画する。自分自身はローカルで即時反映する。
 - 画像・ファイルは Kubo が持つ IPFS ノードで共有する。ワールドの同期 (WebSocket) には CID だけを載せ、
   本体は libp2p の bitswap で取得する。取得元は Kubo (常時接続・pin 済み) と、直接つながった他のブラウザ (WebRTC)。
-- サーバーは Kubo の peer ID を `welcome.ipfs` でクライアントに伝える。クライアントは `IPFS_PUBLIC_PORT`
+- サーバーは Kubo の peer ID を `space_welcome.ipfs` でクライアントに伝える。クライアントは `IPFS_PUBLIC_PORT`
   (開発 8081 / 本番 8443) と組み合わせて接続先を組み立てる。
 
 ## 4. 技術選定
@@ -75,7 +90,7 @@ graph LR
 | パッケージ管理 | pnpm workspace | 共有パッケージを簡単に扱える |
 | クライアント | Vite + React + three + @react-three/fiber + @react-three/drei | 宣言的な 3D、開発サイクルが速い |
 | XR (後続) | @react-three/xr | WebXR のラッパー |
-| サーバー | Elixir/OTP + Cowboy | HTTP と WebSocket を 1 リスナーで扱う。GenServer で Room / Content などを分離 |
+| サーバー | Elixir/OTP + Cowboy | HTTP と WebSocket を 1 リスナーで扱う。GenServer で Space.Store / Content などを分離 |
 | メッセージ形式 | JSON | デバッグ容易。必要になったらバイナリ化 |
 | 画像の共有 | IPFS (Kubo + ブラウザの Helia + libp2p) | 内容アドレス (CID) で扱い、ブラウザ同士 (WebRTC) でも配れる |
 | サーバーの IPFS 境界 | Kubo HTTP API + Gateway | サーバーの再起動で blockstore / pin / peer ID を失わない。API は localhost に閉じる |
@@ -98,8 +113,8 @@ graph LR
 │  ├─ crdt-experiment.md # crdt-v1 の歴史的設計 (サーバーでは未対応)
 │  └─ milestones.md     # 段階的な進め方
 ├─ packages/
-│  ├─ protocol/         # 共有メッセージ型 (型のみ、実行時依存なし)
-│  └─ world-sync/       # 休止中の CRDT クライアントライブラリ
+│  ├─ protocol/         # 共有メッセージ型・space スキーマ (実行時依存なし)
+│  └─ world-sync/       # (削除済み) 旧 CRDT 実験
 ├─ apps/
 │  ├─ server/           # Elixir/OTP サーバー (mix.exs / lib / test / config)
 │  └─ client/           # Vite + R3F クライアント
@@ -112,37 +127,21 @@ graph LR
 
 - Cowboy の 1 リスナーで HTTP と WebSocket を受け付ける (`PORT` / `HOST`)。
   `/media/...` は HTTP、それ以外は WebSocket アップグレード。
-- 接続ごとにユーザー ID を採番する。
-- `join` を受けたらユーザーを登録し、`welcome` を返し、他者へ `peer_joined` を通知する。
-- 受信した `pose` を最新値としてメモリ上に保持し、20Hz で `snapshot` を配信する。
-- 切断時にユーザーを削除し、`peer_left` を通知する。
-- **GenServer の分担**:
-  - `ProtoServer.Room`: ピア、オブジェクト、つかみの排他、スナップショット、動画の再生状態。
-  - `ProtoServer.Content`: CID の参照カウント、合計容量、pin / unpin / GC の調整。
-  - `ProtoServer.Queue`: ピアごとの取得ジョブの直列化と全体の同時実行数。
-  - `ProtoServer.Place`: CID の取得・検証・配置 (画像 / ファイル / URL / アバター)。
-  - `ProtoServer.Ipfs`: Kubo の HTTP API / ゲートウェイへのアクセス、peer ID の取得。
-  - `ProtoServer.Turn` / `UrlFetch` / `Media` / `Protocol`: TURN 認証情報、URL 取り込み、Range / MIME、メッセージ検証。
-- `place_image` を受けたら、CID の中身を Kubo から取得して検証 (サイズ上限・画像形式をマジックナンバーで判定) し、
-  pin してから `object_added` を全員に通知する。pin しておくので、置いた人が退室した後も Kubo が配り続けられる。
-- `ipfs_peer` を受けたら、本人以外に `peer_ipfs` で libp2p ピア ID を知らせる (ブラウザ同士の直接接続用)。
-- オブジェクト操作 (`grab_object` / `move_object` / `release_object` / `delete_object` / `duplicate_object`) を受けて、
-  状態を更新し、`object_updated` / `object_removed` / `object_added` を配る。つかんでいる間は本人だけが動かせる。
-- 最後の参照が消えた CID は unpin し、GC する。合計サイズは `CONTENT_MAX_TOTAL_MB` で制限する。
-- 入力値の最低限の検証 (型・数値範囲・名前の長さ) のみ行う。
-- **crdt-v1 は実装しない**。`sync_*` / `claim` / `claim_release` を受けたら、接続を切らずに `error` を返す。
+- `space_join` を受けたら peer エンティティを作り、接続ごとに `Space.Reader` と `Space.Writer` を起動する。
+- `Space.Store` はセッションごとのエンティティ、version、購読、フィルタ、上限を保持する。
+- `Space.Reader` は購読フィルタに合うスナップショットと差分を 20Hz で返す。`Space.Writer` はスコープ・スキーマ・条件を検証して Store に書き込む。
+- `Place` は画像・ファイル・URL・アバターの取得と検証を行い、成功時に Store にエンティティを作る。
+- `Content` / `Queue` / `Ipfs` / `Turn` / `UrlFetch` / `Media` / `Protocol` は従来の責務を維持する。
+- 旧 `join` / `pose` / `object_*` / `place_*` / `sync_*` は受け付けず、`space_error`（`protocol_mismatch`）を返す。
 
 ### client (`apps/client`)
 
 - 入室画面 (名前入力) → 3D シーン。
-- ローカルプレイヤーの入力処理と移動 (クライアント権威)。
-- 自分の姿勢を 20Hz で送信。
-- 他ユーザーのアバターを `snapshot` から生成・更新・削除し、補間表示する。
+- `SpaceReader` でエンティティを購読し、`SpaceWriter` で操作を送る。
+- `vr-sns-3d@1` 写像が `space.*` / `content.*` / `peer.*` を既存の `WorldObject` / `PeerState` に変換する。
+- ローカルプレイヤーの入力処理と移動 (クライアント権威)。姿勢は自分の peer エンティティへの patch として 20Hz で送る。
 - ブラウザ内で Helia ノードを動かし、Kubo (と他のブラウザ) に接続する。
-- 画像ファイルのドロップを受け付け、ドロップ位置の床に置く (IPFS に追加 → CID を `place_image` で送る)。
-- ワールドのオブジェクト (画像) を CID で IPFS から取得して描画する。
-- 画面中央をカーソルにしてオブジェクトを狙い、右ボタンでつかんで運び、中ボタンのリングメニューから削除・複製する。
-- `packages/world-sync` に休止中の CRDT コードがあるが、サーバーが対応していないため既定では使わない。
+- 画像・ファイルのドロップ、つかむ・移動・複製・削除、動画再生、URL 取り込みを Writer 経由で行う。
 
 ### Kubo
 
@@ -159,22 +158,22 @@ graph LR
 
 | 判断 | 内容 | 理由 / トレードオフ |
 |---|---|---|
-| サーバーを Elixir/OTP にする | Room / Content / Queue / Place / Ipfs を GenServer に分ける | 接続・取得・配置の状態をプロセスごとに閉じ込め、障害の影響を局所化できる |
+| サーバーを Elixir/OTP にする | Space.Store / Reader / Writer / Content / Queue / Place / Ipfs を GenServer に分ける | 接続・取得・配置の状態をプロセスごとに閉じ込め、障害の影響を局所化できる |
 | IPFS を Kubo に委譲する | サーバーは HTTP API とゲートウェイだけを使う | libp2p / bitswap / pin / blockstore の実装を持たずに済む。サーバー再起動でブロックを失わない |
 | クライアント権威の移動 | 自分の位置はクライアントが決めて送信 | 実装が簡単。チートは許容 (プロトタイプ) |
-| スナップショット配信 | 差分でなく全員分を毎回送る | 実装が単純。人数が少ない前提で帯域は問題にならない |
-| 1 ワールド・1 ルーム | ルーム ID を持たない | スコープ削減。将来はルーム ID をメッセージに追加 |
-| 認証なし | 表示名のみ | プロトタイプの目的外 |
+| 購読はフィルタ + 差分 | Reader が部分空間のスナップショットと差分を返す | 全員に全イベントを送らず、将来の空間分割に接続できる |
+| 1 ワールド・1 セッション | 既定セッションは `main` | スコープ削減。Store はセッション ID で分けられる |
+| 認証なし | 表示名のみ。ケーパビリティは構造上の制約 | プロトタイプの目的外。公開運用には認証と entity 認可が必要 |
 | 永続化なし | ワールド状態はメモリのみ。サーバー再起動で消える | プロトタイプの割り切り。Kubo の pin / ブロックは残り得る |
 | 画像は IPFS で共有 | WebSocket (JSON, 4KB 上限) には載せず、CID だけを送る | 大きなバイナリでリアルタイム同期を詰まらせない。内容アドレスなので改ざんできず、同じ画像は同じ CID になる |
-| サーバーが検証して pin | `place_image` の CID を Kubo から取得・検証 (サイズ・形式) してから配置する | 不正なデータを全員に配らない。置いた人が退室しても Kubo が提供元になる |
-| つかみは排他ロック | つかんでいる間は、つかんだ本人の `move_object` だけを受け付ける | 同時に動かされてオブジェクトが飛び回るのを防ぐ。切断時に必ず解放する |
+| サーバーが検証して pin | `create` の CID を Kubo から取得・検証 (サイズ・形式) してから配置する | 不正なデータを全員に配らない。置いた人が退室しても Kubo が提供元になる |
+| つかみは排他ロック | `interaction.heldBy` を持つ本人の `space.*` patch だけを受け付ける | 同時に動かされてオブジェクトが飛び回るのを防ぐ。切断時に必ず解放する |
 | 保持は参照カウント | 同じ CID を指すオブジェクトが複数あっても 1 つだけ保持し、最後の参照が消えたら unpin + GC | ディスクを使い切らない。複製・再投入で容量が増えない |
 | 大きなファイルはブラウザにコピーを作らない | アップロード中のファイルはブロックを保存せず、Kubo が取りに来たら元ファイルから読んで渡す | IndexedDB は遅く、メモリに置くとファイルサイズ分を使う。コピーを作らなければどちらも要らない |
 | 大きなファイルは置いた後に取得する | 16MiB を超えるファイルは `stored: false` で先に置き、サーバーが Kubo 経由でバックグラウンド取得する | 置いた人がいつ退室するか分からない。2 GiB の取得は約 1 分かかる |
-| サイズと種類はサーバーが決める | `size` は実際に取得したバイト数、`category` は名前と先頭バイトから判定する | 表示や容量の計算を偽られない |
-| ブラウザ同士は WebRTC で直接接続 | 入室後に libp2p ピア ID を共有し、既存の参加者が新しい参加者へ中継経由で WebRTC 接続する | Kubo の負荷と単一障害点を減らす。通らない環境では Kubo 経由で取得できる |
-| crdt-v1 はサーバーで扱わない | クライアントの休止コードは残すが、サーバーは `sync_*` を受け付けない | 実験コードを本番の状態機械から分離する。詳細は [CRDT 実験モード](crdt-experiment.md) (歴史的設計) |
+| サイズと種類はサーバーが決める | `content.size` は実際に取得したバイト数、`content.category` は名前と先頭バイトから判定する | 表示や容量の計算を偽られない |
+| ブラウザ同士は WebRTC で直接接続 | 入室後に `peer.ipfsPeerId` を共有し、既存の参加者が新しい参加者へ中継経由で WebRTC 接続する | Kubo の負荷と単一障害点を減らす。通らない環境では Kubo 経由で取得できる |
+| 旧 CRDT は削除 | サーバーもクライアントも v2 のサーバー権威モデルに一本化 | 二重の状態機械を残さない。歴史的設計は [CRDT 実験モード](crdt-experiment.md) |
 
 ## 8. 想定する制約・リスク
 
@@ -200,9 +199,8 @@ graph LR
   16MiB 以下のファイルは、置いた人が退室しても、削除されるかサーバーが再起動するまで Kubo が保持して配り続ける。
   16MiB を超えるファイルは、置いたあとサーバーが取得を終えるまで (2 GiB で約 1 分) は、置いた人のタブが配る。
 
-## 9. CRDT (歴史的設計)
+## 9. CRDT (歴史的設計・コード削除済み)
 
-`crdt-v1` はクライアント側 (`packages/world-sync`) にコードが残っているが、**Elixir/OTP サーバーは実装していない**。
-サーバーに CRDT の保存領域・同期メッセージ・モード切替はない。`VITE_SYNC_MODE=crdt-v1` を指定すると、
-クライアントはサーバーが対応していない旨のエラーを表示する。
+`crdt-v1` のサーバー実装とクライアントコード (`packages/world-sync`, `crdt.ts`, `crdtP2P.ts`) は
+space v2 への移行に伴い削除した。現在の同期はサーバー権威の `Space.Store` / Reader / Writer で行う。
 当時の設計・保証範囲・障害試験は [CRDT 実験モード](crdt-experiment.md) を参照 (歴史的資料)。

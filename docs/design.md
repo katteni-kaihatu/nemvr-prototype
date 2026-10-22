@@ -3,6 +3,44 @@
 `architecture.md` の構成を前提に、プロトコル・同期・クライアント内部の設計を定める。
 実装中に変更してよい。変更した場合はこのドキュメントを更新する。
 
+## 0. space v2 のデータモデルとプロトコル
+
+現行実装は「高次元空間のエンティティ」を正本とし、3D はその写像とする。
+
+```ts
+interface SpaceEntity {
+  id: string;                  // UUID。物体はクライアント生成、peer はサーバー生成
+  version: number;             // 最後に変更した Store のバージョン
+  dimensions: Record<string, JsonValue>;
+}
+```
+
+主な次元:
+
+| 名前空間 | 例 | 書き込み |
+|---|---|---|
+| `entity.kind` | `box` / `image` / `file` / `link` / `peer` | 作成時のみ |
+| `session.id` | `main` | サーバー |
+| `space.*` | `space.position`, `space.yaw`, `space.pitch`, `space.scale`, `space.head`, `space.crouch`, `space.lean`, `space.deform` | クライアント（つかんでいる物体、または自分の peer） |
+| `time.*` | `time.createdAt`, `time.updatedAt`, `time.playback` | サーバー（`time.playback` は動画のみクライアント） |
+| `interaction.*` | `interaction.heldBy` | claim / release のみ |
+| `content.*` | `content.cid`, `content.name`, `content.size`, `content.category`, `content.stored`, `content.owner`, `content.offline`, `content.url` | 主にサーバー。作成時に提案できるものがある |
+| `box.*` | `box.size`, `box.color` | 作成時のみ |
+| `peer.*` | `peer.name`, `peer.color`, `peer.avatarCid`, `peer.ipfsPeerId` | 主にサーバー。IPFS ピア ID は本人のみ |
+
+不変条件:
+
+- Store はセッションごとに 1 プロセス。`version` は書き込みごとに単調増加する。
+- 購読ごとに Reader が `seq` を持ち、`space_snapshot` / `space_delta` の `seq` は送信バッチごとに +1 する。クライアントは `seq` の飛びで取りこぼしを検出して再購読する（`version` はフィルタで飛ぶためギャップ判定に使わない）。
+- Store は購読フィルタの「変更前マッチ」と「変更後マッチ」を比較し、範囲外に出たエンティティを `remove` として送る（実体は削除しない）。
+- Writer は `create` / `patch` / `delete` / `duplicate` / `claim` / `release` を検証する。`space.*` の patch は、未保持なら暗黙に claim し、他人が保持していれば `held_by_other` を返す。
+- 削除・複製時の `Content` の retain / release は Writer が行う。コンテンツ作成時の acquire は Place が行う。
+- 旧プロトコルは受け付けない。旧 type には `space_error` の `protocol_mismatch` を返す。
+
+3D 写像 `vr-sns-3d@1` は、`entity.kind` でコンポーネントを選び、`space.*` / `content.*` / `interaction.heldBy` / `time.playback` を既存の `WorldObject` / `PeerState` に変換する。`space.deform` は保存・公開のみで、現行の描画にはまだ使わない。
+
+以下の 1 節以降は、3D テンプレートの表示仕様・コンテンツ仕様・IPFS 仕様の詳細である。旧プロトコルの記述が残っている場合は、この 0 節を正とする。
+
 ## 1. 座標系・単位
 
 - three.js の座標系に合わせる: 右手系、Y 軸が上、-Z が前方。
@@ -160,7 +198,7 @@ sequenceDiagram
   サーバーは `IPFS_API_URL` (既定 `http://127.0.0.1:5001`) と `IPFS_GATEWAY_URL` (既定 `http://127.0.0.1:8082`) に HTTP で話す。
   ブロックストアは Kubo のリポジトリ (本番 `/var/lib/proto/ipfs`) にあり、サーバーの再起動では消えない。
   ワールドの状態はメモリのみなので、再起動後に参照のない pin が残ることがある。
-- **クライアントの IPFS ノード**: ブラウザ内の Helia ノード。入室 (`welcome`) 後に起動し、`welcome.ipfs` とページのホスト名から組み立てた
+- **クライアントの IPFS ノード**: ブラウザ内の Helia ノード。入室 (`space_welcome`) 後に起動し、`space_welcome.ipfs` とページのホスト名から組み立てた
   `/<host>/tcp/<wsPort>/ws/p2p/<peerId>` で Kubo に接続する。`peerId` は Kubo の peer ID。
   トランスポートは WebSocket / WebRTC / circuit relay。ルーティング (DHT・公開ゲートウェイ) は使わない。
 - **取得**: CID を `unixfs.cat` で取得し (上限 5MB・30 秒)、Blob → blob URL → `TextureLoader` で読み込む。CID ごとにキャッシュする。
@@ -174,7 +212,7 @@ sequenceDiagram
   `<Kubo のアドレス>/p2p-circuit/webrtc/p2p/<相手>` へ接続する (既存の参加者 → 新しい参加者の一方向)。
   接続が確立すると bitswap が直接のピアからも取得するようになる。HUD の `P2P n` は直接接続の数。
   失敗しても (NAT 越えできないなど) Kubo 経由の取得は続く。
-- **STUN / TURN**: サーバーに `TURN_HOST` / `TURN_SECRET` が設定されていると、`welcome.iceServers` に STUN (自前の coturn と公開 STUN) と、ユーザーごとの時間制限つき TURN 認証情報 (`username = <期限>:<ユーザー ID>`、`credential = base64(HMAC-SHA1(共有秘密, username))`) を入れて配る。クライアントはこれを libp2p の WebRTC (`rtcConfiguration.iceServers`) に渡す。未設定のときは libp2p の既定 (公開 STUN のみ)。ページに `?ice=relay` を付けると中継 (TURN) だけを使う (診断用)。
+- **STUN / TURN**: サーバーに `TURN_HOST` / `TURN_SECRET` が設定されていると、`space_welcome.iceServers` に STUN (自前の coturn と公開 STUN) と、ユーザーごとの時間制限つき TURN 認証情報 (`username = <期限>:<ユーザー ID>`、`credential = base64(HMAC-SHA1(共有秘密, username))`) を入れて配る。クライアントはこれを libp2p の WebRTC (`rtcConfiguration.iceServers`) に渡す。未設定のときは libp2p の既定 (公開 STUN のみ)。ページに `?ice=relay` を付けると中継 (TURN) だけを使う (診断用)。
 
 ### ファイルの配置とダウンロード
 
@@ -233,7 +271,7 @@ sequenceDiagram
   `size` は、取り終えるまでは宣言サイズ (申告。取得するときに上限を守らせる)。容量は、取得を始めるときに宣言サイズで予約する。
 - **置いた人のブラウザ**: `keepServing` で、元のファイルから配り続ける (サーバーが取り終えるまで、このタブを開いたままにする必要がある。HUD に案内を出す)。
   取得の進捗は `place_progress` で届く。サーバーが保持したら (`object_updated` で `stored`) 配るのをやめる。
-- **取得できなかったら**: 容量が足りない・取得できない・順番待ちが多すぎる場合は、そのファイルを取り除き (`object_removed`)、置いた人にだけエラーを知らせる (`Room.removeUnstored`)。
+- **取得できなかったら**: 容量が足りない・取得できない・順番待ちが多すぎる場合は、そのファイルを取り除き (`space_delta` の `remove`)、置いた人にだけエラーを知らせる (`Space.Store.remove_unstored/2`)。
   置いた人が退室して `offline` になったものは、取り除かずに残す。
 - **ダウンロード**: クライアントは、サーバーが保持していない (`stored` でない)・自分が配っていないファイルは、**先に、繋がっている相手から直接取得を試す** (`fetchBlob`)。
   データが 8 秒届かない・失敗したときは、`request_file` に切り替える。サーバーが、この取得の完了を待っている人に加えて (`prepare_progress`)、終わったら `object_updated` (`stored`) を配るので、
@@ -278,8 +316,8 @@ sequenceDiagram
 - `<video>` が使う Range 要求に、ブラウザ内の IPFS から答えるために SW を使っている。他のファイルは、これまでどおり IPFS (bitswap) で取得する。
 
 - **再生状態の同期**: サーバーが動画ごとの再生状態 (`VideoPlaybackState { playing, time, at }`) を保持する。リングメニューの再生 / 一時停止は
-  `video_control { id, playing, time }` を送り、サーバー (`Room.setVideoState`) が状態を更新して `video_state` を全員に配る (最後の操作が勝つ)。
-  `welcome.videos` で、後から入室した人にも現在の状態を渡す。クライアントは、受け取った `time` に `(serverNow() - at) / 1000` を足して再生位置を合わせる。
+  `space_mutate` の patch で `time.playback { playing, time }` を送り、サーバー (`Space.Store`) が状態を更新して `space_delta` を全員に配る (最後の操作が勝つ)。
+  `space_welcome.entities` に含まれる `time.playback` で、後から入室した人にも現在の状態を渡す。クライアントは、受け取った `time` に `(serverNow() - at) / 1000` を足して再生位置を合わせる。
   `FilePlane` が状態の変化を監視し、`playVideo` / `pauseVideo` に `broadcast: false` で適用する (適用した状態を再送しない)。
   リモートからの再生はユーザー操作ではないため、音声付きの再生が止められたらミュートで再生する。動画が削除されると状態も消す。サーバーを再起動すると状態は消える。
   シークの UI は無いので、位置の同期は再生 / 一時停止と、途中入室時の現在位置まで。
@@ -378,7 +416,7 @@ sequenceDiagram
 **サーバーでの保持 (pinning)**
 - `set_avatar` を受けると、`ProtoServer.Place` がアップロードした人のブラウザから中身を取得し、検証して Kubo に pin する。その後 `Content.acquire(cid, :avatar, ...)` で参照カウントに登録する。
   種類は `ContentKind = "avatar"`、上限は 64 MiB (`MAX_AVATAR_BYTES`)。画像の形式判定は行わない。
-- 取得と pin が終わってから `Room.setAvatar` で `PeerInfo.avatarCid` を記録し、`peer_avatar` を配る。取得に失敗した場合は CID を配らず、本人にエラーを返す。
+- 取得と pin が終わってから `Place.set_avatar/3` が `Space.Store.set_peer_avatar/3` で `peer.avatarCid` を記録し、`space_delta` を配る。取得に失敗した場合は CID を配らず、本人にエラーを返す。
 - 参照カウント (`ProtoServer.Content` の refs) で保持する。同じ CID を複数のユーザーが使えば 1 つだけ保持する。
   ユーザーが別のアバターに差し替えたときと、退室したとき (`ws` の close) に `release` し、最後の参照が無くなれば unpin して gc する。
 - アバターはユーザーが部屋にいる間だけ保持され、退室するとサーバーから解放される (永続化しない)。
@@ -429,7 +467,7 @@ sequenceDiagram
 ### モジュール構成 (`apps/server/lib/proto_server`)
 
 ```
-application.ex   supervision tree (Finch / Task.Supervisor / Ipfs / Room / Content / Queue / Place / HttpServer)
+application.ex   supervision tree (Finch / Task.Supervisor / Registry / Ipfs / Content / Space.Store / Queue / Place / HttpServer)
 http_server.ex   Cowboy の 1 リスナー (HTTP + WebSocket)
 ws_handler.ex    :cowboy_websocket。join / pose / 配置 / 操作の dispatch、ping / idle timeout
 media_handler.ex /media/<cid> の GET / HEAD、Range の解析と Kubo ゲートウェイへの中継
@@ -480,28 +518,26 @@ Cowboy の WebSocket で 30 秒間隔の ping と、60 秒間の無活動で切�
 | 拡張 | 現設計での備え |
 |---|---|
 | WebXR / 手の姿勢 | `Pose` にオプショナルな `hands` を追加する |
-| 複数ルーム | `join` に `roomId` を追加し、server に `Room` を複数持たせる |
-| アバターの表情・アニメーション | `PeerInfo.avatarCid` で VRM を同期済み。表情・モーションの状態を `Pose` に足し、`VrmAvatar` で反映する |
+| 複数ルーム | `space_join` の `sessionId` を増やし、`Space.Store` をセッションごとに起動する |
+| アバターの表情・アニメーション | `peer.avatarCid` で VRM を同期済み。表情・モーションを `peer.*` 次元として足し、`VrmAvatar` で反映する |
 | ボイスチャット | 別途 SFU (LiveKit 等) を用意。ピア ID をトークン発行時の identity に使う |
-| 画像以外のオブジェクト・回転 / 拡大縮小・元に戻す | `WorldObject` に `kind` を追加する。`object_updated` はオブジェクト全体を送るので、プロパティを足せばそのまま同期できる。操作・排他制御はサーバーが既に持っている |
+| 画像以外のオブジェクト・回転 / 拡大縮小・元に戻す | `entity.kind` と `space.*` 次元を追加する。Reader / Writer の差分購読でそのまま同期できる |
 | 音声の再生、ファイルのプレビュー、動画の再生同期 | 映像は、リングメニューで 3D 空間の中に再生できる (Service Worker + ブラウザの IPFS で P2P ストリーミング)。音声も同じ仕組みで足せる。再生位置のクライアント間の同期は実装済み |
 | バイナリプロトコル | `type` 毎に固定レイアウトの `ArrayBuffer` へ移行 |
 
 ## 9. テスト・検証方針
 
-- server: `mix test` (ExUnit)。プロトコル検証、Room、Content、Queue、Place、URL 取り込み、Range / MIME の単体テスト。
-- client: 補間ロジック (`interpolation`) の単体テスト (Vitest)。`packages/world-sync` のテストは休止中の CRDT コードに対するもの。
-- protocol / world-sync: メッセージ型、文書モデル、projection、transfer codec の単体テスト。
-- 結合: `scripts/smoke-ws.mjs` で、Kubo なしでも入室・配置・操作・`/media` の 404 を確認できる。
+- server: `mix test` (ExUnit)。Protocol / Space.Schema / Space.Store / Content / Queue / Place / URL 取り込み / Range / MIME の単体テスト。
+- client: 補間 (`interpolation`)、写像 (`projection`)、`SpaceReader` / `SpaceWriter` の単体テスト (Vitest)。
+- protocol: メッセージ型、space スキーマ、ファイル種別の単体テスト。
+- 結合: `scripts/smoke-ws.mjs` で、Kubo なしでも入室・作成・claim・移動・複製・削除・姿勢・旧プロトコル拒否・`/media` の 404 を確認できる。
   実 Kubo を使った E2E で、画像・動画の配置、`/media` の GET / HEAD / Range、削除後の unpin / GC を確認済み
   (2026-10-21、ローカルの `ipfs daemon --offline`)。本番の WSS 経由 libp2p は未検証。
 - ブラウザ: 複数タブで、互いのアバターが見え、動き、退室で消えることを目視確認する。
 
-## 10. CRDT (歴史的設計)
+## 10. CRDT (歴史的設計・コード削除済み)
 
-`crdt-v1` はクライアント (`packages/world-sync`) にコードが残っているが、**Elixir/OTP サーバーは実装していない**。
-サーバーに `sync_*` / `claim` / `claim_release`、専用の保存領域、同期モードの切替はない。
-クライアントが `sync_hello` を送っても、サーバーは接続を切らずに `error` を返す。
-`VITE_SYNC_MODE=crdt-v1` を指定した場合も、クライアントはサーバーが対応していない旨を表示する。
+`crdt-v1` のサーバー実装とクライアントコードは space v2 への移行に伴い削除した。
+現在の同期は `Space.Store` / `Space.Reader` / `Space.Writer` によるサーバー権威モデルである。
 
 当時の設計・保証範囲・障害試験は [CRDT 実験モード](crdt-experiment.md) を参照 (歴史的資料)。

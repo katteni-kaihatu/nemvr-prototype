@@ -111,121 +111,215 @@ function assertPosition(actual, expected, label) {
 
 async function main() {
   const primary = await connect(WS_URL);
-  primary.send({ type: "join", name: "smoke" });
-
-  const welcome = await primary.waitFor((m) => m.type === "welcome", "welcome");
-  assert.equal(welcome.tickRate, 20, "welcome.tickRate");
-  assert.ok(Array.isArray(welcome.objects), "welcome.objects is an array");
-  assert.equal(welcome.objects.length, 5, "welcome.objects length");
-  assert.ok(
-    welcome.objects.every((object) => object && object.kind === "box"),
-    "welcome.objects are demo boxes",
-  );
-  assert.equal(new Set(welcome.objects.map((object) => object.id)).size, 5, "seeded ids unique");
-  assert.match(welcome.self.id, UUID_RE, "self.id is a lowercase UUID");
-  assert.equal(typeof welcome.ipfs.wsPort, "number", "ipfs.wsPort is a number");
-  assert.ok(!Object.hasOwn(welcome, "sync"), "welcome has no sync field");
-
-  const selfId = welcome.self.id;
-  const seededIds = new Set(welcome.objects.map((object) => object.id));
-
-  const observer = await connect(WS_URL);
-  observer.send({ type: "join", name: "smoke-observer" });
-  await observer.waitFor((m) => m.type === "welcome", "observer welcome");
-
   primary.send({
-    type: "place_box",
-    position: [1, 0, 1],
-    yaw: 0.25,
-    size: 1,
-    color: "#123456",
+    type: "space_join",
+    name: "smoke",
+    templateId: "vr-sns-3d",
+    schemaVersion: 1,
   });
 
-  const added = await primary.waitFor(
-    (m) =>
-      m.type === "object_added" &&
-      m.object &&
-      !seededIds.has(m.object.id) &&
-      m.object.color === "#123456",
-    "object_added",
+  const welcome = await primary.waitFor((m) => m.type === "space_welcome", "space_welcome");
+  assert.equal(welcome.tickRate, 20, "welcome.tickRate");
+  assert.equal(welcome.templateId, "vr-sns-3d", "welcome.templateId");
+  assert.equal(welcome.schemaVersion, 1, "welcome.schemaVersion");
+  assert.ok(welcome.scope && welcome.scope.read && welcome.scope.write, "welcome.scope");
+  assert.ok(welcome.dimensions && welcome.dimensions["space.position"], "welcome.dimensions");
+  assert.equal(typeof welcome.version, "number", "welcome.version");
+  assert.equal(welcome.seq, 0, "welcome.seq");
+  assert.equal(typeof welcome.at, "number", "welcome.at");
+  assert.match(welcome.self.peerId, UUID_RE, "self.peerId is a lowercase UUID");
+  assert.equal(welcome.self.entityId, welcome.self.peerId, "self.entityId");
+  assert.equal(typeof welcome.ipfs.wsPort, "number", "ipfs.wsPort is a number");
+
+  const seededBoxes = welcome.entities.filter(
+    (entity) => entity.dimensions["entity.kind"] === "box",
+  );
+  assert.equal(seededBoxes.length, 5, "welcome has five demo boxes");
+  assert.equal(new Set(seededBoxes.map((entity) => entity.id)).size, 5, "seeded ids unique");
+
+  const selfId = welcome.self.peerId;
+  const seededIds = new Set(seededBoxes.map((entity) => entity.id));
+
+  const observer = await connect(WS_URL);
+  observer.send({
+    type: "space_join",
+    name: "smoke-observer",
+    templateId: "vr-sns-3d",
+    schemaVersion: 1,
+  });
+  await observer.waitFor((m) => m.type === "space_welcome", "observer space_welcome");
+
+  const boxId = crypto.randomUUID();
+  const createId = crypto.randomUUID();
+  primary.send({
+    type: "space_mutate",
+    mutation: {
+      commandId: createId,
+      op: "create",
+      entityId: boxId,
+      dimensions: {
+        "entity.kind": "box",
+        "space.position": [1, 0, 1],
+        "space.yaw": 0.25,
+        "box.size": 1,
+        "box.color": "#123456",
+      },
+    },
+  });
+
+  await primary.waitFor(
+    (m) => m.type === "space_ack" && m.commandId === createId,
+    "create space_ack",
   );
 
-  const object = added.object;
-  assert.ok(!seededIds.has(object.id), "placed object id is new");
-  assert.equal(object.kind, "box", "object_added kind");
-  assertPosition(object.position, [1, 0, 1], "object_added");
-  assert.equal(object.yaw, 0.25, "object_added yaw");
-  assert.equal(object.size, 1, "object_added size");
-  assert.equal(object.color, "#123456", "object_added color");
-
-  primary.send({ type: "grab_object", id: object.id });
-  const grabbed = await primary.waitFor(
+  const added = await observer.waitFor(
     (m) =>
-      m.type === "object_updated" && m.object?.id === object.id && m.object.heldBy === selfId,
-    "grab object_updated",
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) =>
+          change.op === "upsert" &&
+          change.entity?.id === boxId &&
+          change.entity.dimensions["entity.kind"] === "box",
+      ),
+    "observer create delta",
   );
-  assert.equal(grabbed.object.heldBy, selfId, "grab heldBy");
+
+  const createdEntity = added.changes.find((change) => change.entity?.id === boxId).entity;
+  assert.ok(!seededIds.has(createdEntity.id), "placed entity id is new");
+  assertPosition(createdEntity.dimensions["space.position"], [1, 0, 1], "create");
+  assert.equal(createdEntity.dimensions["space.yaw"], 0.25, "create yaw");
+  assert.equal(createdEntity.dimensions["box.color"], "#123456", "create color");
 
   primary.send({
-    type: "move_object",
-    id: object.id,
-    position: [2, 0, 2],
-    yaw: 0.5,
+    type: "space_mutate",
+    mutation: { commandId: crypto.randomUUID(), op: "claim", entityId: boxId },
+  });
+
+  await observer.waitFor(
+    (m) =>
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) =>
+          change.op === "upsert" &&
+          change.entity?.id === boxId &&
+          change.entity.dimensions["interaction.heldBy"] === selfId,
+      ),
+    "claim delta",
+  );
+
+  primary.send({
+    type: "space_mutate",
+    mutation: {
+      commandId: crypto.randomUUID(),
+      op: "patch",
+      entityId: boxId,
+      set: { "space.position": [2, 0, 2], "space.yaw": 0.5 },
+    },
   });
 
   const moved = await observer.waitFor(
     (m) =>
-      m.type === "object_updated" &&
-      m.object?.id === object.id &&
-      Array.isArray(m.object.position) &&
-      Math.abs(m.object.position[0] - 2) < 1e-9 &&
-      Math.abs(m.object.position[2] - 2) < 1e-9,
-    "move object_updated",
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) =>
+          change.op === "upsert" &&
+          change.entity?.id === boxId &&
+          Math.abs(change.entity.dimensions["space.position"][0] - 2) < 1e-9 &&
+          Math.abs(change.entity.dimensions["space.position"][2] - 2) < 1e-9,
+      ),
+    "move delta",
   );
-  assertPosition(moved.object.position, [2, 0, 2], "move");
-  assert.equal(moved.object.yaw, 0.5, "move yaw");
-  assert.equal(moved.object.heldBy, selfId, "move heldBy");
 
-  primary.send({ type: "duplicate_object", id: object.id });
-  const duplicate = await primary.waitFor(
+  const movedEntity = moved.changes.find((change) => change.entity?.id === boxId).entity;
+  assertPosition(movedEntity.dimensions["space.position"], [2, 0, 2], "move");
+  assert.equal(movedEntity.dimensions["space.yaw"], 0.5, "move yaw");
+  assert.equal(movedEntity.dimensions["interaction.heldBy"], selfId, "move heldBy");
+
+  const duplicateId = crypto.randomUUID();
+  primary.send({
+    type: "space_mutate",
+    mutation: {
+      commandId: crypto.randomUUID(),
+      op: "duplicate",
+      entityId: boxId,
+      newEntityId: duplicateId,
+    },
+  });
+
+  const duplicate = await observer.waitFor(
     (m) =>
-      m.type === "object_added" &&
-      m.object &&
-      m.object.id !== object.id &&
-      !seededIds.has(m.object.id),
-    "duplicate object_added",
-  );
-  assert.notEqual(duplicate.object.id, object.id, "duplicate id is new");
-  assert.ok(!Object.hasOwn(duplicate.object, "heldBy"), "duplicate is not held");
-
-  primary.send({ type: "delete_object", id: object.id });
-  await primary.waitFor(
-    (m) => m.type === "object_removed" && m.id === object.id,
-    "object_removed",
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) => change.op === "upsert" && change.entity?.id === duplicateId,
+      ),
+    "duplicate delta",
   );
 
-  primary.send({ type: "delete_object", id: duplicate.object.id });
-  await primary.waitFor(
-    (m) => m.type === "object_removed" && m.id === duplicate.object.id,
-    "duplicate object_removed",
+  const duplicateEntity = duplicate.changes.find((change) => change.entity?.id === duplicateId).entity;
+  assert.ok(!Object.hasOwn(duplicateEntity.dimensions, "interaction.heldBy"), "duplicate is not held");
+
+  primary.send({
+    type: "space_mutate",
+    mutation: { commandId: crypto.randomUUID(), op: "delete", entityId: boxId },
+  });
+
+  await observer.waitFor(
+    (m) =>
+      m.type === "space_delta" &&
+      m.changes.some((change) => change.op === "remove" && change.id === boxId),
+    "delete delta",
   );
 
   primary.send({
-    type: "pose",
-    pose: { position: [3, 0, 3], head: [0, 0, 0, 1] },
+    type: "space_mutate",
+    mutation: { commandId: crypto.randomUUID(), op: "delete", entityId: duplicateId },
   });
 
-  const snapshot = await primary.waitFor(
+  await observer.waitFor(
     (m) =>
-      m.type === "snapshot" &&
-      m.poses?.[selfId] &&
-      Array.isArray(m.poses[selfId].position) &&
-      Math.abs(m.poses[selfId].position[0] - 3) < 1e-9 &&
-      Math.abs(m.poses[selfId].position[2] - 3) < 1e-9,
-    "snapshot pose",
+      m.type === "space_delta" &&
+      m.changes.some((change) => change.op === "remove" && change.id === duplicateId),
+    "duplicate delete delta",
   );
-  assertPosition(snapshot.poses[selfId].position, [3, 0, 3], "snapshot");
-  assert.deepEqual(snapshot.poses[selfId].head, [0, 0, 0, 1], "snapshot head");
+
+  primary.send({
+    type: "space_mutate",
+    mutation: {
+      commandId: crypto.randomUUID(),
+      op: "patch",
+      entityId: selfId,
+      set: {
+        "space.position": [3, 0, 3],
+        "space.head": [0, 0, 0, 1],
+      },
+    },
+  });
+
+  const pose = await observer.waitFor(
+    (m) =>
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) =>
+          change.op === "upsert" &&
+          change.entity?.id === selfId &&
+          Array.isArray(change.entity.dimensions["space.position"]) &&
+          Math.abs(change.entity.dimensions["space.position"][0] - 3) < 1e-9 &&
+          Math.abs(change.entity.dimensions["space.position"][2] - 3) < 1e-9,
+      ),
+    "pose delta",
+  );
+
+  const poseEntity = pose.changes.find((change) => change.entity?.id === selfId).entity;
+  assertPosition(poseEntity.dimensions["space.position"], [3, 0, 3], "pose");
+  assert.deepEqual(poseEntity.dimensions["space.head"], [0, 0, 0, 1], "pose head");
+
+  const legacy = await connect(WS_URL);
+  legacy.send({ type: "join", name: "legacy" });
+  const mismatch = await legacy.waitFor(
+    (m) => m.type === "space_error" && m.code === "protocol_mismatch",
+    "legacy protocol mismatch",
+  );
+  assert.equal(mismatch.code, "protocol_mismatch", "legacy join is rejected");
 
   const mediaResponse = await fetch(`${HTTP_URL}/media/deadbeef`);
   assert.equal(mediaResponse.status, 404, "/media/deadbeef status");

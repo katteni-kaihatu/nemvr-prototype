@@ -81,24 +81,37 @@
 - [x] content: 永続台帳・明示リセットまでの pin・20 GiB 上限・取得不能表示と再試行
 - [ ] E2E: 3 browser contexts・100 objects の障害試験と legacy モードの回帰
 
-**現状**: サーバー側の crdt-v1 は削除済み。クライアントのコードは休止状態で、`VITE_SYNC_MODE=crdt-v1` を指定しても
-サーバーが対応していない旨のエラーになる。M6 は現在のバックエンドの完了条件には含めない。
+**現状**: サーバー側の crdt-v1 とクライアントの CRDT コードは削除済み。M6 は現在のバックエンドの完了条件には含めない。
 
 ## M6.5: Elixir/OTP バックエンドへの置き換え (実装済み)
 
 Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置き換える。
 
 - [x] Mix プロジェクト (`apps/server/mix.exs`)、Cowboy の単一リスナー、runtime 設定 (`HOST` / `PORT` / Kubo / TURN)
-- [x] GenServer: `ProtoServer.Room` / `Content` / `Queue` / `Place` / `Ipfs`
-- [x] legacy プロトコル (join / pose / snapshot / 配置 / つかむ・移動・削除・複製 / 動画状態 / URL 取り込み / TURN)
+- [x] GenServer: `ProtoServer.Space.Store` / `Content` / `Queue` / `Place` / `Ipfs`
+- [x] space v2 プロトコル (`space_join` / `space_query` / `space_subscribe` / `space_mutate` / `space_import_url` / `space_set_avatar` / `file_request`)
 - [x] `/media/<cid>` の Range ストリーミング (Kubo ゲートウェイ経由)
-- [x] IPFS を Kubo に委譲 (HTTP API 5001 / ゲートウェイ 8082 / libp2p ws 8081)。`welcome.ipfs` に Kubo の peer ID と `IPFS_PUBLIC_PORT` を載せる
-- [x] crdt-v1 のサーバー実装を削除 (クライアントのコードは休止)
+- [x] IPFS を Kubo に委譲 (HTTP API 5001 / ゲートウェイ 8082 / libp2p ws 8081)。`space_welcome.ipfs` に Kubo の peer ID と `IPFS_PUBLIC_PORT` を載せる
+- [x] crdt-v1 のサーバー実装とクライアントコードを削除
 - [x] Nix flake (`nix develop`)、`scripts/smoke-ws.mjs`、デプロイスクリプト (Kubo + release + Caddy)
 - [x] Kubo を接続したメディア E2E (画像・動画の取得、pin / unpin / GC、Range)。ローカルの `ipfs daemon --offline` で確認済み
 - [ ] 本番 VPS での `wss://HOST:8443` 経由の libp2p
 
 **完了条件**: 上記の未検証項目を、Kubo を起動した環境と本番構成で確認する。
+
+## M6.6: n次元クライアント基盤 (space v2、実装済み)
+
+`docs/n-dim-client-original.md` の基盤部分を実装する。
+
+- [x] 共有次元スキーマ (`packages/protocol/space-schema.json`)
+- [x] `Space.Store`: セッション単位のエンティティストア、version、購読、フィルタ、上限、seed
+- [x] `Space.Reader` / `Space.Writer`: 接続ごとのプロセス、スナップショット / 差分、20Hz バッチ、`seq`
+- [x] `Space.Scope`: 読み書き次元・フィルタ・作成/削除可否・上限のケーパビリティ
+- [x] クライアントの `SpaceReader` / `SpaceWriter` と `vr-sns-3d@1` 写像
+- [x] 旧 WebSocket プロトコルと CRDT 経路の削除
+- [ ] WASM UGC、ユーザー定義写像、動的分割、リードレプリカ、永続化、認証 (次段階)
+
+**完了条件**: 既存の 3D 機能が space v2 上で動き、`pnpm typecheck` / `pnpm test` / `pnpm smoke:ws` が通る。
 
 ## M7 以降 (候補。着手前に再検討する)
 
