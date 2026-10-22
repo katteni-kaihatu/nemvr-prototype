@@ -1,31 +1,23 @@
 // client / server 間で共有するメッセージ型と定数。実行時依存なし。
 
 import type { FileCategory } from "./files.js";
+import type {
+  JsonValue,
+  SpaceChange,
+  SpaceCondition,
+  SpaceEntity,
+  SpaceFilter,
+  SpaceMutation,
+  SpaceScope,
+} from "./space.js";
 
 export * from "./files.js";
+export * from "./space.js";
 
 export const TICK_RATE = 20; // Hz
 export const MAX_NAME_LENGTH = 24;
 export const MAX_MESSAGE_BYTES = 4096;
 
-/** CRDT 同期プロトコルのスキーマ版。 */
-export const SYNC_SCHEMA_VERSION = 1;
-export type SyncMode = "crdt-v1";
-
-/** welcome で実験モードであることと、接続先のワールドを識別する。 */
-export interface CrdtSyncInfo {
-  mode: SyncMode;
-  worldId: string;
-  schemaVersion: number;
-}
-
-/** 分割転送の 1 片。data は base64。 */
-export interface SyncPart {
-  transferId: string;
-  index: number;
-  count: number;
-  data: string;
-}
 /** 貼り付けを受け付ける URL の長さの上限。 */
 export const MAX_URL_LENGTH = 2048;
 export const MAX_ABS_POSITION = 1000;
@@ -79,7 +71,7 @@ export interface PeerInfo {
 export interface PeerState extends PeerInfo {
   pose: Pose;
   /**
-   * このユーザーのブラウザ内 IPFS ノードの libp2p ピア ID (`ipfs_peer` で知らせてきたあとだけ)。
+   * このユーザーのブラウザ内 IPFS ノードの libp2p ピア ID (`peer.ipfsPeerId` 次元)。
    * ダウンロードの取得元 (どのピアからブロックが届いたか) に、ユーザー名を出すために使う。
    */
   ipfsPeerId?: string;
@@ -87,7 +79,7 @@ export interface PeerState extends PeerInfo {
 
 /** ワールドに置かれたオブジェクトに共通の項目。 */
 interface ObjectBase {
-  id: string; // サーバーが採番
+  id: string;
   /** 位置 (ワールド座標)。下辺中央。 */
   position: Vec3;
   /** Y 軸回りの向き (rad)。法線は +Z を yaw だけ回した向き。 */
@@ -106,10 +98,9 @@ interface ObjectBase {
  */
 export interface ImageObject extends ObjectBase {
   kind: "image";
-  cid: string; // 画像 (UnixFS ファイル) の CID。IPFS から取得する
+  cid: string;
   width: number;
   height: number;
-  /** 元のファイル名 (ダウンロード時の名前)。無いこともある。 */
   name?: string;
 }
 
@@ -119,24 +110,12 @@ export interface ImageObject extends ObjectBase {
  */
 export interface FileObject extends ObjectBase {
   kind: "file";
-  cid: string; // ファイル (UnixFS ファイル) の CID
-  /** ファイル名。サーバーが sanitizeFileName で整えたもの。 */
+  cid: string;
   name: string;
-  /**
-   * バイト数。`stored` なら、サーバーが実際に取得して測った値。
-   * まだなら、ファイルのメタデータから読んだ宣言のサイズ (置いた人の申告。実際の取得のときに、上限を守らせる)。
-   */
   size: number;
-  /**
-   * サーバーが中身を保持しているか。保持していれば、置いた人が退室しても取得できる。
-   * 大きなファイルは、置いた直後は保持していない (false) で、サーバーが取り終えると true になる。その間は、置いた人 (`owner`) が配る。
-   */
   stored: boolean;
-  /** まだ保持していないファイルを配っている人 (PeerInfo.id)。`stored` になると無くなる。 */
   owner?: string;
-  /** 保持しておらず、配っている人も退室した。取得できない。 */
   offline?: boolean;
-  /** アイコンの種類。サーバーが名前と中身から判定する。 */
   category: FileCategory;
 }
 
@@ -169,7 +148,7 @@ export interface IpfsInfo {
 
 /**
  * WebRTC (ブラウザ同士の直接接続) に使う STUN / TURN サーバー。RTCIceServer と同じ形。
- * TURN の認証情報は時間制限つきで、サーバーが入室 (welcome) ごとに発行する。
+ * TURN の認証情報は時間制限つきで、サーバーが入室 (space_welcome) ごとに発行する。
  */
 export interface IceServer {
   urls: string[];
@@ -177,102 +156,97 @@ export interface IceServer {
   credential?: string;
 }
 
-/**
- * place_image の本体部分 (id はサーバーが採番する)。サーバーは cid の中身を検証してから置く。
- * objectId はクライアント生成 UUID (CRDT モード用)。旧クライアントでは省略される。
- */
+// ---- v2 プロトコル ----
+
+export interface SpaceSelf {
+  peerId: string;
+  entityId: string;
+  name: string;
+  color: string;
+}
+
+export type ClientMessage =
+  | {
+      type: "space_join";
+      name: string;
+      sessionId?: string;
+      templateId: string;
+      schemaVersion: number;
+    }
+  | { type: "space_query"; requestId: string; filter: SpaceFilter; limit?: number }
+  | { type: "space_subscribe"; subscriptionId: string; filter: SpaceFilter }
+  | { type: "space_unsubscribe"; subscriptionId: string }
+  | { type: "space_mutate"; mutation: SpaceMutation }
+  | {
+      type: "space_import_url";
+      commandId: string;
+      entityId: string;
+      url: string;
+      position: Vec3;
+      yaw: number;
+      pitch?: number;
+    }
+  | { type: "space_set_avatar"; commandId: string; cid: string | null }
+  | { type: "file_request"; commandId: string; entityId: string };
+
+export type ServerMessage =
+  | {
+      type: "space_welcome";
+      self: SpaceSelf;
+      sessionId: string;
+      templateId: string;
+      schemaVersion: number;
+      scope: SpaceScope;
+      dimensions: Record<string, unknown>;
+      subscriptionId: string;
+      version: number;
+      seq: number;
+      at: number;
+      entities: SpaceEntity[];
+      ipfs: IpfsInfo;
+      iceServers?: IceServer[];
+      tickRate: number;
+    }
+  | {
+      type: "space_snapshot";
+      subscriptionId: string;
+      version: number;
+      seq: number;
+      at: number;
+      entities: SpaceEntity[];
+    }
+  | {
+      type: "space_delta";
+      subscriptionId: string;
+      version: number;
+      seq: number;
+      at: number;
+      changes: SpaceChange[];
+    }
+  | { type: "space_query_result"; requestId: string; version: number; entities: SpaceEntity[] }
+  | { type: "space_ack"; commandId: string; version: number; entityId?: string }
+  | { type: "space_error"; commandId?: string; code: string; message: string }
+  | {
+      type: "file_progress";
+      entityId?: string;
+      cid?: string;
+      loaded: number;
+      total?: number;
+      queued?: boolean;
+      role?: "place" | "prepare";
+    }
+  | { type: "file_failed"; entityId?: string; cid?: string; message: string };
+
+/** 旧クライアント互換のためのヘルパー型 (v2 ではメッセージには使わない)。 */
 export type PlaceImage = Pick<ImageObject, "cid" | "position" | "yaw" | "width" | "height" | "name"> & {
   objectId?: string;
 };
-
-/**
- * place_file の本体部分。size と category はサーバーが中身から決めるので、クライアントは送らない。
- * サーバーは cid の中身を取得して (上限 MAX_FILE_BYTES) から置く。
- * objectId はクライアント生成 UUID (CRDT モード用)。旧クライアントでは省略される。
- */
 export type PlaceFile = Pick<FileObject, "cid" | "name" | "position" | "yaw"> & { objectId?: string };
-
-/** place_url: 貼られた http(s) の URL。位置・向きは、ファイルを置いたときと同じ。 */
 export type PlaceUrl = Pick<LinkObject, "url" | "position" | "yaw"> & { objectId?: string };
-
-/** place_box の本体部分 (id はサーバーが採番する)。デモ用のボックス配置・テスト用。 */
 export type PlaceBox = Pick<BoxObject, "position" | "yaw" | "size" | "color"> & {
   pitch?: number;
   objectId?: string;
 };
 
-// Client -> Server
-export type ClientMessage =
-  | { type: "join"; name: string }
-  | { type: "pose"; pose: Pose }
-  | ({ type: "place_image" } & PlaceImage)
-  | ({ type: "place_file" } & PlaceFile)
-  | ({ type: "place_box" } & PlaceBox)
-  // URL を貼った。画像・動画・音声ならサーバーが取得して IPFS に置き、それ以外はリンクとして置く
-  | ({ type: "place_url" } & PlaceUrl)
-  // まだサーバーが保持していないファイル (取得中の大きなファイル) の、取得の完了を待つ。ダウンロードで、直接の取得がだめだったときの切り替え先
-  | { type: "request_file"; id: string }
-  // 自分の libp2p ピア ID を他のユーザーに知らせる (ブラウザ同士の直接接続用)
-  | { type: "ipfs_peer"; peerId: string }
-  // 自分の VRM アバターの CID をサーバーに知らせる (null なら簡易アバターに戻す)
-  | { type: "set_avatar"; cid: string | null }
-  // オブジェクトの操作。つかんでいる間は、つかんだ本人だけが move できる (排他)
-  | { type: "grab_object"; id: string }
-  | { type: "move_object"; id: string; position: Vec3; yaw: number; pitch?: number; scale?: number }
-  | { type: "release_object"; id: string }
-  | { type: "video_control"; id: string; playing: boolean; time: number }
-  | { type: "delete_object"; id: string }
-  | { type: "duplicate_object"; id: string }
-  // CRDT 同期 (crdt-v1)。stateVector / update は base64。
-  | { type: "sync_hello"; worldId: string; schemaVersion: number; stateVector: string }
-  | { type: "sync_update"; update: string }
-  | ({ type: "sync_part" } & SyncPart)
-  // 一時的なつかみ claim。until は期限 (ms)。seq は session 内で単調増加。
-  | { type: "claim"; id: string; sessionId: string; seq: number; until: number }
-  | { type: "claim_release"; id: string; sessionId: string };
-
-// Server -> Client
-export type ServerMessage =
-  | {
-      type: "welcome";
-      self: PeerInfo;
-      peers: PeerState[];
-      objects: WorldObject[];
-      /** いま再生中の動画などの状態 (オブジェクト ID ごと)。 */
-      videos: Record<string, VideoPlaybackState>;
-      ipfs: IpfsInfo;
-      /** STUN / TURN の設定。サーバーに TURN が設定されていないときは省略される (クライアントは既定の公開 STUN を使う)。 */
-      iceServers?: IceServer[];
-      tickRate: number;
-      /** crdt-v1 のときだけ付く。旧クライアントには無い。 */
-      sync?: CrdtSyncInfo;
-    }
-  | { type: "object_added"; object: WorldObject }
-  // 位置・向き・つかまれている状態が変わった (全体の状態を送る)
-  | { type: "object_updated"; object: WorldObject }
-  | { type: "object_removed"; id: string }
-  | ({ type: "video_state"; id: string } & VideoPlaybackState)
-  // サーバーが、置こうとしている中身を IPFS から取得している途中の進捗 (置いた本人にだけ送る)。
-  // 大きなファイルは数分かかるので、その間も状況が分かるようにする。total はサーバーが分かっていれば (宣言サイズ)
-  // queued: 他の転送の順番待ちをしている (まだ取得を始めていない)
-  | { type: "place_progress"; cid: string; loaded: number; total?: number; queued?: boolean }
-  // request_file の進捗 (サーバーが、置いた人から取得している途中)。待っている人にだけ送る
-  | { type: "prepare_progress"; cid: string; loaded: number; total?: number; queued?: boolean }
-  // request_file が失敗した (置いた人が退室した、容量が足りない、など)
-  | { type: "prepare_failed"; cid: string; message: string }
-  // 他のユーザーが IPFS ノードの準備を終えた。受け取った側がそのピアへ接続しに行く
-  | { type: "peer_ipfs"; id: string; ipfsPeerId: string }
-  // 他のユーザーの VRM アバターが変わった (cid が null なら簡易アバターに戻った)
-  | { type: "peer_avatar"; id: string; cid: string | null }
-  | { type: "peer_joined"; peer: PeerState }
-  | { type: "peer_left"; id: string }
-  | { type: "snapshot"; time: number; poses: Record<string, Pose> }
-  // CRDT 同期 (crdt-v1)。update / stateVector は base64。
-  | { type: "sync_init"; update: string }
-  | { type: "sync_update"; update: string }
-  | ({ type: "sync_part" } & SyncPart)
-  | { type: "sync_ack"; stateVector: string }
-  | { type: "sync_error"; message: string }
-  // 他ピアのつかみ claim の通知。
-  | { type: "claim"; id: string; peerId: string; sessionId: string; seq: number; until: number }
-  | { type: "error"; message: string };
+export type SpaceJsonValue = JsonValue;
+export type SpaceConditionMessage = SpaceCondition;
