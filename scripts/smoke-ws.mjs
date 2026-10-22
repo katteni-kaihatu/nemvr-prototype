@@ -149,6 +149,41 @@ async function main() {
   });
   await observer.waitFor((m) => m.type === "space_welcome", "observer space_welcome");
 
+  const avatarCid = "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy";
+  const avatarCommandId = crypto.randomUUID();
+  primary.send({ type: "space_set_avatar", commandId: avatarCommandId, cid: avatarCid });
+
+  await primary.waitFor(
+    (m) => m.type === "space_ack" && m.commandId === avatarCommandId,
+    "avatar space_ack",
+  );
+
+  await observer.waitFor(
+    (m) =>
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) =>
+          change.op === "upsert" &&
+          change.entity?.id === selfId &&
+          change.entity.dimensions["peer.avatarCid"] === avatarCid,
+      ),
+    "avatar delta",
+  );
+
+  primary.send({ type: "space_set_avatar", commandId: crypto.randomUUID(), cid: null });
+
+  await observer.waitFor(
+    (m) =>
+      m.type === "space_delta" &&
+      m.changes.some(
+        (change) =>
+          change.op === "upsert" &&
+          change.entity?.id === selfId &&
+          !Object.hasOwn(change.entity.dimensions, "peer.avatarCid"),
+      ),
+    "avatar clear delta",
+  );
+
   const boxId = crypto.randomUUID();
   const createId = crypto.randomUUID();
   primary.send({
