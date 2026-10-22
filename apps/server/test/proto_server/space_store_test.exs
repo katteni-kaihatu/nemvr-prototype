@@ -37,6 +37,12 @@ defmodule ProtoServer.Space.StoreTest do
     refute Map.has_key?(peer, "avatarCid")
   end
 
+  test "finds an avatar cid for media delivery", %{session: session, peer_id: peer_id} do
+    assert :error = Store.find_avatar(session, "bafy-avatar")
+    assert :ok = Store.set_peer_avatar(session, peer_id, "bafy-avatar")
+    assert {:ok, %{"name" => "avatar.vrm", "cid" => "bafy-avatar"}} = Store.find_avatar(session, "bafy-avatar")
+  end
+
   test "places an image before the server has pinned it", %{session: session} do
     cid = "bafy-image"
 

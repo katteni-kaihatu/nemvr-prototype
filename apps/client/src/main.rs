@@ -5,11 +5,14 @@ mod content;
 mod headless;
 mod net;
 mod ui;
+#[cfg(feature = "vrm")]
+mod vrm;
 mod world;
 
 const UI_FONT: &[u8] = include_bytes!("../../../assets/fonts/migu-1m-regular.ttf");
 
 use bevy::audio::AudioPlugin;
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::text::Font;
 use clap::Parser;
@@ -52,6 +55,9 @@ struct Args {
     /// Headless duration in seconds.
     #[arg(long, default_value_t = 5)]
     duration: u64,
+    /// VRM avatar file to upload on join.
+    #[arg(long)]
+    avatar: Option<std::path::PathBuf>,
     /// Start the embedded IPFS node, print its peer ID, and exit.
     #[arg(long)]
     ipfs_smoke: bool,
@@ -65,6 +71,9 @@ fn main() {
     }
     if let Some(name) = &args.name {
         config.name = name.clone();
+    }
+    if let Some(avatar) = &args.avatar {
+        config.avatar_path = Some(avatar.clone());
     }
 
     if args.headless {
@@ -89,9 +98,22 @@ fn main() {
     let net = NetHandle::spawn(initial);
     let content = ContentService::spawn(config.http_base());
 
+    let asset_root = config::project_dirs()
+        .map(|dirs| dirs.cache_dir().join("assets"))
+        .unwrap_or_else(|| std::path::PathBuf::from("assets"));
+    std::fs::create_dir_all(asset_root.join("vrm")).ok();
+
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
+            .set(AssetPlugin {
+                file_path: asset_root.to_string_lossy().into_owned(),
+                ..default()
+            })
+            .set(LogPlugin {
+                filter: "wgpu=error,naga=warn,icu_provider=off".into(),
+                ..default()
+            })
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Proto SNS".into(),
@@ -122,6 +144,8 @@ fn main() {
         WorldPlugin,
         UiPlugin,
     ));
+    #[cfg(feature = "vrm")]
+    app.add_plugins((bevy_vrm::VrmPlugins, vrm::VrmPlugin));
 
     if args.name.is_some() {
         app.world_mut()

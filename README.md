@@ -15,15 +15,19 @@ Web クライアントは削除済み。旧実装は Git の `web-client-final` 
 
 実装済み: 入室、移動・しゃがみ・リーン・ジャンプ、姿勢同期と補間、簡易アバター、
 画像・ファイル・ボックス・リンクの表示、ドラッグ&ドロップ配置、
-つかむ・移動・回転・拡大縮小・削除・複製・ダウンロード、日本語 UI、IPFS 共有。
+つかむ・移動・回転・拡大縮小・削除・複製・ダウンロード、日本語 UI、IPFS 共有、
+VRM 0.x アバター (`.vrm` のドロップ / `--avatar`)。
 
-未実装: VRM、OpenXR / PC VR、動画、URL 取り込み、鏡。
+未実装: VRM のアニメーション・1.0・自分の鏡像、OpenXR / PC VR、動画、URL 取り込み、鏡。
 Windows はクロスビルドと Wine での headless 確認まで。実機 GPU / IME / SteamVR は未検証。
 
 ```sh
 nix develop
 rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
 rustup run 1.95.0 cargo run -p proto-client -- --server ws://127.0.0.1:8080/ws
+# VRM を指定する場合
+rustup run 1.95.0 cargo run -p proto-client -- \
+  --server wss://nemvr.nemnomi.dev/ws --name alice --avatar ~/avatar.vrm
 ```
 
 操作・設定・制限の詳細は [`docs/bevy-client.md`](docs/bevy-client.md) を参照。

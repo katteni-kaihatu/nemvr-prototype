@@ -147,6 +147,7 @@ impl Plugin for WorldPlugin {
                 )
                     .chain()
                     .run_if(in_state(crate::AppState::InWorld)),
-            );
+            )
+            .add_systems(Update, interaction::handle_avatar_drop);
     }
 }

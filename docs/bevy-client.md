@@ -18,7 +18,9 @@ Web クライアントは削除済みで、これが現行クライアント。
 | 削除・複製・ダウンロード | 実装済み (リングメニュー) |
 | 埋め込み IPFS (rust-ipfs) | 起動確認済み |
 | Kubo との bitswap 相互運用 | TCP 4001 で双方向を確認済み |
-| VRM | 未実装 |
+| VRM | 0.x を読み込み・表示 (1.0 は簡易アバターにフォールバック) |
+| 自分の VRM 表示 | 未実装 (他ユーザーには表示。鏡は未実装) |
+| VRM のアニメーション | 未実装 (静的なポーズ) |
 | OpenXR / PC VR | 未実装 |
 | 動画 (FFmpeg) | 未実装 |
 | URL 取り込み・鏡 | 未実装 |
@@ -45,6 +47,15 @@ rustup run 1.95.0 cargo run -p proto-client -- --server ws://127.0.0.1:8080/ws
 
 ```sh
 rustup run 1.95.0 cargo run -p proto-client -- --server ws://127.0.0.1:8080/ws --name alice
+```
+
+VRM アバターを指定する場合は `--avatar` を付ける。入室時に IPFS へ追加し、
+`space_set_avatar` で他のクライアントへ共有する。Lobby やワールドで `.vrm` を
+ウィンドウにドロップしても設定できる。設定は次回起動時に再利用される。
+
+```sh
+rustup run 1.95.0 cargo run -p proto-client -- \
+  --server wss://nemvr.nemnomi.dev/ws --name alice --avatar ~/avatar.vrm
 ```
 
 設定は `directories` の `proto-client/config.json` に保存される。
@@ -106,7 +117,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtoSNS-x86_64.AppImage --help
 | 中クリック / M | リングメニュー (削除 / 複製 / ダウンロード) |
 | B | 視線先の床にボックスを置く |
 | Esc | ポインタロック解除 / メニューを閉じる |
-| ファイルドロップ | 視線先の床に配置 |
+| ファイルドロップ | 視線先の床に配置 (`.vrm` はアバターとして設定) |
 
 ## ヘッドレス / 検証
 
@@ -177,7 +188,7 @@ apps/client/
 
 ## 次の作業
 
-1. **VRM** (`bevy_vrm` 0.4)。取得・キャッシュ・簡易アバターへのフォールバック・一人称表示。
+1. **VRM の仕上げ**。歩行・待機アニメーション、鏡 / 三人称、VRM 1.0 対応。
 2. **OpenXR / PC VR** (`bevy_mod_openxr` 0.6)。HMD 追従、コントローラ線、移動、メニュー。
 3. **動画** (`ffmpeg-next` + `/media/<cid>` の Range)。
 4. **URL 取り込み・鏡**。
@@ -190,7 +201,10 @@ TLS / SNI の制約があるため、TCP swarm を優先し、複数候補を順
 
 ## 既知の制限
 
-- VRM・XR・動画・URL 取り込み・鏡は未実装。
+- VRM は 0.x のみ。1.0 は読み込みに失敗し、簡易アバターのまま表示される。
+- 自分の VRM は他ユーザーには表示されるが、自分からは見えない (一人称)。鏡は未実装。
+- VRM のアニメーション (歩行・待機) は未実装で、静的なポーズになる。
+- XR・動画・URL 取り込み・鏡は未実装。
 - 画像取得は埋め込み IPFS が失敗すると `/media/<cid>` にフォールバックする。
 - ドラッグ&ドロップの複数ファイルは同じ位置に近接して置かれる。以前の Web 実装の横並びレイアウトと完全一致は未検証。
 - 日本語入力は Bevy の `EditableText` / IME に依存する。Linux / Windows での実機確認が必要。

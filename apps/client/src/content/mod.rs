@@ -317,7 +317,8 @@ async fn fetch_http(
     }
     let total = response.content_length();
     let mut stream = response.bytes_stream();
-    let mut file = if let Some(path) = &save_to {
+    let part_path = save_to.as_ref().map(|path| part_path(path));
+    let mut file = if let Some(path) = &part_path {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -335,24 +336,44 @@ async fn fetch_http(
     let mut loaded = 0u64;
 
     use tokio::io::AsyncWriteExt;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("受信中に失敗: {error}"))?;
-        loaded += chunk.len() as u64;
-        if let Some(file) = &mut file {
-            file.write_all(&chunk)
-                .await
-                .map_err(|error| error.to_string())?;
-        } else {
-            buffer.extend_from_slice(&chunk);
+    let result = async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| format!("受信中に失敗: {error}"))?;
+            loaded += chunk.len() as u64;
+            if let Some(file) = &mut file {
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            } else {
+                buffer.extend_from_slice(&chunk);
+            }
+            let _ = events.send(ContentEvent::Progress {
+                cid: Some(cid.to_owned()),
+                loaded,
+                total,
+            });
         }
-        let _ = events.send(ContentEvent::Progress {
-            cid: Some(cid.to_owned()),
-            loaded,
-            total,
-        });
+        if let Some(file) = &mut file {
+            file.flush().await.map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+    .await;
+
+    drop(file);
+    if let Err(error) = result {
+        if let Some(part) = &part_path {
+            tokio::fs::remove_file(part).await.ok();
+        }
+        return Err(error);
     }
 
     if let Some(path) = save_to {
+        if let Some(part) = part_path {
+            tokio::fs::rename(&part, &path)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
         let _ = events.send(ContentEvent::Saved {
             cid: cid.to_owned(),
             path,
@@ -364,6 +385,12 @@ async fn fetch_http(
         });
     }
     Ok(())
+}
+
+fn part_path(path: &std::path::Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    path.with_file_name(name)
 }
 
 #[cfg(feature = "ipfs")]
@@ -464,7 +491,8 @@ pub mod ipfs {
         let mut stream = node.cat_unixfs(path);
         let mut buffer = Vec::new();
         let mut loaded = 0u64;
-        let mut file = if let Some(path) = &save_to {
+        let part_path = save_to.as_ref().map(|path| super::part_path(path));
+        let mut file = if let Some(path) = &part_path {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
@@ -480,24 +508,50 @@ pub mod ipfs {
         };
 
         use tokio::io::AsyncWriteExt;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|error| error.to_string())?;
-            loaded += chunk.len() as u64;
-            if let Some(file) = &mut file {
-                file.write_all(&chunk)
+        let result = async {
+            loop {
+                let next = tokio::time::timeout(std::time::Duration::from_secs(10), stream.next())
                     .await
-                    .map_err(|error| error.to_string())?;
-            } else {
-                buffer.extend_from_slice(&chunk);
+                    .map_err(|_| "IPFS の取得がタイムアウトしました".to_string())?;
+                let Some(chunk) = next else {
+                    break;
+                };
+                let chunk = chunk.map_err(|error| error.to_string())?;
+                loaded += chunk.len() as u64;
+                if let Some(file) = &mut file {
+                    file.write_all(&chunk)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                } else {
+                    buffer.extend_from_slice(&chunk);
+                }
+                let _ = events.send(ContentEvent::Progress {
+                    cid: Some(cid.clone()),
+                    loaded,
+                    total: None,
+                });
             }
-            let _ = events.send(ContentEvent::Progress {
-                cid: Some(cid.clone()),
-                loaded,
-                total: None,
-            });
+            if let Some(file) = &mut file {
+                file.flush().await.map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        }
+        .await;
+
+        drop(file);
+        if let Err(error) = result {
+            if let Some(part) = &part_path {
+                tokio::fs::remove_file(part).await.ok();
+            }
+            return Err(error);
         }
 
         if let Some(path) = save_to {
+            if let Some(part) = part_path {
+                tokio::fs::rename(&part, &path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
             let _ = events.send(ContentEvent::Saved { cid, path });
         } else {
             let _ = events.send(ContentEvent::Bytes { cid, bytes: buffer });

@@ -32,6 +32,18 @@ pub struct PeerVisuals {
     entries: HashMap<String, Entry>,
 }
 
+impl PeerVisuals {
+    pub fn root(&self, peer_id: &str) -> Option<Entity> {
+        self.entries.get(peer_id).map(|entry| entry.root)
+    }
+
+    pub fn body_head(&self, peer_id: &str) -> Option<(Entity, Entity)> {
+        self.entries
+            .get(peer_id)
+            .map(|entry| (entry.body, entry.head))
+    }
+}
+
 pub fn sync_avatars(
     mut commands: Commands,
     state: Res<NetState>,

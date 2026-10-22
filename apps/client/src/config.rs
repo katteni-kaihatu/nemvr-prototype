@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,8 @@ pub struct ClientConfig {
     pub server: String,
     pub cache_max_mb: u64,
     pub volume: f32,
+    pub avatar_path: Option<PathBuf>,
+    pub avatar_cid: Option<String>,
 }
 
 impl Default for ClientConfig {
@@ -23,6 +26,8 @@ impl Default for ClientConfig {
             server: "ws://127.0.0.1:8080/ws".into(),
             cache_max_mb: 5120,
             volume: 0.8,
+            avatar_path: None,
+            avatar_cid: None,
         }
     }
 }

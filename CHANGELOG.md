@@ -19,6 +19,13 @@
   フォールバック後も同じ CID で `stored=true` にできる。
   `/media/<cid>` は画像の生バイト長を `content-length` に使い、HTTP/2 のストリームを壊さない。
 
+### Added
+
+- VRM 0.x アバター。`.vrm` のドロップまたは `--avatar` で設定し、IPFS / `space_set_avatar` で共有する。
+  リモートの VRM は CID から取得して表示し、失敗時は簡易アバターに戻す。
+- アバター CID を `/media/<cid>` の Range 配信で読めるようにした (サーバー)。
+- 日本語の行分割のため `parley` をローカルパッチ (`vendor/parley`)。
+
 ### Changed
 
 - **Web クライアントを削除し、Rust / Bevy のネイティブクライアントに置き換えた。**

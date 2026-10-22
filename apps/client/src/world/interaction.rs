@@ -6,6 +6,7 @@ use space_protocol::messages::{ClientMessage, SpaceMutation};
 use space_protocol::projection::WorldObject;
 use uuid::Uuid;
 
+use crate::config::ClientConfig;
 use crate::content::ContentService;
 use crate::net::client::NetHandle;
 use crate::net::{NetState, PendingPlacements, Placement, send_claim, send_patch, send_release};
@@ -223,6 +224,9 @@ pub fn handle_drops(
         let FileDragAndDrop::DroppedFile { path_buf, .. } = event else {
             continue;
         };
+        if is_vrm(path_buf) {
+            continue;
+        }
         let point = drop_point(camera);
         let yaw = (player.head_x - point.x).atan2(player.head_z - point.z);
         let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
@@ -240,6 +244,38 @@ pub fn handle_drops(
         );
         content.add_file(path_buf.clone());
     }
+}
+
+pub fn handle_avatar_drop(
+    mut events: MessageReader<FileDragAndDrop>,
+    content: Res<ContentService>,
+    mut state: ResMut<NetState>,
+    mut config: ResMut<ClientConfig>,
+) {
+    for event in events.read() {
+        let FileDragAndDrop::DroppedFile { path_buf, .. } = event else {
+            continue;
+        };
+        if !is_vrm(path_buf) {
+            continue;
+        }
+        config.avatar_path = Some(path_buf.clone());
+        config.save();
+        state.avatar_upload = Some(path_buf.clone());
+        state.avatar_sent = false;
+        state.notice = Some("VRM アバターを設定しました".into());
+        state.log("VRM を受け取りました");
+        if state.ipfs_peer_id.is_some() {
+            content.add_file(path_buf.clone());
+            state.avatar_sent = true;
+        }
+    }
+}
+
+fn is_vrm(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("vrm"))
 }
 
 fn drop_point(camera: &Transform) -> Vec3 {

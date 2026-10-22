@@ -34,3 +34,8 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# parley 0.9.0 は CJK の辞書を読み込まず、日本語の行分割で
+# `No segmentation model` を繰り返し出力する。`new_dictionary` を使う修正。
+[patch.crates-io]
+parley = { path = "vendor/parley" }

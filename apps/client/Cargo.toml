@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Native Bevy client for the VR SNS prototype"
 
 [features]
-default = ["ipfs"]
+default = ["ipfs", "vrm"]
 ipfs = ["dep:rust-ipfs"]
 xr = ["dep:bevy_mod_openxr", "dep:bevy_mod_xr"]
 vrm = ["dep:bevy_vrm"]

@@ -156,6 +156,14 @@ fn spawn_lobby(commands: &mut Commands, config: &ClientConfig) {
                         ));
                     });
                 panel.spawn((
+                    Text::new(".vrm をウィンドウにドロップするとアバターに設定できます"),
+                    TextFont {
+                        font_size: FontSize::Px(12.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.55, 0.62, 0.68)),
+                ));
+                panel.spawn((
                     Text::new(format!("接続先: {}", config.server)),
                     TextFont {
                         font_size: FontSize::Px(12.0),
@@ -197,6 +205,7 @@ fn spawn_hud(commands: &mut Commands) {
             ..default()
         },
         TextColor(Color::srgb(0.86, 0.9, 0.94)),
+        TextLayout::no_wrap(),
         HudText,
     ));
 }
@@ -493,19 +502,30 @@ fn dirs_download_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
+pub fn no_wrap_all_text(
+    mut commands: Commands,
+    texts: Query<Entity, With<Text>>,
+    texts2d: Query<Entity, With<Text2d>>,
+) {
+    for entity in texts.iter().chain(texts2d.iter()) {
+        commands.entity(entity).insert(TextLayout::no_wrap());
+    }
+}
+
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_ui).add_systems(
-            Update,
-            (
-                sync_visibility,
-                lobby_actions,
-                update_lobby_status,
-                update_hud,
-                ring_actions,
-            ),
-        );
+        app.add_systems(Startup, (spawn_ui, no_wrap_all_text).chain())
+            .add_systems(
+                Update,
+                (
+                    sync_visibility,
+                    lobby_actions,
+                    update_lobby_status,
+                    update_hud,
+                    ring_actions,
+                ),
+            );
     }
 }

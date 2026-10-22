@@ -11,6 +11,7 @@ use space_protocol::messages::{ClientMessage, ServerMessage, SpaceMutation};
 use space_protocol::projection::{ProjectedWorld, project_entities};
 use uuid::Uuid;
 
+use crate::config::ClientConfig;
 use crate::content::{ContentEvent, ContentService};
 use crate::net::client::{ConnectOptions, NetEvent, NetHandle, unix_ms};
 use crate::net::store::{ApplyError, SpaceStore};
@@ -37,6 +38,8 @@ pub struct NetState {
     pub kubo_addresses: Vec<String>,
     pub ipfs_started: bool,
     pub kubo_connected: bool,
+    pub avatar_upload: Option<PathBuf>,
+    pub avatar_sent: bool,
     pub tick_rate: u32,
     pub server_offset_ms: f64,
     pub rtt_ms: Option<u64>,
@@ -64,6 +67,8 @@ impl Default for NetState {
             kubo_addresses: Vec::new(),
             ipfs_started: false,
             kubo_connected: false,
+            avatar_upload: None,
+            avatar_sent: false,
             tick_rate: 20,
             server_offset_ms: 0.0,
             rtt_ms: None,
@@ -169,6 +174,7 @@ fn poll_network(
                     state.server_offset_ms = at - unix_ms() as f64;
                     state.status = NetStatus::Online;
                     state.welcome_received = true;
+                    state.avatar_sent = false;
                     state.kubo_addresses = kubo_addresses(&state.server, &ipfs);
                     store.replace(subscription_id, version, seq, entities);
                     state.projected = project_entities(store.entities.values());
@@ -289,6 +295,7 @@ fn poll_content(
     content: Option<Res<ContentService>>,
     net: Option<Res<NetHandle>>,
     mut state: ResMut<NetState>,
+    mut config: ResMut<ClientConfig>,
     mut cache: ResMut<ContentCache>,
     mut pending: ResMut<PendingPlacements>,
     mut store: ResMut<SpaceStore>,
@@ -324,6 +331,22 @@ fn poll_content(
                 size,
                 path,
             } => {
+                bevy::log::info!("content added: {name} ({cid})");
+                if state.avatar_upload.as_deref() == Some(path.as_path()) {
+                    config.avatar_cid = Some(cid.clone());
+                    config.avatar_path = Some(path.clone());
+                    config.save();
+                    let command_id = Uuid::new_v4().to_string();
+                    let _ = net.send(ClientMessage::SpaceSetAvatar {
+                        command_id,
+                        cid: Some(cid),
+                    });
+                    state.avatar_sent = true;
+                    state.avatar_upload = None;
+                    state.notice = Some("アバターを設定しました".into());
+                    state.log("アバターをアップロードしました");
+                    continue;
+                }
                 let name: String = name.chars().take(120).collect();
                 let placement = pending.by_path.remove(&path);
                 let Some(placement) = placement else {
@@ -380,6 +403,7 @@ fn poll_content(
                 state.log(format!("保存しました: {} ({cid})", path.display()));
             }
             ContentEvent::Failed { cid, message } => {
+                bevy::log::warn!("content failed: {message}");
                 if cid.is_none() {
                     state.kubo_connected = false;
                 }
@@ -389,6 +413,25 @@ fn poll_content(
                     state.progress.remove(&cid);
                 }
             }
+        }
+    }
+
+    if !state.avatar_sent && state.status == NetStatus::Online && state.ipfs_peer_id.is_some() {
+        let local_path = state
+            .avatar_upload
+            .clone()
+            .or_else(|| config.avatar_path.clone().filter(|path| path.exists()));
+        if let Some(path) = local_path {
+            state.avatar_upload = Some(path.clone());
+            state.avatar_sent = true;
+            content.add_file(path);
+        } else if let Some(cid) = config.avatar_cid.clone() {
+            let command_id = Uuid::new_v4().to_string();
+            let _ = net.send(ClientMessage::SpaceSetAvatar {
+                command_id,
+                cid: Some(cid),
+            });
+            state.avatar_sent = true;
         }
     }
 

@@ -142,4 +142,14 @@ Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置�
 - [x] 日本語フォントと Lobby の接続先編集・状態表示
 - [x] Web クライアント削除、デプロイをランディング + ダウンロードに変更
 
-**次の M8**: VRM、OpenXR / PC VR、動画、URL 取り込み、鏡。
+## M8: VRM アバター (一部完了)
+
+- [x] `.vrm` のドロップ / `--avatar` で設定
+- [x] IPFS 追加と `space_set_avatar`
+- [x] リモート VRM の取得・キャッシュ・表示
+- [x] 読み込み失敗時の簡易アバターへのフォールバック
+- [ ] 歩行・待機アニメーション
+- [ ] 自分の VRM 表示 (鏡 / 三人称)
+- [ ] VRM 1.0
+
+**次の M9**: OpenXR / PC VR、動画、URL 取り込み、鏡。

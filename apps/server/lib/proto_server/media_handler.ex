@@ -213,8 +213,35 @@ defmodule ProtoServer.MediaHandler do
 
   defp find_content(cid) do
     case Store.find_stored_file("main", cid) do
-      {:ok, object} -> {:ok, object}
-      :error -> Store.find_stored_image("main", cid)
+      {:ok, object} ->
+        {:ok, object}
+
+      :error ->
+        case Store.find_stored_image("main", cid) do
+          {:ok, object} ->
+            {:ok, object}
+
+          :error ->
+            avatar_content(cid)
+        end
+    end
+  end
+
+  # アバターはワールドのオブジェクトではないため、Kubo 上のサイズを問い合わせて
+  # `/media/<cid>` の Range 配信で読めるようにする。
+  defp avatar_content(cid) do
+    case Store.find_avatar("main", cid) do
+      {:ok, object} ->
+        case Ipfs.stat(cid) do
+          {:ok, size} when is_integer(size) and size > 0 ->
+            {:ok, Map.put(object, "size", size)}
+
+          _ ->
+            :error
+        end
+
+      :error ->
+        :error
     end
   end
 
