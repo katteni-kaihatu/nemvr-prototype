@@ -181,14 +181,18 @@ sequenceDiagram
 > CID だけを送る。画像は先に表示され、サーバー側の保持が終わるまでは `content.stored=false` として
 > 置いた人のブラウザからも配られる。
 >
-> **Kubo の制約**: 2026-10-22 の検証では、Helia から Kubo への単一ブロック (raw CID) の pin は成功したが、
-> 2MiB の複数ブロック UnixFS DAG は、MemoryBlockstore / FileBackedBlockstore のどちらでも子ブロックが
-> 取得されず pin がタイムアウトした (ルートブロックだけは転送される)。Kubo の再帰 pin が使う bitswap
-> セッション / プロバイダ探索が、プロバイダレコードを公開しないブラウザノードの子ブロック取得に
-> 対応していないことが原因と考えられる。このため、画像の pin が失敗した場合は
-> サーバーが `file_failed` (`role=fallback`) を送り、置いた人が `POST /media/upload` で本体を送る。
-> サーバーは保持済みにして、他のクライアントは `GET /media/<cid>` を使う。フォールバックしたことは
-> クライアントにメッセージで表示する。
+> **Kubo の制約 (修正済み)**: クライアントの Helia が `withBitswap` に
+> `doNotResendBlockWindow: 0` を渡していた。Kubo は 1 KiB を超えるブロックを
+> WantHave → WantBlock の 2 段階で要求するが、窓が 0 だと WantHave を送った直後に
+> want が失効し、続く WantBlock が処理されない。そのため複数ブロック DAG の子ブロックが
+> 送られず、Kubo の再帰 pin がタイムアウトしていた (単一ブロックは WantHave で
+> HAVE+block を返せるため成功していた)。既定の窓に戻すことで 2 MiB の
+> FileBackedBlockstore の DAG も pin できることを確認した。
+>
+> フォールバックは、別の理由 (回線断・Kubo 障害など) で IPFS 取得に失敗した場合の保険として残す。
+> 画像の pin が失敗した場合はサーバーが `file_failed` (`role=fallback`) を送り、置いた人が
+> `POST /media/upload` で本体を送る。サーバーは保持済みにして、他のクライアントは
+> `GET /media/<cid>` を使う。フォールバックしたことはクライアントにメッセージで表示する。
 
 ```mermaid
 sequenceDiagram

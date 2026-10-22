@@ -11,7 +11,9 @@
 
 ### Fixed
 
-- 画像は IPFS を第一経路とし、Kubo が複数ブロック DAG を取得できない場合だけ
+- Helia の `doNotResendBlockWindow: 0` を外した。Kubo の WantHave → WantBlock の
+  2 段階要求で子ブロックが送られず、複数ブロック画像の IPFS pin がタイムアウトしていた。
+- 画像は IPFS を第一経路とし、それでも取得できない場合だけ
   `file_failed` (`role=fallback`) でサーバーアップロードへ切り替える。切り替えたことは HUD に表示する。
   `/media/<cid>` は画像の生バイト長を `content-length` に使い、HTTP/2 のストリームを壊さない。
 

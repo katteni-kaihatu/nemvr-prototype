@@ -134,10 +134,12 @@ async function createNode(
       },
       services: { identify: identify() },
     }),
-    // 直前に送ったブロックは、同じ相手から 5 秒間は再送しない (bitswap の既定)。
-    // 取得を途中で中断して取り直すと、その要求が無視されて止まるため、窓を 0 にする
-    // (このノードは、サーバーや他のブラウザにアップロードしたファイルを配る側にもなる)。
-    { doNotResendBlockWindow: 0 },
+    // NOTE: do not set `doNotResendBlockWindow: 0` here. Kubo first sends a
+    // WantHave, then a WantBlock for blocks larger than 1 KiB. With a zero
+    // window the want expires immediately after the HAVE, so the follow-up
+    // WantBlock is ignored and the child blocks of a multi-block DAG are never
+    // sent (Kubo's recursive pin then times out). The bitswap default keeps
+    // the want alive long enough for the upgrade.
   ).start();
 
   // サーバーの Helia ノードに接続する (画像の取得元・中継役)。
