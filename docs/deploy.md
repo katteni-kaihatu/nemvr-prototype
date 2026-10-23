@@ -302,8 +302,8 @@ ssh root@<VPS> 'journalctl -u kubo -u proto-server -n 30 --no-pager'
 - 配布中の Godot AppImage を `--server wss://nemvr.nemnomi.dev/ws` で起動し、`welcome` を受信。
 - Linux のボタンは Godot AppImage、Windows は実機確認まで Bevy zip。Godot の Windows 候補も配置済み。
 - ローカルと VPS の AppImage SHA-256 は一致。
-- Kubo へは DNS 解決した `/ip4/<addr>/tcp/4001` で接続できることを確認。初回の multistream
-  select が reset され、10 秒後の再試行で `Connected to Kubo` になる場合がある。
+- Kubo へは DNS 解決した `/ip4/<addr>/tcp/4001` で接続できることを確認。ネットワーク状態により
+  初回が reset される場合は 10 秒後の再試行で `Connected to Kubo` になる。
 - 8443 の `/tls/ws` は rust-ipfs 側でまだ接続できないため、TCP 4001 を優先する。
   `/media/<cid>` フォールバックも維持している。
 
