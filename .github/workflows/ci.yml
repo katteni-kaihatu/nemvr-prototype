@@ -57,3 +57,32 @@ jobs:
         run: nix develop -c bash -lc 'PROTO_SKIP_GODOT_IMPORT=1 pnpm e2e:godot -- --no-build'
       - name: Mixed Bevy and Godot E2E
         run: nix develop -c bash -lc 'pnpm build:native && PROTO_SKIP_GODOT_IMPORT=1 pnpm e2e:godot:mixed'
+
+  linux-package:
+    name: Linux package artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Install Rust toolchain
+        run: nix develop -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Build AppImage
+        run: nix develop -c bash -lc 'PROTO_SKIP_GODOT_IMPORT=1 pnpm package:linux'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: godot-linux-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            dist/ProtoSNS-godot-x86_64.AppImage
+            dist/ProtoSNS-godot-x86_64.AppImage.sha256
+            dist/ProtoSNS-godot-linux-x86_64.tar.gz
+            dist/ProtoSNS-godot-linux-x86_64.tar.gz.sha256
