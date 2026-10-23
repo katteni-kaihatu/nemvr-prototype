@@ -60,6 +60,7 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--no-floor-reflection`: 床の平面反射を無効にする (低スペック環境向け)
 - `--quality high|medium|low`: 画質プリセットを一時的に指定する (Lobby の選択より優先)
 - `--benchmark <秒>`: 指定秒数の FPS を計測し、`benchmark` イベントを出して終了する
+- `--scenario walk`: 前後に歩いて歩行アニメーションと姿勢同期を確認する
 - `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 
