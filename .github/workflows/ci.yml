@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Rust, Elixir, and protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Install workspace dependencies
+        run: nix develop -c bash -lc 'pnpm install --frozen-lockfile'
+      - name: Fetch Elixir dependencies
+        run: nix develop -c bash -lc 'cd apps/server && mix local.hex --force && mix local.rebar --force && mix deps.get'
+      - name: Rust fmt, clippy, and tests
+        run: nix develop -c bash -lc 'pnpm fmt:native && pnpm clippy:native && pnpm test:native'
+      - name: Elixir and protocol typecheck and tests
+        run: nix develop -c bash -lc 'pnpm typecheck && pnpm test'
+
+  godot:
+    name: Godot client
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Native bridge and presentation tests
+        run: nix develop -c bash -lc 'pnpm test:godot'
+      - name: Two-client scene E2E
+        run: nix develop -c bash -lc 'pnpm e2e:godot -- --no-build'
+      - name: Mixed Bevy and Godot E2E
+        run: nix develop -c bash -lc 'pnpm build:native && pnpm e2e:godot:mixed'
