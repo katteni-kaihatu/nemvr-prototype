@@ -333,6 +333,11 @@ fn poll_content(
             } => {
                 bevy::log::info!("content added: {name} ({cid})");
                 if state.avatar_upload.as_deref() == Some(path.as_path()) {
+                    if let Some(dirs) = crate::config::project_dirs() {
+                        let dir = dirs.cache_dir().join("assets").join("vrm");
+                        std::fs::create_dir_all(&dir).ok();
+                        std::fs::copy(&path, dir.join(format!("{cid}.vrm"))).ok();
+                    }
                     config.avatar_cid = Some(cid.clone());
                     config.avatar_path = Some(path.clone());
                     config.save();

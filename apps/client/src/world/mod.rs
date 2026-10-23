@@ -4,6 +4,7 @@ pub mod avatars;
 pub mod carry;
 pub mod collision;
 pub mod interaction;
+pub mod mirror;
 pub mod movement;
 pub mod objects;
 pub mod player;
@@ -148,6 +149,7 @@ impl Plugin for WorldPlugin {
                     .chain()
                     .run_if(in_state(crate::AppState::InWorld)),
             )
-            .add_systems(Update, interaction::handle_avatar_drop);
+            .add_systems(Update, interaction::handle_avatar_drop)
+            .add_plugins(mirror::MirrorPlugin);
     }
 }

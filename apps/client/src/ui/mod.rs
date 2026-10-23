@@ -423,7 +423,8 @@ pub fn update_hud(
     }
     lines.extend([
         "WASD 移動 / Shift 走る / Space ジャンプ / C しゃがみ / Q,E リーン".to_owned(),
-        "右クリック つかむ / E 回転 / ホイール 距離 / Shift+ホイール 拡大 / M メニュー".to_owned(),
+        "右クリック つかむ / E 回転 / ホイール 距離 / Shift+ホイール 拡大 / M メニュー / V 鏡"
+            .to_owned(),
     ]);
     if let Some(notice) = &state.notice {
         lines.push(format!("> {notice}"));

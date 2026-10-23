@@ -2,12 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::PI;
 use std::path::PathBuf;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy_vrm::loader::Vrm;
 use bevy_vrm::{VrmInstance, VrmInstanceReady};
 
+use crate::config::ClientConfig;
 use crate::content::ContentService;
 use crate::net::NetState;
+use crate::world::LocalPlayer;
 use crate::world::avatars::PeerVisuals;
 
 #[derive(Debug)]
@@ -16,6 +19,15 @@ struct Entry {
     child: Entity,
     handle: Handle<Vrm>,
     reported: bool,
+}
+
+#[derive(Resource, Default)]
+struct SelfAvatarState {
+    root: Option<Entity>,
+    capsule: Vec<Entity>,
+    vrm: Option<Entity>,
+    cid: Option<String>,
+    hiding_capsule: bool,
 }
 
 #[derive(Resource, Default)]
@@ -30,10 +42,125 @@ pub struct VrmPlugin;
 
 impl Plugin for VrmPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<VrmCache>().add_systems(
-            Update,
-            sync_peer_vrms.run_if(in_state(crate::AppState::InWorld)),
-        );
+        app.init_resource::<VrmCache>()
+            .init_resource::<SelfAvatarState>()
+            .add_systems(Startup, spawn_self_avatar)
+            .add_systems(
+                Update,
+                (sync_self_avatar, sync_peer_vrms)
+                    .chain()
+                    .run_if(in_state(crate::AppState::InWorld)),
+            );
+    }
+}
+
+fn spawn_self_avatar(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut state: ResMut<SelfAvatarState>,
+) {
+    let material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.66, 0.7),
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+    let body = commands
+        .spawn((
+            Mesh3d(meshes.add(Capsule3d::new(0.25, 0.8))),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(0.0, 0.65, 0.0),
+            RenderLayers::layer(1),
+        ))
+        .id();
+    let head = commands
+        .spawn((
+            Mesh3d(meshes.add(Sphere::new(0.18))),
+            MeshMaterial3d(material),
+            Transform::from_xyz(0.0, 1.45, 0.0),
+            RenderLayers::layer(1),
+        ))
+        .id();
+    let root = commands
+        .spawn((
+            Transform::IDENTITY,
+            Visibility::default(),
+            RenderLayers::layer(1),
+        ))
+        .id();
+    commands.entity(root).add_children(&[body, head]);
+    state.root = Some(root);
+    state.capsule = vec![body, head];
+}
+
+fn sync_self_avatar(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    config: Res<ClientConfig>,
+    player: Res<LocalPlayer>,
+    mut state: ResMut<SelfAvatarState>,
+    ready: Query<(), With<VrmInstanceReady>>,
+    children: Query<&Children>,
+) {
+    let Some(root) = state.root else {
+        return;
+    };
+    commands.entity(root).insert(Transform {
+        translation: player.position,
+        rotation: Quat::from_rotation_y(player.yaw),
+        scale: Vec3::ONE,
+    });
+
+    if let Some(cid) = config.avatar_cid.clone() {
+        if state.cid.as_deref() != Some(cid.as_str()) {
+            if let Some(old) = state.vrm.take() {
+                commands.entity(old).try_despawn();
+            }
+            state.cid = Some(cid.clone());
+            for entity in &state.capsule {
+                commands.entity(*entity).insert(Visibility::Inherited);
+            }
+            state.hiding_capsule = false;
+            let path = cache_path(&cid);
+            if path.exists() {
+                let vrm = commands
+                    .spawn((
+                        Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+                        VrmInstance(asset_server.load(format!("vrm/{cid}.vrm"))),
+                        RenderLayers::layer(1),
+                    ))
+                    .id();
+                commands.entity(root).add_child(vrm);
+                state.vrm = Some(vrm);
+            }
+        }
+
+        if let Some(vrm) = state.vrm {
+            tag_layers(&mut commands, vrm, &children);
+            if ready.get(vrm).is_ok() {
+                if !state.hiding_capsule {
+                    for entity in &state.capsule {
+                        commands.entity(*entity).insert(Visibility::Hidden);
+                    }
+                    state.hiding_capsule = true;
+                }
+            }
+        }
+    } else if state.vrm.is_none() && state.hiding_capsule {
+        for entity in &state.capsule {
+            commands.entity(*entity).insert(Visibility::Inherited);
+        }
+        state.hiding_capsule = false;
+    }
+}
+
+fn tag_layers(commands: &mut Commands, root: Entity, children: &Query<&Children>) {
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        commands.entity(entity).insert(RenderLayers::layer(1));
+        if let Ok(list) = children.get(entity) {
+            stack.extend(list.iter());
+        }
     }
 }
 

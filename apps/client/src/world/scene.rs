@@ -1,3 +1,4 @@
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::ui::IsDefaultUiCamera;
 
@@ -13,6 +14,7 @@ pub fn setup_scene(
         Camera3d::default(),
         MainCamera,
         IsDefaultUiCamera,
+        RenderLayers::from_layers(&[0, 2]),
         Transform::from_xyz(0.0, 1.6, 4.0).looking_at(Vec3::new(0.0, 1.4, 0.0), Vec3::Y),
     ));
 

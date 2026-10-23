@@ -58,6 +58,9 @@ struct Args {
     /// VRM avatar file to upload on join.
     #[arg(long)]
     avatar: Option<std::path::PathBuf>,
+    /// Show the self-view mirror at startup.
+    #[arg(long)]
+    mirror: bool,
     /// Start the embedded IPFS node, print its peer ID, and exit.
     #[arg(long)]
     ipfs_smoke: bool,
@@ -147,6 +150,9 @@ fn main() {
     ));
     #[cfg(feature = "vrm")]
     app.add_plugins((bevy_vrm::VrmPlugins, vrm::VrmPlugin));
+    app.insert_resource(crate::world::mirror::MirrorState {
+        enabled: args.mirror,
+    });
 
     if args.name.is_some() {
         app.world_mut()
