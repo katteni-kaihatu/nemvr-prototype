@@ -50,7 +50,7 @@ mkdir -p \
 cp "$BIN" "$APP/usr/bin/proto-client"
 cp "$ROOT/assets/proto-sns.svg" "$APP/usr/share/icons/hicolor/scalable/apps/proto-sns.svg"
 cp "$ROOT/assets/proto-sns.desktop" "$APP/usr/share/applications/proto-sns.desktop"
-cp "$ROOT/assets/proto-sns.appdata.xml" "$APP/usr/share/metainfo/proto-sns.appdata.xml"
+cp "$ROOT/assets/dev.proto.ProtoSNS.appdata.xml" "$APP/usr/share/metainfo/dev.proto.ProtoSNS.appdata.xml"
 cp "$ROOT/assets/proto-sns.desktop" "$APP/proto-sns.desktop"
 cp "$ROOT/assets/proto-sns.svg" "$APP/proto-sns.svg"
 ln -sf proto-sns.svg "$APP/.DirIcon"
