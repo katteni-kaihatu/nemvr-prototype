@@ -17,6 +17,7 @@ const FloorReflection = preload("res://scripts/floor_reflection.gd")
 @onready var hud: Control = $Interface/HUD
 @onready var hud_status: Label = $Interface/HUD/Status
 @onready var log_label: Label = $Interface/HUD/Log
+@onready var fps_label: Label = $Interface/HUD/FPS
 @onready var debug_label: Label = $Interface/HUD/Debug
 @onready var menu: PopupPanel = $Interface/Menu
 
@@ -40,6 +41,7 @@ var _events: Array = []
 var _logs: Array[String] = []
 var _transfer: String = ""
 var _pose_clock: float = 0.0
+var _fps_clock: float = 0.0
 var _jump_pressed: bool = false
 var _started: float = 0.0
 var _entered: float = -1.0
@@ -215,6 +217,11 @@ func _process(delta: float) -> void:
 			_send_pose()
 			_send_carry()
 		_automation(now)
+	_fps_clock += delta
+	if _fps_clock >= 0.25:
+		_fps_clock = 0.0
+		var fps: int = Engine.get_frames_per_second()
+		fps_label.text = "%d FPS  /  %.1f ms" % [fps, 1000.0 / maxf(float(fps), 1.0)]
 	if debug_label.visible:
 		var position: Vector3 = player.position
 		debug_label.text = "FPS %d  /  entities %d\npos %.2f, %.2f, %.2f  /  yaw %.1f°\ncarry %s" % [
@@ -596,11 +603,14 @@ func _screenshot(path_override: String = "") -> void:
 	_emit({"event": "screenshot" if error == OK else "screenshot_error", "path": ProjectSettings.globalize_path(path), "error": error})
 
 func _log(message: String) -> void:
-	_logs.append(message)
+	var display: String = message.replace("\n", " ")
+	if display.length() > 220:
+		display = display.left(217) + "..."
+	_logs.append(display)
 	while _logs.size() > 6:
 		_logs.pop_front()
 	log_label.text = "\n".join(_logs)
-	status_label.text = message
+	status_label.text = display
 	_emit({"event": "log", "message": message})
 
 func _observe(event: Dictionary) -> void:

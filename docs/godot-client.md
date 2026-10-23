@@ -50,6 +50,8 @@ B、V、Esc、ファイルドロップ。
 
 ## デバッグ
 
+HUD 右上には FPS とフレーム時間を常時表示する。
+
 - `F3`: FPS・座標・エンティティ数・carry 中の ID を表示するオーバーレイ
 - `F12`: `user://screenshots/YYYY-MM-DD_HH-MM-SS.png` にスクリーンショットを保存
 - `--position x,y,z`: 入室時の足元位置を指定する
