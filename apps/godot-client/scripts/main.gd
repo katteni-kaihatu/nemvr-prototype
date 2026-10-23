@@ -2,11 +2,13 @@ extends Node
 
 const WorldProjection = preload("res://scripts/world_projection.gd")
 const Mirror = preload("res://scripts/mirror.gd")
+const FloorReflection = preload("res://scripts/floor_reflection.gd")
 
 @onready var projection: WorldProjection = $World/Entities
 @onready var player: Node3D = $World/Player
 @onready var camera: Camera3D = $World/Player/Camera
 @onready var mirror: Mirror = $World/Mirror
+@onready var floor_reflection: FloorReflection = $World/FloorReflection
 @onready var lobby: PanelContainer = $Interface/Lobby
 @onready var fields: VBoxContainer = $Interface/Lobby/Margin/Fields
 @onready var server_edit: LineEdit = $Interface/Lobby/Margin/Fields/Server
@@ -58,6 +60,9 @@ func _ready() -> void:
 	projection.observed.connect(_observe)
 	projection.notice.connect(_log)
 	mirror.source = camera
+	floor_reflection.source = camera
+	if options.has("no-floor-reflection"):
+		floor_reflection.set_enabled(false)
 	fields.get_node("Connect").pressed.connect(_connect)
 	fields.get_node("ResetAvatar").pressed.connect(_reset_avatar)
 	name_edit.text_submitted.connect(func(_text: String) -> void: _connect())

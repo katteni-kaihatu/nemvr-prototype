@@ -44,7 +44,7 @@ fog_light_color = Color(0.06, 0.11, 0.15, 1)
 fog_light_energy = 0.55
 fog_density = 0.014
 fog_sky_affect = 0.22
-ssr_enabled = true
+ssr_enabled = false
 ssr_max_steps = 96
 ssr_fade_in = 0.12
 ssr_fade_out = 1.6
@@ -120,6 +120,7 @@ omni_attenuation = 1.35
 shadow_enabled = false
 
 [node name="Floor" type="MeshInstance3D" parent="."]
+layers = 32
 mesh = SubResource("FloorMesh")
 material_override = SubResource("FloorMaterial")
 
@@ -142,7 +143,7 @@ script = ExtResource("1")
 [node name="Camera" type="Camera3D" parent="Player"]
 position = Vector3(0, 1.6, 0)
 current = true
-cull_mask = 5
+cull_mask = 37
 fov = 75.0
 near = 0.05
 far = 150.0

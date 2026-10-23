@@ -55,6 +55,7 @@ B、V、Esc、ファイルドロップ。
 - `--position x,y,z`: 入室時の足元位置を指定する
 - `--yaw <度>` / `--pitch <度>`: 入室時の視線を指定する
 - `--hide-hud`: HUD を隠して撮影する
+- `--no-floor-reflection`: 床の平面反射を無効にする (低スペック環境向け)
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 
 ```sh
@@ -70,7 +71,7 @@ pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
 - 星空・地平線グロー・太陽を含むカスタム sky shader
 - ワールド座標のマイナー / メジャーグリッド、距離フェード、発光を持つ床 shader
 - 面の向き・リム・スキャンライン・エッジ発光を持つエンティティ shader
-- SSR、SSAO、グロー、フォグ、ACES トーンマップ、暗い周辺減光 (vignette)
+- 床の平面反射 (ミラーカメラの専用ビューポート)、SSAO、グロー、フォグ、ACES トーンマップ、暗い周辺減光 (vignette)
 
 シェーダは `apps/godot-client/shaders/` にあり、床・エンティティ・空・vignette を
 シーンから差し替えられる。
