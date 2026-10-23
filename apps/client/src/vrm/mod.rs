@@ -137,13 +137,11 @@ fn sync_self_avatar(
 
         if let Some(vrm) = state.vrm {
             tag_layers(&mut commands, vrm, &children);
-            if ready.get(vrm).is_ok() {
-                if !state.hiding_capsule {
-                    for entity in &state.capsule {
-                        commands.entity(*entity).insert(Visibility::Hidden);
-                    }
-                    state.hiding_capsule = true;
+            if ready.get(vrm).is_ok() && !state.hiding_capsule {
+                for entity in &state.capsule {
+                    commands.entity(*entity).insert(Visibility::Hidden);
                 }
+                state.hiding_capsule = true;
             }
         }
     } else if state.vrm.is_none() && state.hiding_capsule {
