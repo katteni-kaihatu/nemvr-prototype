@@ -115,6 +115,8 @@ func _build(root: Node3D, dims: Dictionary, kind: String) -> void:
 			var avatar: Node3D = _avatar(cid)
 			if avatar != null:
 				avatar.name = "Avatar"
+				# Cancel the importer's extra 180° yaw; peer yaw is applied on the root.
+				avatar.rotation.y = 0.0
 				root.add_child(avatar)
 			else:
 				var color: Color = Color.from_string(str(dims.get("peer.color", "#78bbaa")), Color.SEA_GREEN)
