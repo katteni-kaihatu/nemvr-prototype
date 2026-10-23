@@ -98,7 +98,7 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Install Rust toolchain
-        run: nix develop .#windows -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy'
+        run: nix develop .#windows -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy && rustup target add --toolchain 1.95.0 x86_64-pc-windows-gnu'
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
