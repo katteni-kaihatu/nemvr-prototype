@@ -9,6 +9,7 @@ var viewport: SubViewport
 var camera: Camera3D
 var material: ShaderMaterial
 var enabled: bool = true
+var resolution_scale: float = 1.0
 
 func _ready() -> void:
 	viewport = SubViewport.new()
@@ -50,6 +51,18 @@ func set_enabled(value: bool) -> void:
 	if material != null:
 		material.set_shader_parameter("reflection_strength", 0.55 if enabled else 0.0)
 
+func set_quality(level: String) -> void:
+	match level:
+		"low":
+			resolution_scale = 0.0
+			set_enabled(false)
+		"medium":
+			resolution_scale = 0.6
+			set_enabled(true)
+		_:
+			resolution_scale = 1.0
+			set_enabled(true)
+
 func _process(_delta: float) -> void:
 	if not enabled or source == null:
 		return
@@ -68,4 +81,6 @@ func _process(_delta: float) -> void:
 		material.set_shader_parameter("reflection_view", camera.global_transform.affine_inverse())
 		material.set_shader_parameter("reflection_projection", camera.get_camera_projection())
 	var size: Vector2 = get_viewport().get_visible_rect().size
-	viewport.size = Vector2i(maxi(int(size.x), 320), maxi(int(size.y), 180))
+	viewport.size = Vector2i(
+		maxi(int(size.x * resolution_scale), 320),
+		maxi(int(size.y * resolution_scale), 180))

@@ -9,10 +9,13 @@ const FloorReflection = preload("res://scripts/floor_reflection.gd")
 @onready var camera: Camera3D = $World/Player/Camera
 @onready var mirror: Mirror = $World/Mirror
 @onready var floor_reflection: FloorReflection = $World/FloorReflection
+@onready var world_environment: WorldEnvironment = $World/Environment
+@onready var sun: DirectionalLight3D = $World/Sun
 @onready var lobby: PanelContainer = $Interface/Lobby
 @onready var fields: VBoxContainer = $Interface/Lobby/Margin/Fields
 @onready var server_edit: LineEdit = $Interface/Lobby/Margin/Fields/Server
 @onready var name_edit: LineEdit = $Interface/Lobby/Margin/Fields/Name
+@onready var quality_option: OptionButton = $Interface/Lobby/Margin/Fields/Quality
 @onready var status_label: Label = $Interface/Lobby/Margin/Fields/Status
 @onready var hud: Control = $Interface/HUD
 @onready var hud_status: Label = $Interface/HUD/Status
@@ -53,6 +56,11 @@ var _quitting: bool = false
 var _avatar_path: String = ""
 var _avatar_reset_pending: bool = false
 var _ipfs_ready: bool = false
+var quality: String = "high"
+var _benchmark_samples: Array[float] = []
+var _benchmark_started_at: float = 0.0
+var _benchmark_seconds: float = 10.0
+var _benchmark_done: bool = false
 
 func _ready() -> void:
 	_started = Time.get_ticks_msec() * 0.001
@@ -63,8 +71,9 @@ func _ready() -> void:
 	projection.notice.connect(_log)
 	mirror.source = camera
 	floor_reflection.source = camera
-	if options.has("no-floor-reflection"):
-		floor_reflection.set_enabled(false)
+	if options.has("benchmark"):
+		_benchmark_seconds = 10.0 if options["benchmark"] is bool else float(options["benchmark"])
+	_setup_quality()
 	fields.get_node("Connect").pressed.connect(_connect)
 	fields.get_node("ResetAvatar").pressed.connect(_reset_avatar)
 	name_edit.text_submitted.connect(func(_text: String) -> void: _connect())
@@ -97,6 +106,49 @@ func _ready() -> void:
 	if options.has("name") and bridge != null:
 		_connect()
 
+func _setup_quality() -> void:
+	quality_option.add_item("High", 0)
+	quality_option.add_item("Medium", 1)
+	quality_option.add_item("Low", 2)
+	var saved: String = _load_quality()
+	if options.has("quality"):
+		saved = str(options["quality"]).to_lower()
+	if not ["high", "medium", "low"].has(saved):
+		saved = "high"
+	quality_option.selected = ["high", "medium", "low"].find(saved)
+	quality_option.item_selected.connect(_quality_selected)
+	_apply_quality(saved)
+
+func _quality_selected(index: int) -> void:
+	var level: String = ["high", "medium", "low"][clampi(index, 0, 2)]
+	_apply_quality(level)
+	_save_quality(level)
+
+func _apply_quality(level: String) -> void:
+	quality = level
+	floor_reflection.set_quality(level)
+	if options.has("no-floor-reflection"):
+		floor_reflection.set_enabled(false)
+	var environment: Environment = world_environment.environment
+	var low: bool = level == "low"
+	environment.ssao_enabled = not low
+	environment.glow_enabled = not low
+	environment.fog_enabled = not low
+	sun.directional_shadow_max_distance = 72.0 if level == "high" else (48.0 if level == "medium" else 28.0)
+	get_viewport().scaling_3d_scale = 1.0 if level == "high" else (0.85 if level == "medium" else 0.7)
+
+func _load_quality() -> String:
+	var config: ConfigFile = ConfigFile.new()
+	if config.load("user://settings.cfg") != OK:
+		return "high"
+	return str(config.get_value("graphics", "quality", "high"))
+
+func _save_quality(level: String) -> void:
+	var config: ConfigFile = ConfigFile.new()
+	config.load("user://settings.cfg")
+	config.set_value("graphics", "quality", level)
+	config.save("user://settings.cfg")
+
 func _setup_theme() -> void:
 	var theme: Theme = Theme.new()
 	theme.default_font_size = 18
@@ -128,6 +180,7 @@ func _setup_theme() -> void:
 	# The same bundled font covers native text input and Japanese 3D labels.
 	fields.get_node("ServerLabel").text = "サーバー / Server"
 	fields.get_node("NameLabel").text = "表示名 / Name"
+	fields.get_node("QualityLabel").text = "画質 / Quality"
 	fields.get_node("Connect").text = "接続 / Connect"
 
 func _parse_options(arguments: PackedStringArray) -> Dictionary:
@@ -222,6 +275,14 @@ func _process(delta: float) -> void:
 		_fps_clock = 0.0
 		var fps: int = Engine.get_frames_per_second()
 		fps_label.text = "%d FPS  /  %.1f ms" % [fps, 1000.0 / maxf(float(fps), 1.0)]
+	if options.has("benchmark") and in_world and not _benchmark_done:
+		var benchmark_elapsed: float = now - _entered
+		if benchmark_elapsed >= 1.0:
+			if _benchmark_started_at == 0.0:
+				_benchmark_started_at = now
+			_benchmark_samples.append(float(Engine.get_frames_per_second()))
+			if now - _benchmark_started_at >= _benchmark_seconds:
+				_finish_benchmark()
 	if debug_label.visible:
 		var position: Vector3 = player.position
 		debug_label.text = "FPS %d  /  entities %d\npos %.2f, %.2f, %.2f  /  yaw %.1f°\ncarry %s" % [
@@ -601,6 +662,25 @@ func _screenshot(path_override: String = "") -> void:
 	var image: Image = get_viewport().get_texture().get_image()
 	var error: Error = image.save_png(path)
 	_emit({"event": "screenshot" if error == OK else "screenshot_error", "path": ProjectSettings.globalize_path(path), "error": error})
+
+func _finish_benchmark() -> void:
+	_benchmark_done = true
+	if _benchmark_samples.is_empty():
+		_emit({"event": "benchmark_error", "message": "no samples"})
+		_shutdown(1)
+		return
+	var total: float = 0.0
+	var minimum: float = 1e9
+	var maximum: float = 0.0
+	for sample: float in _benchmark_samples:
+		total += sample
+		minimum = minf(minimum, sample)
+		maximum = maxf(maximum, sample)
+	var average: float = total / float(_benchmark_samples.size())
+	_emit({"event": "benchmark", "quality": quality, "seconds": _benchmark_seconds,
+		"samples": _benchmark_samples.size(), "avgFps": average, "minFps": minimum,
+		"maxFps": maximum, "avgFrameMs": 1000.0 / maxf(average, 1.0)})
+	_shutdown(0)
 
 func _log(message: String) -> void:
 	var display: String = message.replace("\n", " ")

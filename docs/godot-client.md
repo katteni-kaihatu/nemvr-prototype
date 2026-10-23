@@ -58,6 +58,8 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--yaw <度>` / `--pitch <度>`: 入室時の視線を指定する
 - `--hide-hud`: HUD を隠して撮影する
 - `--no-floor-reflection`: 床の平面反射を無効にする (低スペック環境向け)
+- `--quality high|medium|low`: 画質プリセットを一時的に指定する (Lobby の選択より優先)
+- `--benchmark <秒>`: 指定秒数の FPS を計測し、`benchmark` イベントを出して終了する
 - `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 
@@ -75,6 +77,17 @@ pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
 - ワールド座標のマイナー / メジャーグリッド、距離フェード、発光を持つ床 shader
 - 面の向き・リム・スキャンライン・エッジ発光を持つエンティティ shader
 - 床の平面反射 (ミラーカメラの専用ビューポート)、SSAO、グロー、フォグ、ACES トーンマップ、暗い周辺減光 (vignette)
+
+Lobby の「画質 / Quality」で High / Medium / Low を選べる。設定は
+`user://settings.cfg` に保存される。
+
+| Quality | 床反射 | 3D スケール | SSAO / グロー / フォグ | 影距離 |
+|---|---|---|---:|---:|
+| High | フル解像度 | 1.0 | 有効 | 72 m |
+| Medium | 0.6 倍 | 0.85 | 有効 | 48 m |
+| Low | 無効 | 0.7 | 無効 | 28 m |
+
+測定結果と再計測方法は [`performance.md`](performance.md) を参照。
 
 シェーダは `apps/godot-client/shaders/` にあり、床・エンティティ・空・vignette を
 シーンから差し替えられる。

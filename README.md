@@ -35,7 +35,7 @@ pnpm e2e:godot:mixed   # Bevy が置いたオブジェクトを Godot が実 Nod
 
 Linux では入室・移動・オブジェクト操作・画像/複数ブロックファイル/VRM の IPFS 共有・鏡の
 実描画まで検証済み。描画は星空の sky shader、発光グリッド床、平面反射 / SSAO / グローを使う。
-`F3` でデバッグ表示、`F12` でスクリーンショット。Windows は配布物と Wine headless 起動まで
+Lobby の画質選択で High / Medium / Low を切り替えられる。`F3` でデバッグ表示、`F12` でスクリーンショット。Windows は配布物と Wine headless 起動まで
 確認済みで、実機 GPU / IME / ファイルドロップ / SteamVR は未検証。Windows の通常配布は
 実機確認まで Bevy のままにしている。操作・設定・制限の詳細は
 [`docs/godot-client.md`](docs/godot-client.md) を参照。
@@ -222,6 +222,7 @@ WASM UGC、ユーザー定義の写像関数、空間の動的分割、リード
 ## ドキュメント
 
 - [Godot クライアント (既定)](docs/godot-client.md)
+- [性能測定](docs/performance.md)
 - [Bevy クライアント (退避経路)](docs/bevy-client.md)
 - [パッケージ](docs/packaging.md)
 - [アーキテクチャ](docs/architecture.md)

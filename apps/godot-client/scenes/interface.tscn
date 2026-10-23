@@ -6,7 +6,7 @@
 offset_left = 40.0
 offset_top = 40.0
 offset_right = 540.0
-offset_bottom = 430.0
+offset_bottom = 500.0
 
 [node name="Margin" type="MarginContainer" parent="Lobby"]
 theme_override_constants/margin_left = 28
@@ -37,6 +37,11 @@ text = "Display name"
 [node name="Name" type="LineEdit" parent="Lobby/Margin/Fields"]
 placeholder_text = "Guest"
 max_length = 24
+
+[node name="QualityLabel" type="Label" parent="Lobby/Margin/Fields"]
+text = "画質 / Quality"
+
+[node name="Quality" type="OptionButton" parent="Lobby/Margin/Fields"]
 
 [node name="Connect" type="Button" parent="Lobby/Margin/Fields"]
 custom_minimum_size = Vector2(0, 42)
