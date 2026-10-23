@@ -6,7 +6,7 @@ Godot 4.6.3 クライアント。Linux では Bevy クライアント (`apps/cli
 
 2026-10-23 時点では Linux の実シーン検証まで完了している。Windows はパッケージと
 Wine headless 起動まで確認済みだが実機 GPU / IME / ドロップが未検証のため、
-Windows の `package:windows` は Bevy のままにしている。Bevy は退避経路として残す。
+Windows の `package:windows` は Bevy のままにしている。Bevy は比較用に残す。
 
 ## 責務の境界
 
@@ -124,8 +124,10 @@ OpenGL / EGL に依存する。
 
 ## VRM と鏡
 
-- VRM 0.x の静的表示のみ。VRM 1.0 の必須対応、アニメーション、spring bone、
-  retargeting は対象外。
+- VRM 0.x の humanoid を使い、idle / walk / crouch をプロシージャルに動かす。
+  hand / finger、spring bone、animation clip、retargeting、VRM 1.0 は対象外。
+- humanoid の `humanBones` は 0.x の配列形式と辞書形式の両方を受け付ける。
+  肩・腕・脚・膝・足・頭のボーンを glTF ノード名から対応付ける。
 - 取得した CID のファイルは、同梱した信頼済みローダーが実行時に読み込む。
   ダウンロードしたファイルを `ResourceLoader` でスクリプト・シーンとして実行しない。
 - GLB のサイズ、埋め込みリソース、ノード数、メッシュ・画像の上限を検証し、
@@ -155,9 +157,9 @@ tar.gz、Windows は zip を生成する。成果物には Godot の実行ファ
 Linux AppImage はホストの glibc と loader を使い、X11・Wayland・Vulkan ローダ・
 xkb データを同梱する。`APPIMAGE_EXTRACT_AND_RUN=1` でも起動できる。
 
-## Bevy 退避経路
+## Bevy 比較用クライアント
 
-Windows 実機の受け入れが終わるまで、`apps/client` (Bevy) を退避経路として残す。
+`apps/client` (Bevy) は Godot との比較用に当面残す。Windows の `package:windows` は Bevy のまま。
 移行開始時点の最終 Bevy コミットは `4c9a009` で、次のコマンドで従来構成に戻せる。
 
 ```sh
@@ -174,7 +176,7 @@ Bevy クライアントを復元できる。
 - Windows 実機の GPU / IME / ファイルドロップ、日本語入力の実操作は未検証。
   Windows パッケージの Wine headless 起動 (GDExtension / PCK の読み込み) は
   `pnpm smoke:godot:windows` で確認できる。
-- VRM は 0.x の静的表示のみ。アニメーション、1.0、三人称は未対応。
+- VRM は 0.x のみ。指・spring bone・animation clip・VRM 1.0・三人称は未対応。
 - Web エクスポート、OpenXR、動画、URL 取り込み、WASM UGC、ユーザー定義写像は未実装。
 - 音声は未使用。キャッシュの上限・eviction は Bevy と同様に未完成。
 - Linux の既定は Godot。Windows の通常配布は実機確認が終わるまで Bevy のまま。

@@ -150,6 +150,7 @@ Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置�
 - [x] 読み込み失敗時の簡易アバターへのフォールバック
 - [ ] 歩行・待機アニメーション
 - [x] 自分の VRM 表示 (鏡 / `V`)
+- [x] humanoid の procedural idle / walk / crouch アニメーション
 - [ ] 三人称視点
 - [ ] VRM 1.0
 
@@ -173,8 +174,8 @@ Bevy の現行機能を Godot 4.6.3 へ移植し、同じ space v2 / Kubo で動
 - [x] Linux の `dev:client` / `package:linux` を Godot へ切り替え
 - [ ] Windows 実機の GPU / IME / ドロップ
 - [ ] Windows の `package:windows` を Godot へ切り替え
-- [ ] 受け入れ後に Bevy を撤去
-- [ ] VRM アニメーション、VRM 1.0、OpenXR、動画、Web、WASM UGC
+- [ ] Bevy の撤去 (比較用に当面延期)
+- [ ] VRM 1.0、指・spring bone、OpenXR、動画、Web、WASM UGC
 
 **完了条件**: Windows 実機を含む受け入れ後、Windows の配布も Godot に切り替える。
 それまでは Windows の `package:windows` のみ Bevy を残す。

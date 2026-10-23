@@ -16,6 +16,7 @@ var self_id: String = ""
 var font: Font
 var image_decoder: Object
 var _samples: Dictionary = {}
+var _self_motion_time: float = 0.0
 var _assets: Dictionary = {}
 var _requested: Dictionary = {}
 var _loader: Object
@@ -80,6 +81,9 @@ func _update(id: String, entity: Dictionary) -> void:
 	var visual_key: Dictionary = dims.duplicate(true)
 	for key: String in ["space.position", "space.head", "space.yaw", "space.pitch", "space.scale", "space.crouch", "space.lean", "interaction.heldBy"]:
 		visual_key.erase(key)
+	for key: String in visual_key.keys():
+		if key.begins_with("time."):
+			visual_key.erase(key)
 	if created or root.get_meta("visual_key", {}) != visual_key:
 		for child: Node in root.get_children():
 			root.remove_child(child)
@@ -265,18 +269,38 @@ func _process(_delta: float) -> void:
 		if head_node != null:
 			head_node.rotation.x = head.get_euler().x
 		var crouch: float = lerpf(float(a["crouch"]), float(b["crouch"]), weight)
-		node.scale.y = 1.0 - crouch * 0.4
+		var motion_speed: float = (b["position"] as Vector3).distance_to(a["position"]) / span if span > 0.0 else 0.0
+		var avatar: Node = node.get_node_or_null("Avatar")
+		if avatar == null:
+			node.scale.y = 1.0 - crouch * 0.4
+		else:
+			node.scale.y = 1.0
+			_animate_avatar(node, motion_speed, crouch)
 		node.rotation.z = lerpf(float(a["lean"]), float(b["lean"]), weight) * 0.3
 
 func update_self(position_value: Vector3, yaw: float, crouch: float, lean: float, pitch: float = 0.0) -> void:
 	if views.has(self_id):
 		var node: Node3D = views[self_id]
+		var now: float = Time.get_ticks_msec() * 0.001
+		var elapsed: float = maxf(now - _self_motion_time, 0.001)
+		var motion_speed: float = node.position.distance_to(position_value) / elapsed
+		_self_motion_time = now
 		node.position = position_value
 		node.rotation = Vector3(0, yaw, lean * 0.3)
-		node.scale.y = 1.0 - crouch * 0.4
+		if node.get_node_or_null("Avatar") == null:
+			node.scale.y = 1.0 - crouch * 0.4
+		else:
+			node.scale.y = 1.0
+			_animate_avatar(node, motion_speed, crouch)
 		var head: Node3D = node.get_node_or_null("Head")
 		if head != null:
 			head.rotation.x = pitch
+
+
+func _animate_avatar(root: Node3D, speed: float, crouch: float) -> void:
+	var animator: Node = root.get_node_or_null("Avatar/AvatarAnimator")
+	if animator != null and animator.has_method("set_motion"):
+		animator.call("set_motion", speed, crouch)
 
 func pick(origin: Vector3, direction: Vector3, distance: float = 10.0) -> String:
 	var chosen: String = ""

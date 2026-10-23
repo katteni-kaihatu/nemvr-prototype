@@ -628,6 +628,14 @@ func _submit_avatar() -> void:
 func _automation(now: float) -> void:
 	var elapsed: float = now - _entered
 	var scenario: String = str(options.get("scenario", ""))
+	if scenario.contains("walk"):
+		var travel: float = sin(elapsed * 1.4) * 2.2
+		var direction: float = cos(elapsed * 1.4)
+		movement["position"] = [travel, 0.0, 2.0]
+		yaw = PI * 0.5 if direction >= 0.0 else -PI * 0.5
+		if _scenario_stage == 0:
+			_emit({"event": "walk", "position": [travel, 0.0, 2.0]})
+		_scenario_stage = 1
 	if scenario.contains("place"):
 		if _scenario_stage == 0:
 			_scenario_id = _place_box(Vector3(0, 0.5, -2))

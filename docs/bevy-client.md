@@ -1,7 +1,7 @@
-# Bevy ネイティブクライアント (退避経路)
+# Bevy ネイティブクライアント (比較用)
 
 > **2026-10-23: Linux の既定は Godot 版 (`apps/godot-client`) に切り替えた。**
-> Bevy 版は退避経路として残しており、Windows の実機確認が終わるまで
+> Bevy 版は比較用に残しており、Windows の実機確認が終わるまで
 > `pnpm package:windows` はこの実装をビルドする。詳細は
 > [`godot-client.md`](godot-client.md) を参照。
 

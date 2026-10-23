@@ -3,7 +3,7 @@
 VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ。
 最初のゴールは「複数ユーザーがアクセスできる 3D 空間」。
 
-- クライアント: Godot 4.6 のネイティブアプリ (`apps/godot-client`)。Bevy 版は退避経路 (`apps/client`)
+- クライアント: Godot 4.6 のネイティブアプリ (`apps/godot-client`)。Bevy 版は比較用 (`apps/client`)
 - サーバー: Elixir/OTP (Cowboy)
 - コンテンツ: Kubo (IPFS / libp2p / bitswap)
 - 同期: space v2 (n次元エンティティストア / Reader / Writer)
@@ -21,9 +21,10 @@ GDScript、同期・IPFS・移動計算は Bevy 非依存の `crates/client-core
 実装済み: 入室、移動・しゃがみ・リーン・ジャンプ、姿勢同期と補間、簡易アバター、
 画像・ファイル・ボックス・リンクの表示、ドラッグ&ドロップ配置、
 つかむ・移動・回転・拡大縮小・削除・複製・ダウンロード、日本語 UI、IPFS 共有、
-VRM 0.x アバター (`.vrm` のドロップ / `--avatar`)、自分のアバターを見る鏡 (`V`)。
+VRM 0.x アバター (`.vrm` のドロップ / `--avatar`)、idle / walk / crouch の
+プロシージャルアニメーション、自分のアバターを見る鏡 (`V`)。
 
-未実装: VRM のアニメーション・1.0、OpenXR / PC VR、動画、URL 取り込み。
+未実装: VRM 1.0、指・spring bone、OpenXR / PC VR、動画、URL 取り込み。
 
 ```sh
 nix develop
@@ -40,9 +41,9 @@ Lobby の画質選択で High / Medium / Low を切り替えられる。`F3` で
 実機確認まで Bevy のままにしている。操作・設定・制限の詳細は
 [`docs/godot-client.md`](docs/godot-client.md) を参照。
 
-## Bevy クライアント (退避経路)
+## Bevy クライアント (比較用)
 
-`apps/client` の Bevy 実装は退避経路として残している。`dev:client` / `package:linux` は
+`apps/client` の Bevy 実装は Godot との比較用に残している。`dev:client` / `package:linux` は
 Godot に切り替え済みで、Bevy を使う場合は明示的なコマンドを指定する。
 Windows の実機確認が終わるまで `package:windows` は Bevy をビルドする。
 
@@ -145,7 +146,7 @@ ipfs daemon
 pnpm dev          # Elixir サーバー (ws://localhost:8080, /media)
 
 # ターミナル 3
-pnpm dev:client   # Bevy クライアント
+pnpm dev:client   # Godot クライアント
 ```
 
 | ポート | 用途 |
@@ -223,7 +224,7 @@ WASM UGC、ユーザー定義の写像関数、空間の動的分割、リード
 
 - [Godot クライアント (既定)](docs/godot-client.md)
 - [性能測定](docs/performance.md)
-- [Bevy クライアント (退避経路)](docs/bevy-client.md)
+- [Bevy クライアント (比較用)](docs/bevy-client.md)
 - [パッケージ](docs/packaging.md)
 - [アーキテクチャ](docs/architecture.md)
 - [詳細設計](docs/design.md)

@@ -1,12 +1,20 @@
 extends RefCounted
 
 const StaticExtension = preload("res://addons/runtime_vrm/static_extension.gd")
+const AVATAR_ANIMATOR = preload("res://scripts/avatar_animator.gd")
 const MAX_BYTES := 64 * 1024 * 1024
 const MAX_JSON_BYTES := 8 * 1024 * 1024
 const MAX_NODES := 4096
 const MAX_VERTICES := 1000000
 const MAX_PIXELS := 32 * 1024 * 1024
 const MAX_IMAGE_SIDE := 8192
+const HUMANOID_BONES := [
+	"hips", "spine", "chest", "upperChest", "neck", "head", "leftEye", "rightEye", "jaw",
+	"leftShoulder", "rightShoulder", "leftUpperArm", "rightUpperArm",
+	"leftLowerArm", "rightLowerArm", "leftHand", "rightHand",
+	"leftUpperLeg", "rightUpperLeg", "leftLowerLeg", "rightLowerLeg",
+	"leftFoot", "rightFoot", "leftToes", "rightToes",
+]
 const ARRAY_LIMITS := {
 	"nodes": MAX_NODES, "meshes": 512, "accessors": 8192, "bufferViews": 8192,
 	"buffers": 1, "images": 128, "textures": 128, "materials": 256,
@@ -59,7 +67,44 @@ static func load_vrm(path: String) -> Node3D:
 		return null
 	scene.name = "RuntimeAvatar"
 	scene.set_meta("vrm_static", true)
+	var humanoid: Dictionary = checked["json"].get("extensions", {}).get("VRM", {}).get("humanoid", {}).get("humanBones", {})
+	var skeleton: Skeleton3D = _find_skeleton(scene)
+	if skeleton != null and not humanoid.is_empty():
+		var nodes: Array = checked["json"].get("nodes", [])
+		var mapping := {}
+		for key in humanoid:
+			var index: int = int(humanoid[key].get("node", -1))
+			var bone_name: String = str(nodes[index].get("name", "")) if index >= 0 and index < nodes.size() else ""
+			if bone_name.is_empty():
+				bone_name = _node_name(state, index)
+			if bone_name.is_empty():
+				bone_name = str(key)
+			mapping[key] = bone_name
+		if not mapping.is_empty():
+			var animator: Node = AVATAR_ANIMATOR.new()
+			animator.name = "AvatarAnimator"
+			scene.add_child(animator)
+			animator.call("setup", skeleton, mapping)
+			scene.set_meta("vrm_animated", true)
 	return scene as Node3D
+
+
+static func _find_skeleton(scene: Node) -> Skeleton3D:
+	var best: Skeleton3D = null
+	for node: Node in scene.find_children("*", "Skeleton3D", true, false):
+		var skeleton: Skeleton3D = node as Skeleton3D
+		if skeleton != null and (best == null or skeleton.get_bone_count() > best.get_bone_count()):
+			best = skeleton
+	return best
+
+
+static func _node_name(state: GLTFState, index: int) -> String:
+	if index < 0:
+		return ""
+	if state.has_method("get_node_name"):
+		return str(state.call("get_node_name", index))
+	var nodes: Array = state.get_nodes()
+	return str(nodes[index].node_name) if index < nodes.size() else ""
 
 
 static func _pack_glb(json: Dictionary, binary: PackedByteArray) -> PackedByteArray:
@@ -187,9 +232,37 @@ static func _validate(bytes: PackedByteArray) -> Dictionary:
 	if not _validate_materials(json):
 		return _reject("Invalid VRM material properties")
 	json.erase("animations")
-	# Static import has no use for metadata, spring bones, or blend-shape bindings.
-	json["extensions"]["VRM"] = {"specVersion": extensions["VRM"]["specVersion"], "materialProperties": extensions["VRM"].get("materialProperties", [])}
+	# Keep only the humanoid mapping needed for procedural animation, plus
+	# material properties. Spring bones and blend-shape bindings stay stripped.
+	var humanoid := _sanitize_humanoid(extensions["VRM"].get("humanoid", {}), json.get("nodes", []).size())
+	json["extensions"]["VRM"] = {
+		"specVersion": extensions["VRM"]["specVersion"],
+		"materialProperties": extensions["VRM"].get("materialProperties", []),
+		"humanoid": {"humanBones": humanoid},
+	}
 	return {"json": json, "bin": binary}
+
+
+static func _sanitize_humanoid(value: Variant, node_count: int) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	var source: Variant = value.get("humanBones", {})
+	var result := {}
+	# VRM 0.x stores humanBones as an array of {bone, node}; some exporters
+	# emit a dictionary keyed by bone name. Accept both.
+	if source is Array:
+		for entry: Variant in source:
+			if not entry is Dictionary:
+				continue
+			var key: String = str(entry.get("bone", ""))
+			if key in HUMANOID_BONES and _index(entry.get("node"), node_count):
+				result[key] = {"node": int(entry["node"])}
+	elif source is Dictionary:
+		for key: String in HUMANOID_BONES:
+			var entry: Variant = source.get(key)
+			if entry is Dictionary and _index(entry.get("node"), node_count):
+				result[key] = {"node": int(entry["node"])}
+	return result
 
 
 static func _integer(value: Variant, minimum: int, maximum: int) -> bool:
