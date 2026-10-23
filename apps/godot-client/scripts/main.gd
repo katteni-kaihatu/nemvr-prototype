@@ -15,6 +15,7 @@ const Mirror = preload("res://scripts/mirror.gd")
 @onready var hud: Control = $Interface/HUD
 @onready var hud_status: Label = $Interface/HUD/Status
 @onready var log_label: Label = $Interface/HUD/Log
+@onready var debug_label: Label = $Interface/HUD/Debug
 @onready var menu: PopupPanel = $Interface/Menu
 
 var bridge: Object
@@ -209,6 +210,11 @@ func _process(delta: float) -> void:
 			_send_pose()
 			_send_carry()
 		_automation(now)
+	if debug_label.visible:
+		var position: Vector3 = player.position
+		debug_label.text = "FPS %d  /  entities %d\npos %.2f, %.2f, %.2f  /  yaw %.1f°\ncarry %s" % [
+			Engine.get_frames_per_second(), projection.views.size(), position.x, position.y, position.z,
+			rad_to_deg(yaw), carry_id.left(12) if not carry_id.is_empty() else "-"]
 	var duration: float = float(options.get("duration", 0))
 	if duration > 0 and now - _started >= duration and not _quitting:
 		var success: bool = in_world
@@ -258,12 +264,22 @@ func _state(event: Dictionary) -> void:
 	status = next_status
 	lobby.hide()
 	hud.show()
+	if options.has("hide-hud"):
+		hud.hide()
 	projection.apply_snapshot(event.get("entities", []), self_id)
 	if entering:
 		_entered = Time.get_ticks_msec() * 0.001
 		if projection.entities.has(self_id):
 			var own_dims: Dictionary = projection.entities[self_id].get("dimensions", {})
 			movement["position"] = own_dims.get("space.position", [0, 0, 0])
+		if options.has("position"):
+			var position: PackedStringArray = str(options["position"]).split(",")
+			if position.size() >= 3:
+				movement["position"] = [float(position[0]), float(position[1]), float(position[2])]
+		if options.has("yaw"):
+			yaw = deg_to_rad(float(options["yaw"]))
+		if options.has("pitch"):
+			pitch = deg_to_rad(float(options["pitch"]))
 		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
 		mirror.set_enabled(options.has("mirror"))
 		if options.has("mirror"):
@@ -333,6 +349,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.physical_keycode == KEY_F3:
+			debug_label.visible = not debug_label.visible
+			_log("Debug overlay %s" % ("on" if debug_label.visible else "off"))
+			get_viewport().set_input_as_handled()
+			return
+		if event.physical_keycode == KEY_F12:
+			_capture_screenshot()
+			get_viewport().set_input_as_handled()
+			return
 	if not in_world or get_viewport().gui_get_focus_owner() != null or menu.visible:
 		return
 	if event is InputEventMouseButton and event.pressed:
@@ -540,17 +566,26 @@ func _automation(now: float) -> void:
 		elif _scenario_stage == 2 and elapsed >= 4.0:
 			_mutate({"op": "delete", "entityId": _scenario_id})
 			_scenario_stage = 3
-	if options.has("screenshot") and elapsed >= 2.0 and not _screenshot_started:
+	if options.has("screenshot") and elapsed >= float(options.get("screenshot-delay", 2.0)) and not _screenshot_started:
 		_screenshot_started = true
 		_screenshot()
 
-func _screenshot() -> void:
+func _capture_screenshot() -> void:
+	var stamp: String = Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_")
+	var directory: String = "user://screenshots"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	_log("Screenshot saved: " + directory.path_join(stamp + ".png"))
+	_screenshot(directory.path_join(stamp + ".png"))
+
+func _screenshot(path_override: String = "") -> void:
 	if DisplayServer.get_name() == "headless":
 		_log("Screenshot requires a graphical rendering session, not --headless")
 		_emit({"event": "screenshot_error", "message": "headless renderer"})
 		return
 	await RenderingServer.frame_post_draw
-	var path: String = "user://screenshot.png" if options["screenshot"] is bool else str(options["screenshot"])
+	var path: String = path_override
+	if path.is_empty():
+		path = "user://screenshot.png" if options["screenshot"] is bool else str(options["screenshot"])
 	var image: Image = get_viewport().get_texture().get_image()
 	var error: Error = image.save_png(path)
 	_emit({"event": "screenshot" if error == OK else "screenshot_error", "path": ProjectSettings.globalize_path(path), "error": error})

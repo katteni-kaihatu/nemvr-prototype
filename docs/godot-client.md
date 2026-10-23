@@ -48,6 +48,33 @@ Bevy クライアントと同じ `directories` の保存先を使う。
 Q / E、右クリックでつかむ、ホイール、Shift+ホイール、E で回転モード、中クリック / M、
 B、V、Esc、ファイルドロップ。
 
+## デバッグ
+
+- `F3`: FPS・座標・エンティティ数・carry 中の ID を表示するオーバーレイ
+- `F12`: `user://screenshots/YYYY-MM-DD_HH-MM-SS.png` にスクリーンショットを保存
+- `--position x,y,z`: 入室時の足元位置を指定する
+- `--yaw <度>` / `--pitch <度>`: 入室時の視線を指定する
+- `--hide-hud`: HUD を隠して撮影する
+- `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
+
+```sh
+pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
+  --position 0,0,5 --pitch -6 --hide-hud \
+  --screenshot /tmp/proto.png --screenshot-delay 2.5 --duration 8
+```
+
+## 描画
+
+`world.tscn` は Forward+ 向けに次を使う。
+
+- 星空・地平線グロー・太陽を含むカスタム sky shader
+- ワールド座標のマイナー / メジャーグリッド、距離フェード、発光を持つ床 shader
+- 面の向き・リム・スキャンライン・エッジ発光を持つエンティティ shader
+- SSR、SSAO、グロー、フォグ、ACES トーンマップ、暗い周辺減光 (vignette)
+
+シェーダは `apps/godot-client/shaders/` にあり、床・エンティティ・空・vignette を
+シーンから差し替えられる。
+
 ## ビルドと検証
 
 ```sh

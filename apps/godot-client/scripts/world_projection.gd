@@ -8,6 +8,7 @@ signal notice(message: String)
 const SELF_LAYER: int = 2
 const WORLD_LAYER: int = 1
 const AVATAR_LOADER: String = "res://native/runtime_avatar.gd"
+const ENTITY_SHADER: Shader = preload("res://shaders/entity_surface.gdshader")
 
 var entities: Dictionary = {}
 var views: Dictionary = {}
@@ -126,6 +127,8 @@ func _build(root: Node3D, dims: Dictionary, kind: String) -> void:
 		"image":
 			var width: float = clampf(float(dims.get("content.width", 1)), 0.1, 20)
 			var height: float = clampf(float(dims.get("content.height", 1)), 0.1, 20)
+			_box(root, Vector3(width + 0.085, height + 0.085, 0.045), Vector3(0, height * 0.5, -0.028),
+				Color(0.06, 0.16, 0.18))
 			var panel: MeshInstance3D = MeshInstance3D.new()
 			var mesh: QuadMesh = QuadMesh.new()
 			mesh.size = Vector2(width, height)
@@ -141,6 +144,7 @@ func _build(root: Node3D, dims: Dictionary, kind: String) -> void:
 					material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 					material.cull_mode = BaseMaterial3D.CULL_DISABLED
 					material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+					material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 					panel.material_override = material
 				else:
 					_label(root, "Image decode failed", Vector3(0, height * 0.5, 0.05))
@@ -176,9 +180,11 @@ func _box(parent: Node3D, size: Vector3, at: Vector3, color: Color) -> MeshInsta
 	mesh.size = size
 	node.mesh = mesh
 	node.position = at
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.albedo_color = color
-	material.roughness = 0.85
+	var material: ShaderMaterial = ShaderMaterial.new()
+	material.shader = ENTITY_SHADER
+	material.set_shader_parameter("albedo", color)
+	material.set_shader_parameter("smoothness", 0.5)
+	material.set_shader_parameter("rim_strength", 0.6)
 	node.material_override = material
 	parent.add_child(node)
 	return node

@@ -1,23 +1,86 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://scripts/world_projection.gd" id="1"]
+[ext_resource type="Shader" path="res://shaders/sky.gdshader" id="2"]
+[ext_resource type="Shader" path="res://shaders/floor_grid.gdshader" id="3"]
+
+[sub_resource type="ShaderMaterial" id="SkyMaterial"]
+shader = ExtResource("2")
+shader_parameter/zenith_color = Color(0.012, 0.028, 0.075, 1)
+shader_parameter/horizon_color = Color(0.045, 0.155, 0.19, 1)
+shader_parameter/ground_color = Color(0.01, 0.018, 0.028, 1)
+shader_parameter/glow_color = Color(0.16, 0.72, 0.66, 1)
+shader_parameter/sun_color = Color(1, 0.78, 0.52, 1)
+shader_parameter/sun_sharpness = 1300.0
+shader_parameter/sun_intensity = 3.5
+shader_parameter/star_scale = 230.0
+shader_parameter/star_intensity = 0.55
+shader_parameter/band_intensity = 0.2
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("SkyMaterial")
+process_mode = 3
+radiance_size = 3
+
 [sub_resource type="Environment" id="Environment"]
-background_mode = 1
-background_color = Color(0.10, 0.15, 0.22, 1)
+background_mode = 2
+sky = SubResource("Sky")
 ambient_light_source = 3
-ambient_light_color = Color(0.72, 0.80, 0.93, 1)
-ambient_light_energy = 0.65
-tonemap_mode = 0
-[sub_resource type="ProceduralSkyMaterial" id="UnusedSky"]
+ambient_light_color = Color(0.55, 0.72, 0.78, 1)
+ambient_light_sky_contribution = 0.85
+ambient_light_energy = 0.62
+reflected_light_source = 2
+tonemap_mode = 3
+tonemap_exposure = 1.15
+tonemap_white = 6.0
+glow_enabled = true
+glow_intensity = 0.42
+glow_strength = 1.0
+glow_bloom = 0.04
+glow_blend_mode = 1
+glow_hdr_threshold = 1.0
+fog_enabled = true
+fog_light_color = Color(0.06, 0.11, 0.15, 1)
+fog_light_energy = 0.55
+fog_density = 0.014
+fog_sky_affect = 0.22
+ssr_enabled = true
+ssr_max_steps = 96
+ssr_fade_in = 0.12
+ssr_fade_out = 1.6
+ssr_depth_tolerance = 0.25
+ssao_enabled = true
+ssao_radius = 1.4
+ssao_intensity = 1.6
+ssao_power = 1.4
+adjustment_enabled = true
+adjustment_brightness = 1.0
+adjustment_contrast = 1.06
+adjustment_saturation = 1.12
+
 [sub_resource type="PlaneMesh" id="FloorMesh"]
-size = Vector2(48, 48)
-[sub_resource type="StandardMaterial3D" id="FloorMaterial"]
-albedo_color = Color(0.16, 0.21, 0.25, 1)
-roughness = 0.9
+size = Vector2(96, 96)
+
+[sub_resource type="ShaderMaterial" id="FloorMaterial"]
+shader = ExtResource("3")
+shader_parameter/base_color = Color(0.032, 0.052, 0.072, 1)
+shader_parameter/line_color = Color(0.11, 0.48, 0.46, 1)
+shader_parameter/accent_color = Color(0.38, 0.28, 0.85, 1)
+shader_parameter/cell_size = 1.0
+shader_parameter/major_cells = 8.0
+shader_parameter/line_width = 0.95
+shader_parameter/glow_energy = 0.9
+shader_parameter/fade_start = 15.0
+shader_parameter/fade_end = 56.0
+
 [sub_resource type="BoxMesh" id="MarkerMesh"]
 size = Vector3(0.025, 0.006, 48)
+
 [sub_resource type="StandardMaterial3D" id="MarkerMaterial"]
-albedo_color = Color(0.27, 0.39, 0.41, 1)
+albedo_color = Color(0.08, 0.2, 0.22, 1)
+emission_enabled = true
+emission = Color(0.16, 0.7, 0.66, 1)
+emission_energy_multiplier = 0.35
 
 [node name="World" type="Node3D"]
 
@@ -25,10 +88,36 @@ albedo_color = Color(0.27, 0.39, 0.41, 1)
 environment = SubResource("Environment")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
-rotation_degrees = Vector3(-48, -28, 0)
-light_color = Color(1, 0.94, 0.83, 1)
-light_energy = 1.1
+rotation_degrees = Vector3(-56, -34, 0)
+light_color = Color(1, 0.91, 0.78, 1)
+light_energy = 2.35
+light_angular_distance = 0.4
 shadow_enabled = true
+directional_shadow_max_distance = 72.0
+
+[node name="TealRim" type="OmniLight3D" parent="."]
+position = Vector3(-8, 4.5, -9)
+light_color = Color(0.16, 0.82, 0.74, 1)
+light_energy = 1.6
+omni_range = 15.0
+omni_attenuation = 1.3
+shadow_enabled = false
+
+[node name="AmberRim" type="OmniLight3D" parent="."]
+position = Vector3(9, 3.5, 7)
+light_color = Color(1, 0.58, 0.3, 1)
+light_energy = 1.6
+omni_range = 15.0
+omni_attenuation = 1.35
+shadow_enabled = false
+
+[node name="VioletRim" type="OmniLight3D" parent="."]
+position = Vector3(0, 6, 12)
+light_color = Color(0.52, 0.4, 1, 1)
+light_energy = 1.4
+omni_range = 17.0
+omni_attenuation = 1.35
+shadow_enabled = false
 
 [node name="Floor" type="MeshInstance3D" parent="."]
 mesh = SubResource("FloorMesh")

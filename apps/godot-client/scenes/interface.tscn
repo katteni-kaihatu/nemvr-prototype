@@ -102,7 +102,19 @@ offset_left = 20.0
 offset_top = -76.0
 offset_right = -20.0
 offset_bottom = -14.0
-text = "WASD / arrows: move   Shift: sprint   Space: double jump   C / Ctrl: crouch   Q / E: lean\nRight click: carry   Wheel: distance   Shift + wheel: scale   E: rotate   M: menu   B: box   V: mirror   Esc: release pointer"
+text = "WASD / arrows: move   Shift: sprint   Space: double jump   C / Ctrl: crouch   Q / E: lean\nRight click: carry   Wheel: distance   Shift + wheel: scale   E: rotate   M: menu   B: box   V: mirror   F3: debug   F12: screenshot   Esc: release pointer"
+autowrap_mode = 3
+mouse_filter = 2
+
+[node name="Debug" type="Label" parent="HUD"]
+visible = false
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -390.0
+offset_top = 62.0
+offset_right = -20.0
+offset_bottom = 156.0
+horizontal_alignment = 2
 autowrap_mode = 3
 mouse_filter = 2
 
