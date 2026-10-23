@@ -168,6 +168,7 @@ Bevy の現行機能を Godot 4.6.3 へ移植し、同じ space v2 / Kubo で動
 - [x] Bevy placer -> Godot observer の混在接続を実 Node で確認
 - [x] Linux のリリース実行ファイルと既定パッケージ
 - [x] Windows パッケージの Wine headless 起動 (GDExtension / PCK)
+- [x] VPS の Kubo に TCP 4001 で接続 (DNS 解決後の `/ip4` アドレス)
 - [x] Linux の `dev:client` / `package:linux` を Godot へ切り替え
 - [ ] Windows 実機の GPU / IME / ドロップ
 - [ ] Windows の `package:windows` を Godot へ切り替え

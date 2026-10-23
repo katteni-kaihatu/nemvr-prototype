@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -717,19 +718,52 @@ pub fn kubo_addresses(server: &str, ipfs: &space_protocol::messages::IpfsInfo) -
     };
     let host = host.trim_matches(['[', ']']);
     let secure = url.scheme() == "wss";
-    let prefix = match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => format!("/ip4/{ip}"),
-        Ok(std::net::IpAddr::V6(ip)) => format!("/ip6/{ip}"),
+    let mut addresses = Vec::new();
+    for prefix in kubo_host_prefixes(host) {
+        addresses.push(format!("{prefix}/tcp/4001/p2p/{}", ipfs.peer_id));
+    }
+    // Keep the WebSocket address on the original host so TLS SNI matches the
+    // certificate. TCP is resolved above because rust-ipfs 0.16 resolves DNS
+    // before the TCP transport is in the stack and rejects the result.
+    let ws_prefix = match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => format!("/ip4/{ip}"),
+        Ok(IpAddr::V6(ip)) => format!("/ip6/{ip}"),
         Err(_) => format!("/dns/{host}"),
     };
-    let mut addresses = vec![format!("{prefix}/tcp/4001/p2p/{}", ipfs.peer_id)];
     addresses.push(format!(
-        "{prefix}/tcp/{}/{}/p2p/{}",
+        "{ws_prefix}/tcp/{}/{}/p2p/{}",
         ipfs.ws_port,
         if secure { "tls/ws" } else { "ws" },
         ipfs.peer_id
     ));
     addresses
+}
+
+fn kubo_host_prefixes(host: &str) -> Vec<String> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return vec![kubo_ip_prefix(ip)];
+    }
+    let mut prefixes = Vec::new();
+    if let Ok(resolved) = (host, 0u16).to_socket_addrs() {
+        for address in resolved {
+            let prefix = kubo_ip_prefix(address.ip());
+            if !prefixes.contains(&prefix) {
+                prefixes.push(prefix);
+            }
+        }
+    }
+    if prefixes.is_empty() {
+        vec![format!("/dns/{host}")]
+    } else {
+        prefixes
+    }
+}
+
+fn kubo_ip_prefix(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(ip) => format!("/ip4/{ip}"),
+        IpAddr::V6(ip) => format!("/ip6/{ip}"),
+    }
 }
 
 #[cfg(test)]
@@ -941,20 +975,37 @@ mod tests {
     #[test]
     fn server_change_updates_http_and_kubo_hosts() {
         let mut client = session();
-        client.config.server = "wss://new.example:9443/ws".into();
+        client.config.server = "wss://127.0.0.1:9443/ws".into();
         client.apply_message(welcome("me", "sub"));
-        assert_eq!(client.config.http_base(), "https://new.example:9443");
+        assert_eq!(client.config.http_base(), "https://127.0.0.1:9443");
         assert!(
             client
                 .addresses
                 .iter()
-                .all(|address| address.contains("new.example"))
+                .all(|address| address.contains("127.0.0.1"))
         );
         assert!(
             client
                 .addresses
                 .iter()
                 .any(|address| address.contains("/tls/ws/"))
+        );
+    }
+
+    #[test]
+    fn kubo_tcp_addresses_are_resolved_before_connecting() {
+        let addresses = kubo_addresses(
+            "wss://127.0.0.1:9443/ws",
+            &IpfsInfo {
+                peer_id: "peer".into(),
+                ws_port: 8443,
+            },
+        );
+        assert_eq!(addresses[0], "/ip4/127.0.0.1/tcp/4001/p2p/peer");
+        assert!(
+            addresses
+                .iter()
+                .any(|address| address == "/ip4/127.0.0.1/tcp/8443/tls/ws/p2p/peer")
         );
     }
 }
