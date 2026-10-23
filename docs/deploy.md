@@ -3,8 +3,9 @@
 Ubuntu / Debian の**開発用 VPS** にデプロイし、Kubo / Caddy / TURN を含む実環境に近い結合テストを行うための構成と手順。
 スクリプトは `deploy/setup-vps.sh` (初期構築) と `deploy/deploy.sh` (ビルド・転送・再起動) にある。
 
-> **2026-10-22: Web クライアント削除済み。** 現行クライアントは Rust / Bevy のネイティブアプリで、
-> サーバーとの WebSocket (`/ws`) と Kubo の TCP 4001 を使う。以下の Helia / ブラウザ / WebRTC / TURN の
+> **2026-10-22: Web クライアント削除済み。** クライアントはネイティブアプリで、
+> サーバーとの WebSocket (`/ws`) と Kubo の TCP 4001 を使う。Linux の既定は Godot、
+> Bevy は Windows 実機確認までの退避経路。以下の Helia / ブラウザ / WebRTC / TURN の
 > 記述は移行前の設計と検証履歴である。
 
 **このリポジトリが使う VPS (`nemvr.nemnomi.dev` / `root@172.104.89.28`) は開発・検証環境であり、本番環境ではない。**
@@ -263,7 +264,8 @@ DEPLOY_HOST=root@<VPS> SSH_KEY=~/.ssh/<鍵> deploy/deploy.sh
 2. VPS 上で `runuser -u proto -- mix deps.get --only prod && mix release --overwrite`
 3. 現在の release と `/srv/proto-client` を `.prev` として VPS 内に退避
 4. `deploy/landing/` を `/srv/proto-client/` へ rsync (`downloads/` は保持)
-5. `dist/` に AppImage / Windows zip があれば `/srv/proto-client/downloads/` へ転送
+5. `dist/` に Godot / Bevy の AppImage・tar.gz・Windows zip があれば `/srv/proto-client/downloads/` へ転送
+   (Linux 既定は Godot、Windows 既定は実機確認まで Bevy)
 6. ビルドした release を `/opt/proto/app/apps/server/_build/prod/rel/proto_server/` へ配置
 7. `systemctl restart proto-server` (Kubo は再起動しない)
 
@@ -293,6 +295,17 @@ ssh root@<VPS> 'journalctl -u kubo -u proto-server -n 30 --no-pager'
 `welcome.ipfs.wsPort` は 8443、`welcome.ipfs.peerId` は `ipfs id` の `ID` と一致する。
 `https://<ホスト名>/` でランディングページが表示され、`downloads/` からクライアントを取得できることを確認する。
 ネイティブクライアントの Lobby には `wss://<ホスト名>/ws` を入れる。
+
+#### 2026-10-23 のデプロイ確認
+
+- `https://nemvr.nemnomi.dev/` は HTTP/2 200、`wss://nemvr.nemnomi.dev/ws` はハンドシェイク成功。
+- 配布中の Godot AppImage を `--server wss://nemvr.nemnomi.dev/ws` で起動し、`welcome` を受信。
+- Linux のボタンは Godot AppImage、Windows は実機確認まで Bevy zip。Godot の Windows 候補も配置済み。
+- ローカルと VPS の AppImage SHA-256 は一致。
+- Kubo への rust-ipfs 接続は、TCP 4001 が `Unsupported resolved address`、8443 の
+  `/tls/ws` が `invalid multi-address` となり、コンテンツ取得は `/media/<cid>` に
+  フォールバックする。TCP 4001 / 8443 自体は外部から到達できる。
+  VPS 経由の bitswap 直接取得は追加調査が必要。
 
 ### 4. ロールバック
 

@@ -52,10 +52,16 @@ RSYNC=(rsync -az --delete --exclude downloads --chown=proto:proto -e "${SSH[*]}"
 
 echo "==> upload client packages (if built)"
 for artifact in \
-  dist/ProtoSNS-x86_64.AppImage \
-  dist/ProtoSNS-x86_64.AppImage.sha256 \
+  dist/ProtoSNS-godot-x86_64.AppImage \
+  dist/ProtoSNS-godot-x86_64.AppImage.sha256 \
+  dist/ProtoSNS-godot-linux-x86_64.tar.gz \
+  dist/ProtoSNS-godot-linux-x86_64.tar.gz.sha256 \
+  dist/ProtoSNS-godot-windows-x86_64.zip \
+  dist/ProtoSNS-godot-windows-x86_64.zip.sha256 \
   dist/ProtoSNS-windows-x86_64.zip \
-  dist/ProtoSNS-windows-x86_64.zip.sha256; do
+  dist/ProtoSNS-windows-x86_64.zip.sha256 \
+  dist/ProtoSNS-x86_64.AppImage \
+  dist/ProtoSNS-x86_64.AppImage.sha256; do
   if [ -f "$artifact" ]; then
     rsync -az --chown=proto:proto -e "${SSH[*]}" "$artifact" "$DEPLOY_HOST:/srv/proto-client/downloads/"
   else
