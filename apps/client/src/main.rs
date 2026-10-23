@@ -14,6 +14,7 @@ const UI_FONT: &[u8] = include_bytes!("../../../assets/fonts/migu-1m-regular.ttf
 use bevy::audio::AudioPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::text::Font;
 use clap::Parser;
 
@@ -61,6 +62,9 @@ struct Args {
     /// Show the self-view mirror at startup.
     #[arg(long)]
     mirror: bool,
+    /// Save a screenshot of the world after startup (for E2E checks).
+    #[arg(long)]
+    screenshot: Option<std::path::PathBuf>,
     /// Start the embedded IPFS node, print its peer ID, and exit.
     #[arg(long)]
     ipfs_smoke: bool,
@@ -153,6 +157,10 @@ fn main() {
     app.insert_resource(crate::world::mirror::MirrorState {
         enabled: args.mirror,
     });
+    if let Some(path) = args.screenshot.clone() {
+        app.insert_resource(ScreenshotRequest { path, frames: 0 })
+            .add_systems(Update, take_screenshot);
+    }
 
     if args.name.is_some() {
         app.world_mut()
@@ -168,4 +176,27 @@ fn install_ui_font(mut fonts: ResMut<Assets<Font>>) {
         Handle::<Font>::default().id(),
         Font::from_bytes(UI_FONT.to_vec()),
     );
+}
+
+#[derive(Resource)]
+struct ScreenshotRequest {
+    path: std::path::PathBuf,
+    frames: u32,
+}
+
+fn take_screenshot(
+    mut commands: Commands,
+    mut request: ResMut<ScreenshotRequest>,
+    state: Res<State<AppState>>,
+) {
+    if *state.get() != AppState::InWorld {
+        return;
+    }
+    request.frames += 1;
+    if request.frames == 90 {
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(request.path.clone()));
+        bevy::log::info!("screenshot requested: {}", request.path.display());
+    }
 }
