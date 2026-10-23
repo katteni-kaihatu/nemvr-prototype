@@ -40,3 +40,6 @@ codegen-units = 1
 # `No segmentation model` を繰り返し出力する。`new_dictionary` を使う修正。
 [patch.crates-io]
 parley = { path = "vendor/parley" }
+# connexa 0.5.3 の WebSocket は /dns を内側 TCP に渡すが、その TCP が DNS を
+# 解決できず /tls/ws が失敗する。内側 TCP に DNS transport を組み込む。
+connexa = { path = "vendor/connexa" }

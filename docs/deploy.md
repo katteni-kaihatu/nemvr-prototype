@@ -304,8 +304,8 @@ ssh root@<VPS> 'journalctl -u kubo -u proto-server -n 30 --no-pager'
 - ローカルと VPS の AppImage SHA-256 は一致。
 - Kubo へは DNS 解決した `/ip4/<addr>/tcp/4001` で接続できることを確認。ネットワーク状態により
   初回が reset される場合は 10 秒後の再試行で `Connected to Kubo` になる。
-- 8443 の `/tls/ws` は rust-ipfs 側でまだ接続できないため、TCP 4001 を優先する。
-  `/media/<cid>` フォールバックも維持している。
+- 8443 の `/tls/ws` も Caddy 経由で接続できることを確認。接続できない場合は 1 / 2 / 4 秒
+  後に再試行する。TCP 4001 と `/media/<cid>` フォールバックも維持している。
 
 ### 4. ロールバック
 

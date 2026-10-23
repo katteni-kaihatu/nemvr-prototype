@@ -58,6 +58,7 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--yaw <度>` / `--pitch <度>`: 入室時の視線を指定する
 - `--hide-hud`: HUD を隠して撮影する
 - `--no-floor-reflection`: 床の平面反射を無効にする (低スペック環境向け)
+- `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 
 ```sh

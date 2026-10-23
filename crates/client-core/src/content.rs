@@ -245,15 +245,13 @@ async fn run_actor(
                                 let _ = events.send(ContentEvent::Connected);
                                 return;
                             }
-                            if attempt == 0 {
-                                let _ = events.send(ContentEvent::Failed {
-                                    cid: None,
-                                    message: format!(
-                                        "Kubo に接続できません。再試行します: {last_error}"
-                                    ),
-                                });
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                            let delay = match attempt {
+                                0 => 1,
+                                1 => 2,
+                                2 => 4,
+                                _ => 10,
+                            };
+                            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         }
                         let _ = events.send(ContentEvent::Failed {
                             cid: None,
