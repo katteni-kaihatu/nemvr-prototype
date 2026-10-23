@@ -22,6 +22,8 @@ jobs:
             experimental-features = nix-command flakes
       - name: Install workspace dependencies
         run: nix develop -c bash -lc 'pnpm install --frozen-lockfile'
+      - name: Install Rust toolchain
+        run: nix develop -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy'
       - name: Fetch Elixir dependencies
         run: nix develop -c bash -lc 'cd apps/server && mix local.hex --force && mix local.rebar --force && mix deps.get'
       - name: Rust fmt, clippy, and tests
@@ -39,6 +41,8 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Install Rust toolchain
+        run: nix develop -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy'
       - name: Native bridge and presentation tests
         run: nix develop -c bash -lc 'pnpm test:godot'
       - name: Two-client scene E2E
