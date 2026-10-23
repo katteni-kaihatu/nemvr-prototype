@@ -1,10 +1,16 @@
 # 詳細設計
 
 > **2026-10-22: クライアント移行済み。**
-> Web クライアント (Vite / R3F / Helia / Service Worker) は削除され、現在のクライアントは
-> `apps/client` の Rust / Bevy 実装である。本文中の Helia、Service Worker、ブラウザ内 IPFS、
+> Web クライアント (Vite / R3F / Helia / Service Worker) は削除され、ネイティブクライアントに
+> 置き換えた。Bevy 版 (`apps/client`) は現在、Windows 実機確認までの退避経路である。
+> 本文中の Helia、Service Worker、ブラウザ内 IPFS、
 > WebRTC、`<video>` に関する記述は移行前の設計経緯として残している。
-> 現行クライアントは rust-ipfs で Kubo の TCP 4001 に接続し、取得失敗時は `/media/<cid>` を使う。
+> ネイティブクライアントは rust-ipfs で Kubo の TCP 4001 に接続し、取得失敗時は `/media/<cid>` を使う。
+
+> **2026-10-23: Godot クライアントが Linux 既定。** `apps/godot-client` は同じ space v2 の
+> Reader / Writer と `vr-sns-3d@1` 写像を使う。Godot のシーンは表示結果であり、
+> 共有世界の正本ではない。同期・IPFS・移動/衝突は `crates/client-core` を共有する。
+> 画像の CID キャッシュは拡張子を持たないため、表示側は Rust の先頭バイト判定でデコードする。
 
 `architecture.md` の構成を前提に、プロトコル・同期・クライアント内部の設計を定める。
 実装中に変更してよい。変更した場合はこのドキュメントを更新する。

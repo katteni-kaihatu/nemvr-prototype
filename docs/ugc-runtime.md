@@ -2,6 +2,11 @@
 
 状態: 設計提案。ランタイム・プロトコル・APIは未実装。
 
+> **Godot クライアントとの関係**: `apps/godot-client` の GDScript は表示・入力の
+> ローカル処理であり、共有世界の ECS System ではない。ダウンロードした GDScript /
+> シーン / リソースを実行する経路も持たない。将来の UGC は本文のとおり、サーバーの
+> WASM 実行基盤とプログラム別 Reader / Writer を使う。
+
 > **現行との関係**: 現在の同期は space v2（`Space.Store` / `Reader` / `Writer`）のみで、
 > 旧 legacy / `crdt-v1` の比較表は歴史的資料である。UGC プログラムを WASM 実行環境で動かし、
 > プログラムごとに Reader / Writer を割り当てる要件は `docs/n-dim-client-original.md` を正とする。
@@ -30,7 +35,7 @@ UGCの振る舞いをElixirで記述し、クライアントとサーバーに�
 
 ### 現状からの差分
 
-現在はRust / Bevyのネイティブクライアントと、Elixir/OTP（Cowboy）サーバーで構成される。space v2の次元エンティティ、Reader / Writer、ケーパビリティの基盤はあるが、スクリプト添付、WASM実行基盤、プログラム用Reader / Writer、プログラムへのインターネット接続、UGC用権限モデルは存在しない。本提案のBehaviorやcomponentは追加設計である。UGCプログラムをWASM実行環境で動かすという要件は `docs/n-dim-client-original.md` を正とする。
+現在はGodotクライアント (Linux既定) とBevyの退避経路、Elixir/OTP（Cowboy）サーバーで構成される。space v2の次元エンティティ、Reader / Writer、ケーパビリティの基盤はあるが、スクリプト添付、WASM実行基盤、プログラム用Reader / Writer、プログラムへのインターネット接続、UGC用権限モデルは存在しない。本提案のBehaviorやcomponentは追加設計である。UGCプログラムをWASM実行環境で動かすという要件は `docs/n-dim-client-original.md` を正とする。
 
 既存の同期モードには次の違いがある。
 

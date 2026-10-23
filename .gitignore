@@ -22,3 +22,8 @@ deps/
 *.ez
 erl_crash.dump
 .elixir_ls/
+
+# Godot generated imports and staged GDExtension libraries
+apps/godot-client/.godot/
+apps/godot-client/native/linux/
+apps/godot-client/native/windows/

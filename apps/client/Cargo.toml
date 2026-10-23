@@ -8,7 +8,7 @@ description = "Native Bevy client for the VR SNS prototype"
 
 [features]
 default = ["ipfs", "vrm"]
-ipfs = ["dep:rust-ipfs"]
+ipfs = ["client-core/ipfs", "dep:rust-ipfs"]
 xr = ["dep:bevy_mod_openxr", "dep:bevy_mod_xr"]
 vrm = ["dep:bevy_vrm"]
 video = []
@@ -17,6 +17,7 @@ video = []
 anyhow.workspace = true
 bevy.workspace = true
 clap.workspace = true
+client-core = { path = "../../crates/client-core", default-features = false }
 directories.workspace = true
 futures-util.workspace = true
 image.workspace = true

@@ -1,6 +1,9 @@
 # Linux / Windows パッケージ
 
-ネイティブクライアントを単体で起動できる形にまとめる。
+ネイティブクライアントを単体で起動できる形にまとめる。Linux の既定は Godot 版、
+Windows の既定は実機確認が終わるまで Bevy 版。以下の Bevy 版の手順は
+`pnpm package:bevy:linux` / `pnpm package:windows` に対応する。Godot 版は
+「Godot 版 (Linux 既定)」を参照。
 
 ## 成果物
 
@@ -19,7 +22,8 @@ dist/ProtoSNS-windows-x86_64.zip.sha256
 
 ```sh
 nix develop
-rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+pnpm package:bevy:linux
+# または
 bash scripts/package-linux.sh
 ```
 
@@ -132,6 +136,8 @@ Linux 上で MinGW-w64 向けにクロスコンパイルする。
 ```sh
 nix develop .#windows
 rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+pnpm package:windows
+# または
 bash scripts/package-windows.sh
 ```
 
@@ -186,13 +192,73 @@ proto-client.exe --headless --server ws://127.0.0.1:8080/ws --name test --durati
 
 ## 共通の既知の制限
 
-- Linux AppImage は glibc 2.42 を同梱している。非常に古いディストリビューションや、
+- Bevy 版 Linux AppImage は glibc 2.42 を同梱している。非常に古いディストリビューションや、
   ホストの NSS / グラフィックスドライバとの組み合わせで問題が出る可能性がある。
   その場合は同梱の `usr/lib/libc.so.6` などを外し、ホストの glibc を使う。
+  Godot 版 AppImage は glibc / loader を同梱せず、最初からホストのものを使う。
 - 同梱する glibc / ALSA / Wayland などのライセンス条件は、配布前に確認する。
 - AppImage の署名、自動更新、デスクトップ統合は未対応。
 - `appimagetool` は continuous ビルドを使う。スクリプト内で SHA-256 を固定している。
 - AppImage 化にはネットワークが必要 (appimagetool のダウンロードと runtime 取得)。
+
+## Godot 版 (Linux 既定)
+
+```text
+dist/ProtoSNS-godot-x86_64.AppImage
+dist/ProtoSNS-godot-x86_64.AppImage.sha256
+dist/ProtoSNS-godot-linux-x86_64.tar.gz
+dist/ProtoSNS-godot-linux-x86_64.tar.gz.sha256
+dist/ProtoSNS-godot-windows-x86_64.zip
+dist/ProtoSNS-godot-windows-x86_64.zip.sha256
+```
+
+```sh
+nix develop
+pnpm package:linux          # package:godot:linux と同じ
+pnpm smoke:godot:linux
+
+nix develop .#windows
+pnpm package:godot:windows  # Windows の候補 (既定はまだ Bevy)
+pnpm smoke:godot:windows
+```
+
+Nix の固定版 Godot 4.6.3 と、同じ版の `godot_4-export-templates-bin` を使う。
+`GODOT_EXPORT_TEMPLATES` は `nix develop` が設定する。テンプレート版が実行ファイルと
+一致しない場合はスクリプトが停止する。
+
+同梱物:
+
+- Godot の Linux 実行ファイル / `.pck`、Windows `.exe` / `.pck`
+- `libproto_godot.so` / `proto_godot.dll`
+- godot-vrm、Godot-MToon-Shader、Migu 1M のライセンスと依存の出所
+- Linux AppImage: X11・Wayland、Vulkan ローダ、xkb データ (glibc は同梱しない)
+
+Linux AppImage は `APPIMAGE_EXTRACT_AND_RUN=1` で展開実行でき、入室・Kubo 接続・
+シーン作成/移動/削除まで確認済み。既定は Forward+ / Vulkan で、Vulkan ローダと
+X11 / Wayland バックエンドを同梱する。glibc と loader はホストのものを使う。
+以前は loader と glibc も同梱していたが、ホストの GPU ライブラリと組み合わせると
+`stack smashing detected` で終了したため、現在は同梱しない。
+tar.gz は FUSE が使えない環境や中身の確認用。
+
+エクスポート済みアプリへ `--server` などを渡す場合は、Godot 本体の引数と分けるため
+`--` を挟む。`--` より前は Godot が、後ろはアプリが解釈する。
+
+```sh
+./dist/ProtoSNS-godot-x86_64.AppImage --headless -- \
+  --server ws://127.0.0.1:8080/ws --name packaged --duration 5
+```
+
+Windows zip は MinGW-w64 でクロスビルドした `.dll` を含めて作成できる。実機 Windows の
+GPU / IME / ファイルドロップは未検証。`pnpm smoke:godot:windows` で Wine の headless
+起動 (GDExtension / PCK) を確認できる。
+
+`--no-build` は既存の release ライブラリと Godot 出力を使う。ネイティブ API を変更した後は
+必ず通常のパッケージコマンドで再ビルドする。
+
+`pnpm package:godot:linux` は AppImage 作成後に `pnpm smoke:godot:linux` 相当の確認を行う。
+headless 起動、GDExtension の初期化、`stack smashing detected` や `ERROR:` の不在を検査し、
+`DISPLAY` / `WAYLAND_DISPLAY` がある環境では実際に描画を初期化して Vulkan / OpenGL の
+バックエンドを確認する。
 
 ## ファイル
 

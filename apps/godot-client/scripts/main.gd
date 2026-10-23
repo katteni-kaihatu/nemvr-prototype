@@ -1,0 +1,592 @@
+extends Node
+
+const WorldProjection = preload("res://scripts/world_projection.gd")
+const Mirror = preload("res://scripts/mirror.gd")
+
+@onready var projection: WorldProjection = $World/Entities
+@onready var player: Node3D = $World/Player
+@onready var camera: Camera3D = $World/Player/Camera
+@onready var mirror: Mirror = $World/Mirror
+@onready var lobby: PanelContainer = $Interface/Lobby
+@onready var fields: VBoxContainer = $Interface/Lobby/Margin/Fields
+@onready var server_edit: LineEdit = $Interface/Lobby/Margin/Fields/Server
+@onready var name_edit: LineEdit = $Interface/Lobby/Margin/Fields/Name
+@onready var status_label: Label = $Interface/Lobby/Margin/Fields/Status
+@onready var hud: Control = $Interface/HUD
+@onready var hud_status: Label = $Interface/HUD/Status
+@onready var log_label: Label = $Interface/HUD/Log
+@onready var menu: PopupPanel = $Interface/Menu
+
+var bridge: Object
+var options: Dictionary = {}
+var self_id: String = ""
+var in_world: bool = false
+var status: String = "lobby"
+var movement: Dictionary = {"position": [0.0, 0.0, 0.0], "vy": 0.0, "crouch": 0.0, "grounded": true, "airJumps": 1, "lean": 0.0, "yaw": 0.0}
+var yaw: float = 0.0
+var pitch: float = 0.0
+var carry_id: String = ""
+var carry_distance: float = 2.0
+var carry_yaw: float = 0.0
+var carry_pitch: float = 0.0
+var carry_scale: float = 1.0
+var rotate_mode: bool = false
+var menu_id: String = ""
+var pending: Dictionary = {}
+var _events: Array = []
+var _logs: Array[String] = []
+var _transfer: String = ""
+var _pose_clock: float = 0.0
+var _jump_pressed: bool = false
+var _started: float = 0.0
+var _entered: float = -1.0
+var _scenario_id: String = ""
+var _scenario_stage: int = 0
+var _scenario_observed: Dictionary = {}
+var _screenshot_started: bool = false
+var _quitting: bool = false
+var _avatar_path: String = ""
+var _avatar_reset_pending: bool = false
+var _ipfs_ready: bool = false
+
+func _ready() -> void:
+	_started = Time.get_ticks_msec() * 0.001
+	options = _parse_options(OS.get_cmdline_user_args())
+	_setup_theme()
+	projection.asset_requested.connect(_fetch)
+	projection.observed.connect(_observe)
+	projection.notice.connect(_log)
+	mirror.source = camera
+	fields.get_node("Connect").pressed.connect(_connect)
+	fields.get_node("ResetAvatar").pressed.connect(_reset_avatar)
+	name_edit.text_submitted.connect(func(_text: String) -> void: _connect())
+	server_edit.text_submitted.connect(func(_text: String) -> void: name_edit.grab_focus())
+	$Interface/HUD/Disconnect.pressed.connect(_disconnect)
+	$Interface/Menu/Actions/Delete.pressed.connect(func() -> void: _menu_action("delete"))
+	$Interface/Menu/Actions/Duplicate.pressed.connect(func() -> void: _menu_action("duplicate"))
+	$Interface/Menu/Actions/Download.pressed.connect(func() -> void: _menu_action("download"))
+	$Interface/Menu/Actions/Close.pressed.connect(func() -> void: menu.hide())
+	get_window().files_dropped.connect(_files_dropped)
+	get_tree().auto_accept_quit = false
+	if not ClassDB.class_exists("ProtoClient"):
+		_log("Native ProtoClient extension is unavailable. Build/stage the GDExtension first.")
+		fields.get_node("Connect").disabled = true
+	else:
+		bridge = ClassDB.instantiate("ProtoClient")
+		projection.image_decoder = bridge
+		if options.has("data-dir") and bridge.has_method("configure"):
+			bridge.call("configure", str(options["data-dir"]))
+		var result: Dictionary = _command({"op": "config"})
+		var config: Dictionary = result.get("value", {}) if result.get("value") is Dictionary else {}
+		server_edit.text = str(config.get("server", server_edit.text))
+		name_edit.text = str(config.get("name", ""))
+	if options.has("server"):
+		server_edit.text = str(options["server"])
+	if options.has("name"):
+		name_edit.text = str(options["name"])
+	if options.has("avatar"):
+		_avatar_path = str(options["avatar"])
+	if options.has("name") and bridge != null:
+		_connect()
+
+func _setup_theme() -> void:
+	var theme: Theme = Theme.new()
+	theme.default_font_size = 18
+	var font_path: String = "res://assets/fonts/Migu-1M-regular.ttf"
+	if ResourceLoader.exists(font_path):
+		var font: Font = load(font_path) as Font
+		theme.default_font = font
+		projection.font = font
+	var panel: StyleBoxFlat = StyleBoxFlat.new()
+	panel.bg_color = Color(0.055, 0.085, 0.11, 0.97)
+	panel.border_color = Color(0.25, 0.58, 0.55)
+	panel.set_border_width_all(1)
+	panel.set_corner_radius_all(6)
+	theme.set_stylebox("panel", "PanelContainer", panel)
+	theme.set_stylebox("panel", "PopupPanel", panel)
+	var button: StyleBoxFlat = StyleBoxFlat.new()
+	button.bg_color = Color(0.12, 0.34, 0.33)
+	button.content_margin_top = 8
+	button.content_margin_bottom = 8
+	button.content_margin_left = 14
+	button.content_margin_right = 14
+	theme.set_stylebox("normal", "Button", button)
+	var hover: StyleBoxFlat = button.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.18, 0.46, 0.43)
+	theme.set_stylebox("hover", "Button", hover)
+	lobby.theme = theme
+	hud.theme = theme
+	menu.theme = theme
+	# The same bundled font covers native text input and Japanese 3D labels.
+	fields.get_node("ServerLabel").text = "サーバー / Server"
+	fields.get_node("NameLabel").text = "表示名 / Name"
+	fields.get_node("Connect").text = "接続 / Connect"
+
+func _parse_options(arguments: PackedStringArray) -> Dictionary:
+	var parsed: Dictionary = {}
+	var index: int = 0
+	while index < arguments.size():
+		var argument: String = arguments[index]
+		if argument.begins_with("--"):
+			var pair: PackedStringArray = argument.substr(2).split("=", true, 1)
+			var key: String = pair[0]
+			if pair.size() == 2:
+				parsed[key] = pair[1]
+			elif index + 1 < arguments.size() and not arguments[index + 1].begins_with("--"):
+				index += 1
+				parsed[key] = arguments[index]
+			else:
+				parsed[key] = true
+		index += 1
+	return parsed
+
+func _connect() -> void:
+	if bridge == null:
+		return
+	_disconnect()
+	status = "connecting"
+	status_label.text = "接続中 / Connecting…"
+	fields.get_node("Connect").disabled = true
+	var result: Dictionary = _command({"op": "connect", "server": server_edit.text.strip_edges(), "name": name_edit.text.strip_edges()})
+	if not result.get("ok", false):
+		status = "lobby"
+		fields.get_node("Connect").disabled = false
+
+func _disconnect(send_command: bool = true) -> void:
+	if bridge != null and send_command:
+		_command({"op": "disconnect"})
+	in_world = false
+	status = "lobby"
+	self_id = ""
+	carry_id = ""
+	_ipfs_ready = false
+	pending.clear()
+	projection.clear()
+	menu.hide()
+	mirror.set_enabled(false)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	lobby.show()
+	hud.hide()
+	fields.get_node("Connect").disabled = bridge == null
+	_entered = -1
+	_scenario_stage = 0
+	_scenario_id = ""
+	_scenario_observed.clear()
+	movement = {"position": [0.0, 0.0, 0.0], "vy": 0.0, "crouch": 0.0, "grounded": true, "airJumps": 1, "lean": 0.0, "yaw": 0.0}
+	yaw = 0
+	pitch = 0
+
+func _command(payload: Dictionary) -> Dictionary:
+	if bridge == null:
+		return {"ok": false, "error": "Native extension unavailable"}
+	var result: Dictionary = bridge.call("command", payload)
+	if not result.get("ok", false):
+		_log(str(result.get("error", "Command rejected")))
+	return result
+
+func _fetch(cid: String) -> void:
+	_command({"op": "fetch", "cid": cid})
+
+func _process(delta: float) -> void:
+	if bridge != null:
+		_events.append_array(bridge.call("poll_events"))
+	for _index: int in range(mini(_events.size(), 256)):
+		var event: Dictionary = _events.pop_front()
+		_handle_event(event)
+	var now: float = Time.get_ticks_msec() * 0.001
+	for id: String in pending.keys():
+		if now - float(pending[id]["time"]) > 8.0:
+			var operation: String = str(pending[id]["op"])
+			if operation == "claim" and carry_id == pending[id]["entityId"]:
+				_rollback(carry_id)
+			pending.erase(id)
+	if in_world:
+		_update_carry()
+		_update_target()
+		_pose_clock += delta
+		if _pose_clock >= 0.05:
+			_pose_clock = fmod(_pose_clock, 0.05)
+			_send_pose()
+			_send_carry()
+		_automation(now)
+	var duration: float = float(options.get("duration", 0))
+	if duration > 0 and now - _started >= duration and not _quitting:
+		var success: bool = in_world
+		if str(options.get("scenario", "")).contains("place"):
+			success = success and _scenario_observed.get("created", false) and _scenario_observed.get("moved", false) and _scenario_observed.get("removed", false)
+		_shutdown(0 if success else 1)
+
+func _handle_event(event: Dictionary) -> void:
+	match str(event.get("type", "")):
+		"state":
+			_state(event)
+		"asset":
+			projection.asset_ready(str(event.get("cid", "")), str(event.get("path", "")))
+			_emit({"event": "asset", "cid": event.get("cid", ""), "path": event.get("path", "")})
+		"progress":
+			var total: String = str(event["total"]) if event.get("total") != null else "?"
+			_transfer = "%s: %s / %s bytes" % [str(event.get("cid", "")).left(12), str(event.get("loaded", 0)), total]
+		"error":
+			var command_id: String = str(event.get("commandId", ""))
+			if pending.has(command_id):
+				_rollback(str(pending[command_id]["entityId"]))
+				pending.erase(command_id)
+			_log(str(event.get("message", "Error")))
+			_emit({"event": "error", "message": event.get("message", ""), "commandId": event.get("commandId"), "code": event.get("code")})
+		"log":
+			_log(str(event.get("message", "")))
+
+func _state(event: Dictionary) -> void:
+	var next_status: String = str(event.get("status", "lobby"))
+	var own_id: String = str(event.get("selfId", "") if event.get("selfId") != null else "")
+	var active: bool = not own_id.is_empty() and next_status.to_lower() == "online"
+	if not active:
+		if in_world:
+			_disconnect(false)
+		status = next_status
+		status_label.text = next_status
+		fields.get_node("Connect").disabled = next_status.to_lower() == "connecting"
+		return
+	var entering: bool = not in_world or own_id != self_id
+	if entering:
+		projection.clear()
+		pending.clear()
+		carry_id = ""
+	self_id = own_id
+	in_world = true
+	_ipfs_ready = bool(event.get("ipfsReady", false))
+	status = next_status
+	lobby.hide()
+	hud.show()
+	projection.apply_snapshot(event.get("entities", []), self_id)
+	if entering:
+		_entered = Time.get_ticks_msec() * 0.001
+		if projection.entities.has(self_id):
+			var own_dims: Dictionary = projection.entities[self_id].get("dimensions", {})
+			movement["position"] = own_dims.get("space.position", [0, 0, 0])
+		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
+		mirror.set_enabled(options.has("mirror"))
+		if options.has("mirror"):
+			_log("self-view mirror enabled")
+		get_viewport().gui_release_focus()
+	_submit_avatar()
+	if not carry_id.is_empty():
+		if not projection.entities.has(carry_id):
+			carry_id = ""
+		else:
+			var dims: Dictionary = projection.entities[carry_id].get("dimensions", {})
+			var holder: Variant = dims.get("interaction.heldBy")
+			if holder == self_id:
+				for id: String in pending.keys():
+					if pending[id]["op"] == "claim" and pending[id]["entityId"] == carry_id:
+						pending.erase(id)
+			elif not _claim_pending(carry_id):
+				_rollback(carry_id)
+	hud_status.text = "%s  /  %s  /  RTT %s ms  /  IPFS %s  %s" % [str(event.get("name", name_edit.text)), next_status, str(event.get("rttMs", "?")), "ready" if event.get("ipfsReady", false) else "starting", _transfer]
+
+func _physics_process(delta: float) -> void:
+	if not in_world or bridge == null:
+		return
+	var enabled: bool = _controls_enabled()
+	var input_value: Dictionary = {"moveX": 0.0, "moveZ": 0.0, "sprint": false, "jump": false, "jumpPressed": false, "crouch": false, "lean": 0.0}
+	if enabled:
+		input_value["moveX"] = float(_key(KEY_D) or _key(KEY_RIGHT)) - float(_key(KEY_A) or _key(KEY_LEFT))
+		input_value["moveZ"] = float(_key(KEY_S) or _key(KEY_DOWN)) - float(_key(KEY_W) or _key(KEY_UP))
+		input_value["sprint"] = _key(KEY_SHIFT)
+		input_value["jump"] = _key(KEY_SPACE)
+		input_value["jumpPressed"] = _jump_pressed
+		input_value["crouch"] = _key(KEY_C) or _key(KEY_CTRL)
+		input_value["lean"] = float(_key(KEY_E) and carry_id.is_empty()) - float(_key(KEY_Q))
+	_jump_pressed = false
+	movement["yaw"] = yaw
+	if bridge.has_method("step_movement"):
+		movement = bridge.call("step_movement", movement, input_value, minf(delta, 0.05))
+	var at: Vector3 = WorldProjection.vec3(movement.get("position", [0, 0, 0]))
+	if bridge.has_method("resolve_collision"):
+		var height: float = float(movement.get("eyeHeight", 1.6)) + 0.2
+		var collision: Dictionary = bridge.call("resolve_collision", at, height, projection.obstacles(carry_id))
+		at = collision.get("position", at)
+		at = Vector3(clampf(at.x, -24, 24), maxf(at.y, 0), clampf(at.z, -24, 24))
+		if collision.get("grounded", false):
+			movement["grounded"] = true
+			if float(movement.get("vy", 0)) < 0:
+				movement["vy"] = 0.0
+		if collision.get("hitCeiling", false):
+			movement["vy"] = minf(float(movement.get("vy", 0)), 0)
+		movement["position"] = WorldProjection.array3(at)
+	player.position = at
+	player.rotation.y = yaw
+	camera.position = Vector3(float(movement.get("leanSide", 0)), float(movement.get("leanHeight", movement.get("eyeHeight", 1.6))), 0)
+	camera.rotation = Vector3(pitch, 0, float(movement.get("leanRoll", 0)))
+	projection.update_self(at, yaw, float(movement.get("crouch", 0)), float(movement.get("lean", 0)), pitch)
+
+func _controls_enabled() -> bool:
+	return in_world and not menu.visible and get_viewport().gui_get_focus_owner() == null and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+func _key(code: Key) -> bool:
+	return Input.is_physical_key_pressed(code)
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
+		menu.hide()
+		get_viewport().gui_release_focus()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		get_viewport().set_input_as_handled()
+		return
+	if not in_world or get_viewport().gui_get_focus_owner() != null or menu.visible:
+		return
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		elif _controls_enabled():
+			match event.button_index:
+				MOUSE_BUTTON_RIGHT:
+					_toggle_carry()
+				MOUSE_BUTTON_MIDDLE:
+					_open_menu()
+				MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
+					if not carry_id.is_empty():
+						var direction: float = 1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
+						if event.shift_pressed:
+							carry_scale = clampf(carry_scale * pow(1.1, direction), 0.1, 10)
+						else:
+							carry_distance = clampf(carry_distance + direction * 0.25, 0.5, 8)
+	elif event is InputEventMouseMotion and _controls_enabled():
+		if rotate_mode and not carry_id.is_empty():
+			carry_yaw -= event.relative.x * 0.005
+			carry_pitch = clampf(carry_pitch - event.relative.y * 0.005, -PI * 0.49, PI * 0.49)
+		else:
+			yaw -= event.relative.x * 0.0025
+			pitch = clampf(pitch - event.relative.y * 0.0025, -PI * 0.49, PI * 0.49)
+	elif event is InputEventKey and event.pressed and not event.echo and _controls_enabled():
+		match event.physical_keycode:
+			KEY_SPACE:
+				_jump_pressed = true
+			KEY_B:
+				_place_box(_floor_target())
+			KEY_V:
+				mirror.set_enabled(not mirror.visible)
+			KEY_E:
+				if not carry_id.is_empty():
+					rotate_mode = not rotate_mode
+			KEY_M:
+				_open_menu()
+
+func _send_pose() -> void:
+	var head: Quaternion = camera.global_basis.get_rotation_quaternion()
+	_command({"op": "pose", "position": movement["position"], "head": [head.x, head.y, head.z, head.w], "crouch": movement.get("crouch", 0), "lean": movement.get("lean", 0)})
+
+func _toggle_carry() -> void:
+	if not carry_id.is_empty():
+		_send_carry()
+		_mutate({"op": "release", "entityId": carry_id})
+		carry_id = ""
+		rotate_mode = false
+		return
+	var id: String = projection.pick(camera.global_position, -camera.global_basis.z)
+	if id.is_empty():
+		return
+	var dims: Dictionary = projection.entities[id].get("dimensions", {})
+	if dims.get("interaction.heldBy") != null and dims.get("interaction.heldBy") != self_id:
+		_log("Object is held by another peer")
+		return
+	carry_id = id
+	carry_distance = clampf(camera.global_position.distance_to(projection.views[id].global_position), 0.5, 8)
+	carry_yaw = float(dims.get("space.yaw", 0))
+	carry_pitch = float(dims.get("space.pitch", 0))
+	carry_scale = float(dims.get("space.scale", 1))
+	rotate_mode = false
+	if not _mutate({"op": "claim", "entityId": id}):
+		_rollback(id)
+
+func _claim_pending(id: String) -> bool:
+	for command_id: String in pending:
+		if pending[command_id]["op"] == "claim" and pending[command_id]["entityId"] == id:
+			return true
+	return false
+
+func _update_carry() -> void:
+	if carry_id.is_empty() or not projection.views.has(carry_id):
+		return
+	var view: Node3D = projection.views[carry_id]
+	view.global_position = camera.global_position - camera.global_basis.z * carry_distance
+	view.rotation = Vector3(carry_pitch, carry_yaw, 0)
+	view.scale = Vector3.ONE * carry_scale
+
+func _update_target() -> void:
+	var label: Label = $Interface/HUD/Target
+	if not carry_id.is_empty():
+		label.text = "Carrying / %s\n%.1f m / scale %.2f" % ["ROTATE" if rotate_mode else "MOVE", carry_distance, carry_scale]
+		return
+	var id: String = projection.pick(camera.global_position, -camera.global_basis.z)
+	if id.is_empty():
+		label.text = ""
+		return
+	var dims: Dictionary = projection.entities[id].get("dimensions", {})
+	var name_value: String = str(dims.get("content.name", dims.get("entity.kind", "Object")))
+	label.text = name_value.left(48) + (" / held" if dims.get("interaction.heldBy") != null else "\nRight click: carry / M: actions")
+
+func _send_carry() -> void:
+	if carry_id.is_empty() or not projection.entities.has(carry_id) or not projection.views.has(carry_id):
+		return
+	var dims: Dictionary = projection.entities[carry_id].get("dimensions", {})
+	if dims.get("interaction.heldBy") != self_id:
+		return
+	var view: Node3D = projection.views[carry_id]
+	_mutate({"op": "patch", "entityId": carry_id, "set": {"space.position": WorldProjection.array3(view.position), "space.yaw": carry_yaw, "space.pitch": carry_pitch, "space.scale": carry_scale}, "if": [{"dim": "interaction.heldBy", "eq": self_id}]})
+
+func _rollback(id: String) -> void:
+	if carry_id == id:
+		carry_id = ""
+		rotate_mode = false
+	projection.restore(id)
+
+func _mutate(mutation: Dictionary) -> bool:
+	var command_id: String = _new_id("command")
+	mutation["commandId"] = command_id
+	pending[command_id] = {"op": mutation["op"], "entityId": mutation["entityId"], "time": Time.get_ticks_msec() * 0.001}
+	var result: Dictionary = _command({"op": "send", "message": {"type": "space_mutate", "mutation": mutation}})
+	if not result.get("ok", false):
+		pending.erase(command_id)
+		_rollback(str(mutation["entityId"]))
+	return bool(result.get("ok", false))
+
+func _new_id(_prefix: String) -> String:
+	return str(bridge.call("new_id"))
+
+func _place_box(at: Vector3, id: String = "") -> String:
+	if id.is_empty():
+		id = _new_id("box")
+	var dimensions: Dictionary = {"entity.kind": "box", "space.position": WorldProjection.array3(at), "space.yaw": yaw, "space.pitch": 0.0, "space.scale": 1.0, "box.size": 1.0, "box.color": "#44aa88"}
+	_mutate({"op": "create", "entityId": id, "dimensions": dimensions})
+	return id
+
+func _floor_target() -> Vector3:
+	var direction: Vector3 = -camera.global_basis.z
+	var distance: float = -camera.global_position.y / direction.y if direction.y < -0.05 else 3.0
+	var at: Vector3 = camera.global_position + direction * clampf(distance, 0.5, 8)
+	return Vector3(clampf(at.x, -23.0, 23.0), 0.0, clampf(at.z, -23.0, 23.0))
+
+func _open_menu() -> void:
+	menu_id = carry_id if not carry_id.is_empty() else projection.pick(camera.global_position, -camera.global_basis.z)
+	if menu_id.is_empty():
+		return
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	$Interface/Menu/Actions/Title.text = str(projection.entities[menu_id].get("dimensions", {}).get("entity.kind", "Object")) + "\n" + menu_id.left(8)
+	menu.popup_centered()
+
+func _menu_action(action: String) -> void:
+	menu.hide()
+	if not projection.entities.has(menu_id):
+		return
+	var dims: Dictionary = projection.entities[menu_id].get("dimensions", {})
+	match action:
+		"delete":
+			_mutate({"op": "delete", "entityId": menu_id})
+		"duplicate":
+			_mutate({"op": "duplicate", "entityId": menu_id, "newEntityId": _new_id("copy")})
+		"download":
+			var cid: String = str(dims.get("content.cid", ""))
+			if not cid.is_empty():
+				_command({"op": "download", "cid": cid, "name": str(dims.get("content.name", cid))})
+			else:
+				_log("This object has no downloadable content")
+
+func _files_dropped(paths: PackedStringArray) -> void:
+	var index: int = 0
+	for path: String in paths:
+		if path.get_extension().to_lower() == "vrm":
+			_avatar_path = path
+			_avatar_reset_pending = false
+			_submit_avatar()
+		elif in_world:
+			var at: Vector3 = _floor_target() + Vector3(index * 0.15, 0, 0)
+			_command({"op": "drop", "path": path, "position": WorldProjection.array3(at), "yaw": yaw})
+			index += 1
+		else:
+			_log("Connect before dropping world content")
+
+func _reset_avatar() -> void:
+	_avatar_path = ""
+	_avatar_reset_pending = true
+	_submit_avatar()
+	if not in_world:
+		_log("Avatar reset queued for the next connection")
+
+func _submit_avatar() -> void:
+	if not in_world:
+		return
+	if _avatar_reset_pending:
+		var reset: Dictionary = _command({"op": "avatar", "cid": null})
+		if reset.get("ok", false):
+			_avatar_reset_pending = false
+	elif not _avatar_path.is_empty() and _ipfs_ready:
+		# Restore saved avatars in the native core; only upload an explicit CLI/drop override here.
+		var path: String = _avatar_path
+		_avatar_path = ""
+		_command({"op": "avatar", "path": path})
+
+func _automation(now: float) -> void:
+	var elapsed: float = now - _entered
+	var scenario: String = str(options.get("scenario", ""))
+	if scenario.contains("place"):
+		if _scenario_stage == 0:
+			_scenario_id = _place_box(Vector3(0, 0.5, -2))
+			_scenario_stage = 1
+			_emit({"event": "scenario_created", "entityId": _scenario_id, "position": [0, 0.5, -2]})
+		elif _scenario_stage == 1 and elapsed >= 2.0:
+			_mutate({"op": "patch", "entityId": _scenario_id, "set": {"space.position": [2, 0.5, -2]}})
+			_scenario_stage = 2
+		elif _scenario_stage == 2 and elapsed >= 4.0:
+			_mutate({"op": "delete", "entityId": _scenario_id})
+			_scenario_stage = 3
+	if options.has("screenshot") and elapsed >= 2.0 and not _screenshot_started:
+		_screenshot_started = true
+		_screenshot()
+
+func _screenshot() -> void:
+	if DisplayServer.get_name() == "headless":
+		_log("Screenshot requires a graphical rendering session, not --headless")
+		_emit({"event": "screenshot_error", "message": "headless renderer"})
+		return
+	await RenderingServer.frame_post_draw
+	var path: String = "user://screenshot.png" if options["screenshot"] is bool else str(options["screenshot"])
+	var image: Image = get_viewport().get_texture().get_image()
+	var error: Error = image.save_png(path)
+	_emit({"event": "screenshot" if error == OK else "screenshot_error", "path": ProjectSettings.globalize_path(path), "error": error})
+
+func _log(message: String) -> void:
+	_logs.append(message)
+	while _logs.size() > 6:
+		_logs.pop_front()
+	log_label.text = "\n".join(_logs)
+	status_label.text = message
+	_emit({"event": "log", "message": message})
+
+func _observe(event: Dictionary) -> void:
+	if not _scenario_id.is_empty() and event.get("entityId") == _scenario_id:
+		match str(event.get("event", "")):
+			"node_created":
+				_scenario_observed["created"] = true
+			"node_updated":
+				if WorldProjection.vec3(event.get("position")) == Vector3(2, 0.5, -2):
+					_scenario_observed["moved"] = true
+			"node_removed":
+				_scenario_observed["removed"] = true
+	_emit(event)
+
+func _emit(event: Dictionary) -> void:
+	print("PROTO_EVENT " + JSON.stringify(event))
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_shutdown(0)
+
+func _shutdown(code: int) -> void:
+	if _quitting:
+		return
+	_quitting = true
+	if bridge != null:
+		_command({"op": "disconnect"})
+	_emit({"event": "exit", "code": code})
+	get_tree().quit(code)

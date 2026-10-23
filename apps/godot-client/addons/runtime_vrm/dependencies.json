@@ -1,0 +1,14 @@
+{
+  "godot-vrm": {
+    "repository": "https://github.com/V-Sekai/godot-vrm",
+    "commit": "e15199f980064028bfa4fbee5e70dddb82dd55c3",
+    "archive_sha256": "7231d036fac12389791762b8e6760ebbc074fe9d2fce06f8dc184dec0e8aec85",
+    "license": "../vrm/LICENSE"
+  },
+  "Godot-MToon-Shader": {
+    "repository": "https://github.com/V-Sekai/Godot-MToon-Shader",
+    "commit": "268c0d3b19c0885698b7bd39e21a16c9c2af448f",
+    "source": "Included unchanged in the pinned godot-vrm archive",
+    "license": "../Godot-MToon-Shader/LICENSE"
+  }
+}

@@ -1,8 +1,8 @@
 # マイルストーン
 
 > **2026-10-22: Web クライアントは削除済み。** 以下の M0〜M6.5 は Web クライアント時代の履歴。
-> 現在のクライアントは `apps/client` の Rust / Bevy 実装で、M7 で置き換えた。
-> 旧実装は Git の `web-client-final` タグに残している。
+> 現在の既定クライアントは `apps/godot-client` の Godot 実装 (Linux)。Bevy 版は退避経路。
+> 旧 Web 実装は Git の `web-client-final` タグに残している。
 
 各マイルストーンは「動くものが手元にある」状態で終わるように区切る。
 
@@ -154,3 +154,25 @@ Node.js + `ws` のサーバーを、Elixir/OTP (Cowboy) の GenServer 群に置�
 - [ ] VRM 1.0
 
 **次の M9**: OpenXR / PC VR、動画、URL 取り込み、鏡。
+
+## M12: Godot クライアント移行 (Linux 既定、Windows 受け入れ待ち)
+
+Bevy の現行機能を Godot 4.6.3 へ移植し、同じ space v2 / Kubo で動かす。
+
+- [x] `crates/client-core`: Bevy / Godot 非依存のセッション、SpaceStore、WS、IPFS、移動、衝突
+- [x] `crates/godot-client`: `ClientSession` を公開する GDExtension
+- [x] Godot の Lobby / HUD / リングメニュー / デスクトップ操作 / ドロップ
+- [x] 画像・複数ブロックファイル・VRM の IPFS 双方向共有 (実 Node と SHA-256)
+- [x] 固定平面の鏡 (実描画ピクセル検証)
+- [x] Godot 同士の Reader create / move / remove を観測側の実 Node で確認
+- [x] Bevy placer -> Godot observer の混在接続を実 Node で確認
+- [x] Linux のリリース実行ファイルと既定パッケージ
+- [x] Windows パッケージの Wine headless 起動 (GDExtension / PCK)
+- [x] Linux の `dev:client` / `package:linux` を Godot へ切り替え
+- [ ] Windows 実機の GPU / IME / ドロップ
+- [ ] Windows の `package:windows` を Godot へ切り替え
+- [ ] 受け入れ後に Bevy を撤去
+- [ ] VRM アニメーション、VRM 1.0、OpenXR、動画、Web、WASM UGC
+
+**完了条件**: Windows 実機を含む受け入れ後、Windows の配布も Godot に切り替える。
+それまでは Windows の `package:windows` のみ Bevy を残す。

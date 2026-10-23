@@ -52,6 +52,8 @@
               squashfsTools
               file
               zip
+              godot_4
+              godot_4-export-templates-bin
             ];
 
             shellHook = ''
@@ -75,6 +77,8 @@
               ])}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
               export XKB_CONFIG_ROOT="${pkgs.xkeyboard-config}/share/X11/xkb"
+              export GODOT4_BIN="${pkgs.godot_4}/bin/godot"
+              export GODOT_EXPORT_TEMPLATES="${pkgs.godot_4-export-templates-bin}/share/godot/export_templates/${builtins.replaceStrings [ "-" ] [ "." ] pkgs.godot_4.version}"
 
               echo "proto_server - Elixir/OTP development shell"
               echo "  Elixir:  $(elixir --version | tail -n 1)"
@@ -87,8 +91,12 @@
               echo "  rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy"
               echo "  rustup run 1.95.0 cargo test --workspace"
               echo "  rustup run 1.95.0 cargo run -p proto-client"
-              echo "  bash scripts/package-linux.sh   # AppImage"
-              echo "  nix develop .#windows          # then: bash scripts/package-windows.sh"
+              echo "  pnpm dev:client   # Godot 4.6 client (default on Linux)"
+              echo "  pnpm test:godot && pnpm e2e:godot"
+              echo "  pnpm package:linux             # Godot AppImage"
+              echo "  pnpm package:windows           # Bevy zip (Windows acceptance pending)"
+              echo "  pnpm dev:bevy / package:bevy:*  # Bevy fallback"
+              echo "  nix develop .#windows          # then: pnpm package:windows"
               echo ""
               echo "  cd apps/server"
               echo "  mix local.hex --force && mix deps.get"
@@ -108,12 +116,22 @@
               gcc
               pkg-config
               zip
+              unzip
+              wine64
+              nodejs
+              pnpm
               pkgs.pkgsCross.mingwW64.stdenv.cc
+              godot_4
+              godot_4-export-templates-bin
             ];
 
             shellHook = ''
+              export GODOT4_BIN="${pkgs.godot_4}/bin/godot"
+              export GODOT_EXPORT_TEMPLATES="${pkgs.godot_4-export-templates-bin}/share/godot/export_templates/${builtins.replaceStrings [ "-" ] [ "." ] pkgs.godot_4.version}"
+              export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="${pkgs.pkgsCross.mingwW64.stdenv.cc}/bin/x86_64-w64-mingw32-gcc"
               echo "proto_client - Windows cross-compile shell"
               echo "  bash scripts/package-windows.sh"
+              echo "  pnpm package:godot:windows && pnpm smoke:godot:windows"
             '';
           };
         });

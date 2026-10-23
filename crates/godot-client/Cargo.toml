@@ -1,0 +1,17 @@
+[package]
+name = "proto-godot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+client-core = { path = "../client-core" }
+godot = { version = "=0.5.5", default-features = false, features = ["api-4-2"] }
+image.workspace = true
+serde_json.workspace = true
+space-protocol = { path = "../space-protocol" }
+uuid.workspace = true

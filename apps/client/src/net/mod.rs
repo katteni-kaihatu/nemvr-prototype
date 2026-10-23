@@ -418,6 +418,14 @@ fn poll_content(
                     state.progress.remove(&cid);
                 }
             }
+            ContentEvent::UploadFailed { path, message } => {
+                pending.by_path.remove(&path);
+                if state.avatar_upload.as_ref() == Some(&path) {
+                    state.avatar_upload = None;
+                }
+                state.notice = Some(message.clone());
+                state.log(message);
+            }
         }
     }
 

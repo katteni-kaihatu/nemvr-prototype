@@ -3,7 +3,7 @@
 VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ。
 最初のゴールは「複数ユーザーがアクセスできる 3D 空間」。
 
-- クライアント: Rust / Bevy のネイティブアプリ (`apps/client`)
+- クライアント: Godot 4.6 のネイティブアプリ (`apps/godot-client`)。Bevy 版は退避経路 (`apps/client`)
 - サーバー: Elixir/OTP (Cowboy)
 - コンテンツ: Kubo (IPFS / libp2p / bitswap)
 - 同期: space v2 (n次元エンティティストア / Reader / Writer)
@@ -11,7 +11,12 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 
 Web クライアントは削除済み。旧実装は Git の `web-client-final` タグに残している。
 
-## ネイティブクライアント
+## Godot クライアント (既定)
+
+`apps/godot-client` は space v2 / Kubo に接続する Godot 4.6.3 実装。シーン・UI・入力は
+GDScript、同期・IPFS・移動計算は Bevy 非依存の `crates/client-core` を GDExtension 経由で
+再利用する。世界の正本は Godot のシーンツリーではなく、従来どおり BEAM 上の
+`Space.Store` / `Reader` / `Writer` である。
 
 実装済み: 入室、移動・しゃがみ・リーン・ジャンプ、姿勢同期と補間、簡易アバター、
 画像・ファイル・ボックス・リンクの表示、ドラッグ&ドロップ配置、
@@ -19,18 +24,38 @@ Web クライアントは削除済み。旧実装は Git の `web-client-final` 
 VRM 0.x アバター (`.vrm` のドロップ / `--avatar`)、自分のアバターを見る鏡 (`V`)。
 
 未実装: VRM のアニメーション・1.0、OpenXR / PC VR、動画、URL 取り込み。
-Windows はクロスビルドと Wine での headless 確認まで。実機 GPU / IME / SteamVR は未検証。
 
 ```sh
 nix develop
-rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
-rustup run 1.95.0 cargo run -p proto-client -- --server ws://127.0.0.1:8080/ws
-# VRM を指定する場合
-rustup run 1.95.0 cargo run -p proto-client -- \
-  --server wss://nemvr.nemnomi.dev/ws --name alice --avatar ~/avatar.vrm
+pnpm dev:client -- --server ws://127.0.0.1:8080/ws --name alice
+pnpm test:godot
+pnpm e2e:godot
+pnpm e2e:godot:mixed   # Bevy が置いたオブジェクトを Godot が実 Node として表示
 ```
 
-操作・設定・制限の詳細は [`docs/bevy-client.md`](docs/bevy-client.md) を参照。
+Linux では入室・移動・オブジェクト操作・画像/複数ブロックファイル/VRM の IPFS 共有・鏡の
+実描画まで検証済み。Windows は配布物と Wine headless 起動まで確認済みで、実機 GPU / IME /
+ファイルドロップ / SteamVR は未検証。Windows の通常配布は実機確認まで Bevy のままにして
+いる。操作・設定・制限の詳細は [`docs/godot-client.md`](docs/godot-client.md) を参照。
+
+## Bevy クライアント (退避経路)
+
+`apps/client` の Bevy 実装は退避経路として残している。`dev:client` / `package:linux` は
+Godot に切り替え済みで、Bevy を使う場合は明示的なコマンドを指定する。
+Windows の実機確認が終わるまで `package:windows` は Bevy をビルドする。
+
+```sh
+pnpm dev:bevy -- --server ws://127.0.0.1:8080/ws --name alice
+pnpm package:bevy:linux
+pnpm package:bevy:windows
+
+# 直接実行する場合
+rustup run 1.95.0 cargo run -p proto-client -- --server ws://127.0.0.1:8080/ws
+```
+
+**Windows 実機の GPU / IME / SteamVR は未検証。** Godot 版の Windows 候補は
+`pnpm package:godot:windows` で作成する。操作・設定・制限の詳細は
+[`docs/bevy-client.md`](docs/bevy-client.md) を参照。
 
 ### 接続先
 
@@ -44,16 +69,31 @@ VPS のランディングページ (`https://nemvr.nemnomi.dev/`) から配布�
 
 ## パッケージ
 
+Linux の既定は Godot 版。
+
 ```sh
 nix develop
-bash scripts/package-linux.sh     # dist/ProtoSNS-x86_64.AppImage
-
-nix develop .#windows
-bash scripts/package-windows.sh   # dist/ProtoSNS-windows-x86_64.zip
+pnpm package:linux          # dist/ProtoSNS-godot-x86_64.AppImage / tar.gz
+pnpm smoke:godot:linux      # AppImage の headless + 実描画起動
 ```
 
-既存のバイナリを使う場合は `--no-build` を付ける。
-同梱ライブラリ、Wayland / NixOS での実行、Wine での確認、制限は
+Windows は実機確認が終わるまで Bevy 版を既定にしている。
+
+```sh
+nix develop .#windows
+pnpm package:windows        # dist/ProtoSNS-windows-x86_64.zip (Bevy)
+```
+
+Godot 版の Windows 候補は次のコマンドで作る。
+
+```sh
+nix develop .#windows
+pnpm package:godot:windows  # dist/ProtoSNS-godot-windows-x86_64.zip
+pnpm smoke:godot:windows    # Wine で headless 起動
+```
+
+Bevy 版の Linux パッケージは `pnpm package:bevy:linux`。既存のバイナリを使う場合は
+`--no-build` を付ける。同梱ライブラリ、Wayland / NixOS での実行、Wine での確認、制限は
 [`docs/packaging.md`](docs/packaging.md) を参照。
 
 ## 開発環境
@@ -134,8 +174,10 @@ pnpm typecheck   # Elixir は mix compile --warnings-as-errors、protocol は ts
 pnpm test        # ExUnit + protocol のテスト
 pnpm smoke:ws    # サーバーを起動した状態で実行
 pnpm stress:ws   # 20 クライアントの同期ストレステスト
-pnpm e2e:client  # 2 つのネイティブ headless クライアントで入室・配置
-pnpm e2e:mirror  # 鏡の表示をスクリーンショットで確認
+pnpm e2e:client      # Godot 2 クライアントで入室・作成・移動・削除
+pnpm e2e:godot:mixed # Bevy placer -> Godot observer (先に pnpm build:native)
+pnpm e2e:mirror      # Godot の鏡を実描画で確認
+pnpm e2e:bevy        # Bevy 2 クライアントの入室・配置
 ```
 
 Rust:
@@ -146,8 +188,9 @@ pnpm clippy:native
 pnpm fmt:native
 ```
 
-`pnpm e2e:client` は先に `pnpm build:native` で `target/release/proto-client` を作る。
-`WS_URL=wss://nemvr.nemnomi.dev/ws pnpm e2e:client` で VPS に対しても実行できる。
+`pnpm e2e:client` は Godot 側の拡張をビルドしてから実行する。
+`WS_URL=wss://nemvr.nemnomi.dev/ws pnpm e2e:godot` で VPS に対しても実行できる。
+Bevy 版の E2E は `pnpm e2e:bevy` で、先に `pnpm build:native` が必要。
 
 ### デプロイ
 
@@ -176,7 +219,8 @@ WASM UGC、ユーザー定義の写像関数、空間の動的分割、リード
 
 ## ドキュメント
 
-- [ネイティブクライアント](docs/bevy-client.md)
+- [Godot クライアント (既定)](docs/godot-client.md)
+- [Bevy クライアント (退避経路)](docs/bevy-client.md)
 - [パッケージ](docs/packaging.md)
 - [アーキテクチャ](docs/architecture.md)
 - [詳細設計](docs/design.md)

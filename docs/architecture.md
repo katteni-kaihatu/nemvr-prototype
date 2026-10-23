@@ -21,7 +21,9 @@ VR SNS (Resonite / VRChat 類似) の実現可能性を探るプロトタイプ�
 ## 1. 方針
 
 - **簡素さ最優先**。プロトタイプなので、認証・永続化・スケールアウト・最適化は行わない。
-- **ネイティブアプリとして動く** (Rust / Bevy)。PC VR (OpenXR) は後続フェーズで追加する。
+- **ネイティブアプリとして動く**。Linux の既定は Godot 4.6 (`apps/godot-client`)。
+  Bevy (`apps/client`) は退避経路で、Windows の実機確認が終わるまで Windows 配布に使う。
+  PC VR (OpenXR) は後続。
 - **サーバーは薄いリレー**。ワールドの状態は「接続中ユーザーの姿勢」と「置かれたオブジェクト」だけをメモリに持つ。
 - **IPFS は外部の Kubo に委譲する**。サーバーは Kubo の HTTP API / ゲートウェイを使い、libp2p / bitswap / pin / blockstore は持たない。
 - クライアント / サーバー間で **型を共有** し、プロトコルの不整合を防ぐ。
@@ -52,10 +54,10 @@ WebXR / VR コントローラ、ボイスチャット、ファイルのプレビ
 ```mermaid
 graph LR
     subgraph Native A
-        CA[client<br/>Rust + Bevy + rust-ipfs]
+        CA[client<br/>Godot + GDExtension<br/>client-core + rust-ipfs]
     end
     subgraph Native B
-        CB[client<br/>Rust + Bevy + rust-ipfs]
+        CB[client<br/>Godot + GDExtension<br/>client-core + rust-ipfs]
     end
     subgraph Server
         S["proto-server<br/>Elixir/OTP (Cowboy)<br/>Space.Store / Reader / Writer / Content / Queue / Place / Ipfs"]
@@ -84,10 +86,11 @@ graph LR
 
 | 領域 | 採用 | 理由 |
 |---|---|---|
-| 言語 (client) | Rust | Bevy ECS と描画・入力・IPFS を 1 プロセスで扱う |
+| 言語 (client) | GDScript + Rust | 表示・入力は Godot、同期・IPFS は共有 Rust コア |
 | 言語 (server) | Elixir / OTP | 軽量プロセスと supervision で、接続ごとの状態と障害分離を素直に書ける |
 | パッケージ管理 | pnpm workspace | 共有パッケージを簡単に扱える |
-| クライアント | Bevy 0.19 + rust-ipfs | ECS / 描画 / 入力 / XR を同じ実行モデルで扱える |
+| クライアント | Godot 4.6 + GDExtension | シーン・UI・入力・XR をエディタで扱い、Rust コアを再利用する |
+| 退避クライアント | Bevy 0.19 + rust-ipfs | Windows 実機確認までの配布経路 |
 | XR (後続) | bevy_mod_openxr + OpenXR | PC VR のネイティブ経路 |
 | サーバー | Elixir/OTP + Cowboy | HTTP と WebSocket を 1 リスナーで扱う。GenServer で Space.Store / Content などを分離 |
 | メッセージ形式 | JSON | デバッグ容易。必要になったらバイナリ化 |
@@ -105,13 +108,18 @@ graph LR
 ├─ flake.nix            # Elixir / Kubo / Node / pnpm の開発シェル
 ├─ Cargo.toml           # Rust workspace
 ├─ crates/space-protocol/ # space v2 の型・スキーマ・fixture
+├─ crates/client-core/    # Bevy / Godot 非依存のセッション・IPFS・移動・衝突
+├─ crates/godot-client/   # proto-godot GDExtension
 ├─ scripts/
 │  ├─ smoke-ws.mjs      # Kubo なしでも動く WS / media の smoke test
 │  ├─ e2e-client.mjs    # 2 つのネイティブ headless クライアント
-│  └─ package-*.sh      # AppImage / Windows zip
+│  ├─ package-*.sh      # Bevy 版 AppImage / Windows zip
+│  ├─ *-godot.mjs       # Godot の build / dev / test / E2E / package
+│  └─ setup-godot-addons.sh # 固定版 VRM / MToon の取得と検証
 ├─ docs/
 │  ├─ architecture.md   # このファイル
 │  ├─ design.md         # プロトコル・同期・シーンの詳細設計
+│  ├─ godot-client.md   # Godot クライアント (Linux 既定)
 │  ├─ otp-backend.md    # Elixir/OTP サーバーのインターフェース契約
 │  ├─ crdt-experiment.md # crdt-v1 の歴史的設計 (サーバーでは未対応)
 │  └─ milestones.md     # 段階的な進め方
@@ -120,7 +128,8 @@ graph LR
 │  └─ world-sync/       # (削除済み) 旧 CRDT 実験
 ├─ apps/
 │  ├─ server/           # Elixir/OTP サーバー (mix.exs / lib / test / config)
-│  └─ client/           # Rust + Bevy クライアント
+│  ├─ client/           # Rust + Bevy クライアント (退避経路)
+│  └─ godot-client/     # Godot 4 クライアント (Linux 既定)
 └─ deploy/              # VPS 構築・デプロイスクリプト
 ```
 
@@ -137,7 +146,7 @@ graph LR
 - `Content` / `Queue` / `Ipfs` / `Turn` / `UrlFetch` / `Media` / `Protocol` は従来の責務を維持する。
 - 旧 `join` / `pose` / `object_*` / `place_*` / `sync_*` は受け付けず、`space_error`（`protocol_mismatch`）を返す。
 
-### client (`apps/client`)
+### client (`apps/client`, Bevy / 退避経路)
 
 - 入室画面 (名前・サーバー URL) → 3D シーン。
 - `SpaceStore` でエンティティを購読し、`SpaceWriter` 相当のメッセージで操作を送る。
@@ -146,6 +155,16 @@ graph LR
 - 別スレッドの rust-ipfs ノードで Kubo に接続し、UnixFS / bitswap でコンテンツを追加・取得する。
 - 画像・ファイルのドロップ、つかむ・移動・複製・削除、ダウンロードを Writer 経由で行う。
   URL 取り込み・動画・VRM・XR は後続。
+
+### Godot client (`apps/godot-client`, Linux 既定)
+
+- GDScript のシーン・UI・入力と、`crates/godot-client` (package `proto-godot`) の GDExtension で構成する。
+- 接続・snapshot/delta 適用・再購読・IPFS・移動/衝突計算は `crates/client-core` を使う。
+  Godot の Node は `vr-sns-3d@1` の表示結果であり、共有世界の正本ではない。
+- 未知の次元はコア/表示キャッシュに保持する。Godot MultiplayerAPI やシーンツリー同期は使わない。
+- Linux の `dev:client` / `package:linux` は Godot。Windows の `package:windows` は
+  実機確認まで Bevy のまま。Godot の検証は `pnpm test:godot` / `pnpm e2e:godot` /
+  `pnpm e2e:godot:mixed` / `pnpm test:godot:mirror`。
 
 ### Kubo
 

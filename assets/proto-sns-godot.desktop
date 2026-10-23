@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Proto SNS (Godot)
+GenericName=VR Social Prototype
+Comment=Godot client for the Proto SNS prototype
+Exec=ProtoSNS-godot.x86_64
+Icon=proto-sns
+Terminal=false
+Categories=Network;

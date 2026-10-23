@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LIB_PATH="$HERE/usr/lib"
+for dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib /lib/x86_64-linux-gnu /lib64 /lib /run/opengl-driver/lib /run/current-system/sw/lib; do
+  if [ -d "$dir" ]; then
+    LIB_PATH="$LIB_PATH:$dir"
+  fi
+done
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+  LIB_PATH="$LIB_PATH:$LD_LIBRARY_PATH"
+fi
+export LD_LIBRARY_PATH="$LIB_PATH"
+
+if [ -d "$HERE/usr/share/X11/xkb" ]; then
+  export XKB_CONFIG_ROOT="$HERE/usr/share/X11/xkb"
+fi
+
+if [ -z "${VK_ICD_FILENAMES:-}" ] && [ -z "${VK_DRIVER_FILES:-}" ]; then
+  VK_FILES=""
+  for dir in \
+    /run/opengl-driver/share/vulkan/icd.d \
+    /run/current-system/sw/share/vulkan/icd.d \
+    /usr/share/vulkan/icd.d \
+    /usr/local/share/vulkan/icd.d \
+    /etc/vulkan/icd.d; do
+    [ -d "$dir" ] || continue
+    for file in "$dir"/*.json; do
+      [ -f "$file" ] || continue
+      if [ -n "$VK_FILES" ]; then
+        VK_FILES="$VK_FILES:$file"
+      else
+        VK_FILES="$file"
+      fi
+    done
+  done
+  if [ -n "$VK_FILES" ]; then
+    export VK_ICD_FILENAMES="$VK_FILES"
+  fi
+fi
+
+BIN="$HERE/usr/bin/ProtoSNS-godot.x86_64"
+# Use the host loader and libc. The bundle contains only the graphics, input,
+# and X11/Wayland libraries that minimal hosts may lack.
+exec "$BIN" "$@"

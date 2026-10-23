@@ -1,0 +1,25 @@
+[package]
+name = "client-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Engine-independent native client session and simulation"
+
+[features]
+default = ["ipfs"]
+ipfs = ["dep:rust-ipfs"]
+
+[dependencies]
+directories.workspace = true
+futures-util.workspace = true
+glam.workspace = true
+image.workspace = true
+reqwest.workspace = true
+rust-ipfs = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+space-protocol = { path = "../space-protocol" }
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+uuid.workspace = true

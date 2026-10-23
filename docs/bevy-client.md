@@ -1,7 +1,12 @@
-# Bevy ネイティブクライアント
+# Bevy ネイティブクライアント (退避経路)
 
-`apps/client` は、既存の Elixir / space v2 / Kubo 構成に接続するネイティブクライアント。
-Web クライアントは削除済みで、これが現行クライアント。
+> **2026-10-23: Linux の既定は Godot 版 (`apps/godot-client`) に切り替えた。**
+> Bevy 版は退避経路として残しており、Windows の実機確認が終わるまで
+> `pnpm package:windows` はこの実装をビルドする。詳細は
+> [`godot-client.md`](godot-client.md) を参照。
+
+`apps/client` は、既存の Elixir / space v2 / Kubo 構成に接続する Bevy クライアント。
+Linux の通常起動は `pnpm dev:client` (Godot)、Bevy は `pnpm dev:bevy` で起動する。
 
 ## 現在の状態
 
