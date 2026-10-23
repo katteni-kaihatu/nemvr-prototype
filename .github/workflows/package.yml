@@ -23,7 +23,7 @@ jobs:
       - name: Install Rust toolchain
         run: nix develop -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy'
       - name: Build and smoke-test
-        run: nix develop -c bash -lc 'pnpm package:linux'
+        run: nix develop -c bash -lc 'PROTO_SKIP_GODOT_IMPORT=1 pnpm package:linux'
       - uses: actions/upload-artifact@v4
         with:
           name: linux-client
@@ -49,7 +49,7 @@ jobs:
       - name: Install Rust toolchain
         run: nix develop .#windows -c bash -lc 'rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy'
       - name: Build Godot candidate and smoke-test under Wine
-        run: nix develop .#windows -c bash -lc 'pnpm package:godot:windows && pnpm smoke:godot:windows'
+        run: nix develop .#windows -c bash -lc 'PROTO_SKIP_GODOT_IMPORT=1 pnpm package:godot:windows && pnpm smoke:godot:windows'
       - name: Build Bevy fallback
         run: nix develop .#windows -c bash -lc 'pnpm package:windows'
       - uses: actions/upload-artifact@v4

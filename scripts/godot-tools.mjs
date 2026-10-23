@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { copyFile, mkdir, rename, rm } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +71,9 @@ export async function importProject(bin = godotBinary()) {
     .every((path) => existsSync(resolve(project, path)))) {
     await run("bash", ["scripts/setup-godot-addons.sh"]);
   }
+  mkdirSync(resolve(project, ".godot"), { recursive: true });
+  writeFileSync(resolve(project, ".godot/extension_list.cfg"), "res://native/proto.gdextension\n");
+  if (process.env.PROTO_SKIP_GODOT_IMPORT === "1") return;
   await run(bin, ["--headless", "--path", project, "--editor", "--import"]);
 }
 
