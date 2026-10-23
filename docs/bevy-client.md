@@ -136,6 +136,18 @@ rustup run 1.95.0 cargo run -p proto-client -- \
 rustup run 1.95.0 cargo run -p proto-client -- --ipfs-smoke
 ```
 
+鏡の E2E は、グラフィカルセッションで `--mirror --screenshot` を付けて起動し、
+PNG とログ (`self-view mirror enabled`) を確認する。
+
+```sh
+pnpm build:native
+pnpm dev   # 別ターミナルでサーバー
+pnpm e2e:mirror
+```
+
+`AVATAR=~/avatar.vrm pnpm e2e:mirror` で VRM も含めて確認できる。
+`SCREENSHOT=/tmp/mirror.png` で保存先を変更できる。
+
 ### Kubo との相互運用テスト
 
 Kubo を `127.0.0.1:8081/ws` で起動した状態で、環境変数を使って確認する。

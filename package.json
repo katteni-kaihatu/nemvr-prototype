@@ -13,6 +13,7 @@
     "test": "pnpm -r test",
     "smoke:ws": "node scripts/smoke-ws.mjs",
     "e2e:client": "node scripts/e2e-client.mjs",
+    "e2e:mirror": "bash scripts/e2e-mirror.sh",
     "stress:ws": "node scripts/stress-ws.mjs",
     "package:linux": "bash scripts/package-linux.sh",
     "package:windows": "bash scripts/package-windows.sh",

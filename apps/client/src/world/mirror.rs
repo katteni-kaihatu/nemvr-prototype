@@ -8,7 +8,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 
 const MIRROR_SIZE: u32 = 1024;
 /// 固定された鏡の位置。プレイヤーについてこない。
-const MIRROR_POSITION: Vec3 = Vec3::new(0.0, 1.35, -2.8);
+const MIRROR_POSITION: Vec3 = Vec3::new(0.0, 1.35, 1.5);
 
 #[derive(Resource, Default)]
 pub struct MirrorState {
@@ -99,11 +99,26 @@ fn update_mirror(
         (&mut Camera, &mut Transform),
         (With<MirrorCamera>, Without<crate::world::scene::MainCamera>),
     >,
+    mut plane: Query<&mut Visibility, (With<MirrorPlane>, Without<MirrorCamera>)>,
+    mut reported: Local<bool>,
 ) {
     let Some((mut camera, mut camera_transform)) = camera.iter_mut().next() else {
         return;
     };
     camera.is_active = state.enabled;
+    if state.enabled && !*reported {
+        *reported = true;
+        bevy::log::info!("self-view mirror enabled");
+    } else if !state.enabled {
+        *reported = false;
+    }
+    for mut visibility in &mut plane {
+        *visibility = if state.enabled {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
     if !state.enabled {
         return;
     }

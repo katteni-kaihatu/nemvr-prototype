@@ -135,6 +135,7 @@ pnpm test        # ExUnit + protocol のテスト
 pnpm smoke:ws    # サーバーを起動した状態で実行
 pnpm stress:ws   # 20 クライアントの同期ストレステスト
 pnpm e2e:client  # 2 つのネイティブ headless クライアントで入室・配置
+pnpm e2e:mirror  # 鏡の表示をスクリーンショットで確認
 ```
 
 Rust:
