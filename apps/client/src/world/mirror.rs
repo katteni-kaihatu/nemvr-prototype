@@ -6,11 +6,9 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
-use crate::world::LocalPlayer;
-
 const MIRROR_SIZE: u32 = 1024;
-const MIRROR_DISTANCE: f32 = 2.8;
-const MIRROR_HEIGHT: f32 = 1.35;
+/// 固定された鏡の位置。プレイヤーについてこない。
+const MIRROR_POSITION: Vec3 = Vec3::new(0.0, 1.35, -2.8);
 
 #[derive(Resource, Default)]
 pub struct MirrorState {
@@ -63,10 +61,11 @@ fn setup_mirror(
         Camera {
             order: -1,
             is_active: false,
+            invert_culling: true,
             ..default()
         },
         RenderTarget::Image(image.clone().into()),
-        Transform::from_xyz(0.0, MIRROR_HEIGHT, -MIRROR_DISTANCE),
+        Transform::from_translation(MIRROR_POSITION).looking_at(Vec3::ZERO, Vec3::Y),
         RenderLayers::from_layers(&[0, 1]),
         MirrorCamera,
     ));
@@ -79,7 +78,7 @@ fn setup_mirror(
             cull_mode: None,
             ..default()
         })),
-        Transform::from_xyz(0.0, MIRROR_HEIGHT, -MIRROR_DISTANCE)
+        Transform::from_translation(MIRROR_POSITION)
             .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
         Visibility::Hidden,
         RenderLayers::layer(2),
@@ -94,49 +93,38 @@ fn toggle_mirror(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<MirrorState>
 }
 
 fn update_mirror(
-    player: Res<LocalPlayer>,
     state: Res<MirrorState>,
-    mut camera: Query<(&mut Camera, &mut Transform), (With<MirrorCamera>, Without<MirrorPlane>)>,
-    mut plane: Query<(&mut Transform, &mut Visibility), (With<MirrorPlane>, Without<MirrorCamera>)>,
+    main_camera: Query<&Transform, (With<crate::world::scene::MainCamera>, Without<MirrorCamera>)>,
+    mut camera: Query<
+        (&mut Camera, &mut Transform),
+        (With<MirrorCamera>, Without<crate::world::scene::MainCamera>),
+    >,
 ) {
     let Some((mut camera, mut camera_transform)) = camera.iter_mut().next() else {
         return;
     };
     camera.is_active = state.enabled;
-
-    let Some((mut plane_transform, mut visibility)) = plane.iter_mut().next() else {
-        return;
-    };
-    *visibility = if state.enabled {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
     if !state.enabled {
         return;
     }
 
-    let forward = player.rotation() * Vec3::NEG_Z;
-    let flat = Vec3::new(forward.x, 0.0, forward.z);
-    let forward = if flat.length_squared() > 1e-6 {
-        flat.normalize()
+    let Some(main) = main_camera.iter().next() else {
+        return;
+    };
+    let normal = Vec3::Z;
+    let position = MIRROR_POSITION;
+    let reflected_position =
+        main.translation - 2.0 * (main.translation - position).dot(normal) * normal;
+    let forward = main.rotation * Vec3::NEG_Z;
+    let up = main.rotation * Vec3::Y;
+    let reflected_forward = forward - 2.0 * forward.dot(normal) * normal;
+    let reflected_up = up - 2.0 * up.dot(normal) * normal;
+    let reflected_up = if reflected_up.length_squared() > 1e-6 {
+        reflected_up
     } else {
-        Vec3::NEG_Z
-    };
-    let yaw = forward.x.atan2(-forward.z);
-    let position = Vec3::new(
-        player.position.x + forward.x * MIRROR_DISTANCE,
-        player.position.y + MIRROR_HEIGHT,
-        player.position.z + forward.z * MIRROR_DISTANCE,
-    );
-
-    *plane_transform = Transform {
-        translation: position,
-        rotation: Quat::from_rotation_y(yaw) * Quat::from_rotation_x(FRAC_PI_2),
-        scale: Vec3::ONE,
+        Vec3::Y
     };
 
-    let target = Vec3::new(player.head_x, player.eye_y, player.head_z);
-    *camera_transform =
-        Transform::from_translation(position + forward * 0.03).looking_at(target, Vec3::Y);
+    *camera_transform = Transform::from_translation(reflected_position)
+        .looking_at(reflected_position + reflected_forward, reflected_up);
 }

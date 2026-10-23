@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::f32::consts::PI;
 use std::path::PathBuf;
 
 use bevy::camera::visibility::RenderLayers;
@@ -125,7 +124,7 @@ fn sync_self_avatar(
             if path.exists() {
                 let vrm = commands
                     .spawn((
-                        Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+                        Transform::IDENTITY,
                         VrmInstance(asset_server.load(format!("vrm/{cid}.vrm"))),
                         RenderLayers::layer(1),
                     ))
@@ -253,10 +252,7 @@ fn sync_peer_vrms(
         };
 
         let child = commands
-            .spawn((
-                Transform::from_rotation(Quat::from_rotation_y(PI)),
-                VrmInstance(handle.clone()),
-            ))
+            .spawn((Transform::IDENTITY, VrmInstance(handle.clone())))
             .id();
         commands.entity(root).add_child(child);
         cache.entries.insert(
