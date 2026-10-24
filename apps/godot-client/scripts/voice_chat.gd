@@ -19,6 +19,8 @@ var sample_rate: int = RATE
 var frame_samples: int = FRAME_SAMPLES
 var _clock: float = 0.0
 var _play_clock: float = 0.0
+var _last_sample: float = 0.0
+var _plc_gain: float = 1.0
 
 var input_level: float = 0.0
 var output_level: float = 0.0
@@ -28,8 +30,10 @@ var _offer_type: String = ""
 var _offer_sdp: String = ""
 var _candidates: Array[String] = []
 var _received_packets: int = 0
-var _rx_queue: Array[PackedByteArray] = []
+var _rx_queue: Array[Dictionary] = []
 var _rx_started: bool = false
+var _self_id: String = ""
+var _speaker_levels: Dictionary = {}
 var _record: FileAccess
 var _test_tone: bool = false
 var _tone_phase: float = 0.0
@@ -47,7 +51,8 @@ func start_meter(input_device: String = "") -> void:
 	_setup_playback()
 	_set_state("meter")
 
-func start(server_url: String, input_device: String = "", test_tone: bool = false) -> void:
+func start(server_url: String, input_device: String = "", test_tone: bool = false, self_id: String = "") -> void:
+	_self_id = self_id
 	var record_path: String = OS.get_environment("PROTO_VOICE_RECORD")
 	if not record_path.is_empty():
 		_record = FileAccess.open(record_path, FileAccess.WRITE)
@@ -92,6 +97,7 @@ func stop() -> void:
 	_output_peak = 0.0
 	_rx_queue.clear()
 	_rx_started = false
+	_speaker_levels.clear()
 	if channel != null:
 		channel.close()
 	if pc != null:
@@ -216,6 +222,21 @@ func get_input_level() -> float:
 func get_output_level() -> float:
 	return output_level
 
+func get_speaking_ids() -> Array:
+	var result: Array = []
+	for id: String in _speaker_levels:
+		if float(_speaker_levels[id]) > 0.15:
+			result.append(id)
+	return result
+
+func _packet(payload: PackedByteArray) -> PackedByteArray:
+	var id: PackedByteArray = _self_id.to_utf8_buffer()
+	var packet := PackedByteArray()
+	packet.append(id.size())
+	packet.append_array(id)
+	packet.append_array(payload)
+	return packet
+
 func _send() -> void:
 	if _test_tone:
 		var tone := PackedByteArray()
@@ -225,10 +246,10 @@ func _send() -> void:
 			_tone_phase = fmod(_tone_phase + TAU * 440.0 / float(sample_rate), TAU)
 			tone.encode_s16(i * 2, int(sample * 32767.0))
 		input_level = 0.25
-		output_level = maxf(output_level * 0.8, clampf(_output_peak * 2.5, 0.0, 1.0))
-		_output_peak = 0.0
+		output_level = maxf(output_level * 0.85, clampf(_output_peak * 2.5, 0.0, 1.0))
+		_output_peak *= 0.7
 		if channel != null and channel.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
-			var sent_tone: int = channel.put_packet(tone)
+			var sent_tone: int = channel.put_packet(_packet(tone))
 			if sent_tone == OK and _sent_packets == 0:
 				_sent_packets = 1
 				print("VOICE_TX audio started")
@@ -240,8 +261,8 @@ func _send() -> void:
 	var available: int = AudioServer.get_input_frames_available()
 	if available < needed:
 		input_level = lerpf(input_level, 0.0, 0.2)
-		output_level = maxf(output_level * 0.8, clampf(_output_peak * 2.5, 0.0, 1.0))
-		_output_peak = 0.0
+		output_level = maxf(output_level * 0.85, clampf(_output_peak * 2.5, 0.0, 1.0))
+		_output_peak *= 0.7
 		return
 	var frames: PackedVector2Array = AudioServer.get_input_frames(needed)
 	if frames.size() < 2:
@@ -251,8 +272,10 @@ func _send() -> void:
 	for i in frames.size():
 		peak = maxf(peak, absf((frames[i].x + frames[i].y) * 0.5))
 	input_level = lerpf(input_level, clampf(peak * 2.5, 0.0, 1.0), 0.4)
-	output_level = maxf(output_level * 0.8, clampf(_output_peak * 2.5, 0.0, 1.0))
-	_output_peak = 0.0
+	output_level = maxf(output_level * 0.85, clampf(_output_peak * 2.5, 0.0, 1.0))
+	_output_peak *= 0.7
+	for id: String in _speaker_levels.keys():
+		_speaker_levels[id] = float(_speaker_levels[id]) * 0.8
 	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN:
 		return
 	var bytes := PackedByteArray()
@@ -267,7 +290,7 @@ func _send() -> void:
 		var y: float = lerpf(frames[left].y, frames[right].y, weight)
 		var sample: float = clampf((x + y) * 0.5, -1.0, 1.0)
 		bytes.encode_s16(i * 2, int(sample * 32767.0))
-	var sent: int = channel.put_packet(bytes)
+	var sent: int = channel.put_packet(_packet(bytes))
 	if sent == OK and _sent_packets == 0:
 		_sent_packets = 1
 		print("VOICE_TX audio started")
@@ -275,25 +298,38 @@ func _send() -> void:
 func _receive() -> void:
 	while channel.get_available_packet_count() > 0:
 		var packet: PackedByteArray = channel.get_packet()
-		if packet.size() < 2 or playback == null:
+		if packet.size() < 3:
+			continue
+		var id_length: int = int(packet[0])
+		if id_length <= 0 or packet.size() < id_length + 3:
+			continue
+		var sender: String = packet.slice(1, 1 + id_length).get_string_from_utf8()
+		var payload: PackedByteArray = packet.slice(1 + id_length)
+		if playback == null:
 			continue
 		_received_packets += 1
 		if _received_packets == 1:
-			print("VOICE_RX audio started size=", packet.size(), " playback=", playback)
-
-		var count: int = packet.size() / 2
+			print("VOICE_RX audio started size=", payload.size(), " playback=", playback)
+		var count: int = payload.size() / 2
 		var peak: float = 0.0
 		for i in count:
-			peak = maxf(peak, absf(float(packet.decode_s16(i * 2)) / 32768.0))
+			peak = maxf(peak, absf(float(payload.decode_s16(i * 2)) / 32768.0))
 		_output_peak = maxf(_output_peak, peak)
+		_speaker_levels[sender] = maxf(float(_speaker_levels.get(sender, 0.0)) * 0.8, peak)
 		if _record != null:
-			_record.store_buffer(packet)
-		_rx_queue.append(packet)
-		while _rx_queue.size() > 25:
+			_record.store_buffer(payload)
+		_rx_queue.append({"sender": sender, "payload": payload})
+		while _rx_queue.size() > 50:
 			_rx_queue.pop_front()
 
 func _pump_playback() -> void:
-	if playback == null or _rx_queue.is_empty():
+	if playback == null:
+		return
+	if _rx_queue.is_empty():
+		if _rx_started and playback.get_frames_available() >= FRAME_SAMPLES:
+			for i in FRAME_SAMPLES:
+				playback.push_frame(Vector2(_last_sample * _plc_gain, _last_sample * _plc_gain))
+			_plc_gain *= 0.85
 		return
 	if not _rx_started:
 		# Prebuffer a few 10 ms packets before starting playback. This absorbs
@@ -301,11 +337,32 @@ func _pump_playback() -> void:
 		if _rx_queue.size() < 4:
 			return
 		_rx_started = true
-	var packet: PackedByteArray = _rx_queue[0]
-	var count: int = packet.size() / 2
-	if playback.get_frames_available() < count:
+	var selected: Array[Dictionary] = []
+	var remaining: Array[Dictionary] = []
+	var used: Dictionary = {}
+	for entry: Dictionary in _rx_queue:
+		var sender: String = str(entry["sender"])
+		if used.has(sender):
+			remaining.append(entry)
+		else:
+			used[sender] = true
+			selected.append(entry)
+	_rx_queue = remaining
+	if selected.is_empty():
 		return
-	_rx_queue.pop_front()
-	for i in count:
-		var sample: float = float(packet.decode_s16(i * 2)) / 32768.0
+	if playback.get_frames_available() < FRAME_SAMPLES:
+		_rx_queue.append_array(selected)
+		return
+	var mixed := PackedFloat32Array()
+	mixed.resize(FRAME_SAMPLES)
+	for entry: Dictionary in selected:
+		var payload: PackedByteArray = entry["payload"]
+		var count: int = mini(payload.size() / 2, FRAME_SAMPLES)
+		for i in count:
+			mixed[i] += float(payload.decode_s16(i * 2)) / 32768.0
+	var divisor: float = float(selected.size())
+	for i in FRAME_SAMPLES:
+		var sample: float = clampf(mixed[i] / divisor, -1.0, 1.0)
+		_last_sample = sample
+		_plc_gain = 1.0
 		playback.push_frame(Vector2(sample, sample))

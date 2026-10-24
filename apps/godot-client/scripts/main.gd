@@ -393,6 +393,7 @@ func _process(delta: float) -> void:
 		_teleport_marker_until = 0.0
 		teleport_marker.visible = false
 	if voice != null:
+		projection.set_speakers(voice.call("get_speaking_ids"))
 		var level: float = float(voice.call("get_input_level"))
 		mic_label.visible = true
 		mic_level.visible = true
@@ -490,7 +491,7 @@ func _state(event: Dictionary) -> void:
 			pitch = deg_to_rad(float(options["pitch"]))
 		if voice != null:
 			if options.has("voice"):
-				voice.call("start", server_edit.text, _selected_mic(), options.has("voice-test-tone"))
+				voice.call("start", server_edit.text, _selected_mic(), options.has("voice-test-tone"), self_id)
 			elif DisplayServer.get_name() != "headless":
 				voice.call("start_meter", _selected_mic())
 		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
@@ -662,7 +663,7 @@ func _on_xr_menu_action(name: String) -> void:
 				_mic_selected(mic_option.selected)
 				if voice != null:
 					voice.call("stop")
-					voice.call("start", server_edit.text, _selected_mic(), options.has("voice-test-tone"))
+					voice.call("start", server_edit.text, _selected_mic(), options.has("voice-test-tone"), self_id)
 		"close":
 			xr_menu.visible = false
 

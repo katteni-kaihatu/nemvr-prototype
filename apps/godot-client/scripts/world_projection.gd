@@ -20,6 +20,8 @@ var _self_motion_time: float = 0.0
 var _assets: Dictionary = {}
 var _requested: Dictionary = {}
 var _asset_attempts: Dictionary = {}
+var _name_labels: Dictionary = {}
+var _peer_names: Dictionary = {}
 var hand_ik_enabled: bool = false
 var _loader: Object
 
@@ -91,7 +93,7 @@ func _update(id: String, entity: Dictionary) -> void:
 			root.remove_child(child)
 			child.queue_free()
 		root.set_meta("visual_key", visual_key)
-		_build(root, dims, kind)
+		_build(root, dims, kind, id)
 	var position_value: Vector3 = vec3(dims.get("space.position", [0, 0, 0]))
 	if kind == "peer":
 		var samples: Array = _samples.get(id, [])
@@ -126,7 +128,7 @@ func _update(id: String, entity: Dictionary) -> void:
 	observed.emit({"event": "node_created" if created else "node_updated", "entityId": id,
 		"position": array3(root.position), "nodePath": str(root.get_path()), "kind": kind, "version": entity.get("version", 0)})
 
-func _build(root: Node3D, dims: Dictionary, kind: String) -> void:
+func _build(root: Node3D, dims: Dictionary, kind: String, id: String) -> void:
 	match kind:
 		"peer":
 			var cid: String = str(dims.get("peer.avatarCid", "") if dims.get("peer.avatarCid") != null else "")
@@ -148,7 +150,9 @@ func _build(root: Node3D, dims: Dictionary, kind: String) -> void:
 				var hand: MeshInstance3D = _box(root, Vector3(0.09, 0.09, 0.15), Vector3.ZERO, Color(0.72, 0.9, 1.0))
 				hand.name = hand_name
 				hand.visible = false
-			_label(root, str(dims.get("peer.name", "Guest")), Vector3(0, 1.95, 0))
+			var peer_name: String = str(dims.get("peer.name", "Guest"))
+			_peer_names[id] = peer_name
+			_name_labels[id] = _label(root, peer_name, Vector3(0, 1.95, 0))
 		"box":
 			var size: float = clampf(float(dims.get("box.size", 1)), 0.01, 100)
 			_box(root, Vector3.ONE * size, Vector3(0, size * 0.5, 0), Color.from_string(str(dims.get("box.color", "#888888")), Color.GRAY))
@@ -217,7 +221,7 @@ func _box(parent: Node3D, size: Vector3, at: Vector3, color: Color) -> MeshInsta
 	parent.add_child(node)
 	return node
 
-func _label(parent: Node3D, text: String, at: Vector3, billboard: bool = true) -> void:
+func _label(parent: Node3D, text: String, at: Vector3, billboard: bool = true) -> Label3D:
 	var node: Label3D = Label3D.new()
 	node.text = text
 	node.position = at
@@ -231,6 +235,16 @@ func _label(parent: Node3D, text: String, at: Vector3, billboard: bool = true) -
 	if billboard:
 		node.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	parent.add_child(node)
+	return node
+
+func set_speakers(ids: Array) -> void:
+	for id: String in _name_labels:
+		var label: Label3D = _name_labels[id]
+		if not is_instance_valid(label):
+			continue
+		var speaking: bool = ids.has(id)
+		label.text = ("● " if speaking else "") + str(_peer_names.get(id, "Guest"))
+		label.modulate = Color(0.55, 1.0, 0.85) if speaking else Color.WHITE
 
 func _request(cid: String) -> void:
 	if cid.is_empty() or _assets.has(cid) or _requested.has(cid):
