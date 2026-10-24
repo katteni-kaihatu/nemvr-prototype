@@ -8,6 +8,7 @@ var right_hand: XRController3D
 var active: bool = false
 var mock: bool = false
 var move_input: Vector2 = Vector2.ZERO
+var turn_input: float = 0.0
 var snap_turn: float = 0.0
 var grab_requested: bool = false
 var teleport_requested: bool = false
@@ -42,6 +43,11 @@ func activate(desktop: Camera3D, use_mock: bool = false) -> bool:
 	if interface == null or not interface.is_initialized() and not interface.initialize():
 		return false
 	get_viewport().use_xr = true
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var viewport: Viewport = get_viewport()
+	viewport.scaling_3d_scale = 1.0
+	if RenderingServer.get_rendering_device():
+		viewport.vrs_mode = Viewport.VRS_XR
 	active = true
 	xr_camera.current = true
 	desktop_camera.current = false
@@ -49,6 +55,9 @@ func activate(desktop: Camera3D, use_mock: bool = false) -> bool:
 
 func get_move() -> Vector2:
 	return move_input
+
+func get_turn() -> float:
+	return turn_input if absf(turn_input) > 0.12 else 0.0
 
 func consume_snap_turn() -> float:
 	var value: float = snap_turn
@@ -87,7 +96,8 @@ func _process(_delta: float) -> void:
 	if not active or mock or left_hand == null or right_hand == null:
 		return
 	move_input = left_hand.get_vector2("move")
-	var turn: float = right_hand.get_vector2("turn").x
+	turn_input = right_hand.get_vector2("turn").x
+	var turn: float = turn_input
 	var zone: int = 1 if turn > 0.7 else (-1 if turn < -0.7 else 0)
 	if zone != 0 and zone != _right_zone:
 		snap_turn = -float(zone) * PI * 0.5
@@ -117,6 +127,8 @@ func deactivate() -> void:
 	active = false
 	mock = false
 	get_viewport().use_xr = false
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED)
+	get_viewport().vrs_mode = Viewport.VRS_DISABLED
 	if xr_camera != null:
 		xr_camera.current = false
 	if desktop_camera != null:

@@ -69,6 +69,7 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--xr-mock`: HMD なしで XR カメラ経路を確認する（テスト・撮影用）
 - `--hand-ik`: 同期した手の位置へ腕を合わせる実験的な簡易 IK
 - `--xr-menu`: XR メニューを開いた状態で起動する
+- `--xr-snap-turn`: 右スティックを 90° スナップターンにする (既定は滑らかな連続ターン)
 - `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 

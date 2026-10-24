@@ -289,9 +289,12 @@ func _process(delta: float) -> void:
 			_send_carry()
 		_automation(now)
 	if xr_active:
-		var turn: float = float(xr_rig.call("consume_snap_turn"))
-		if turn != 0.0:
-			yaw += turn
+		if options.has("xr-snap-turn"):
+			var turn: float = float(xr_rig.call("consume_snap_turn"))
+			if turn != 0.0:
+				yaw += turn
+		else:
+			yaw -= float(xr_rig.call("get_turn")) * deg_to_rad(90.0) * delta
 		if bool(xr_rig.call("consume_menu")):
 			xr_menu.visible = not xr_menu.visible
 		if bool(xr_rig.call("consume_grab")):
