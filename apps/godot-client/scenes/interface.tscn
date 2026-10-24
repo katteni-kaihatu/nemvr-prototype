@@ -28,8 +28,8 @@ text = "Shared space · Desktop client"
 text = "Server"
 
 [node name="Server" type="LineEdit" parent="Lobby/Margin/Fields"]
-text = "ws://127.0.0.1:8080/ws"
-placeholder_text = "ws://host:8080/ws"
+text = "wss://nemvr.nemnomi.dev/ws"
+placeholder_text = "wss://host/ws"
 
 [node name="NameLabel" type="Label" parent="Lobby/Margin/Fields"]
 text = "Display name"

@@ -29,6 +29,9 @@ Godot scenes / scripts
 
 ## 起動
 
+Lobby のサーバー欄は既定で `wss://nemvr.nemnomi.dev/ws` を指す。ローカルサーバーを
+使う場合だけ明示的に変更する。
+
 ```sh
 nix develop
 pnpm dev:client             # Linux の既定 (dev:godot と同じ)
