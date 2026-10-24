@@ -129,6 +129,7 @@ OpenGL / EGL に依存する。
   hand / finger、spring bone、animation clip、retargeting、VRM 1.0 は対象外。
 - humanoid の `humanBones` は 0.x の配列形式と辞書形式の両方を受け付ける。
   肩・腕・脚・膝・足・頭のボーンを glTF ノード名から対応付ける。
+- humanoid 以外の tail / hair / skirt ボーンには、速度と時間に応じた二次揺れを加える。
 - 取得した CID のファイルは、同梱した信頼済みローダーが実行時に読み込む。
   ダウンロードしたファイルを `ResourceLoader` でスクリプト・シーンとして実行しない。
 - GLB のサイズ、埋め込みリソース、ノード数、メッシュ・画像の上限を検証し、

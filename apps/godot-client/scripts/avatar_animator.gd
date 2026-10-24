@@ -10,6 +10,8 @@ var skeleton: Skeleton3D
 var bones: Dictionary = {}
 var rest_rotation: Dictionary = {}
 var rest_position: Dictionary = {}
+var secondary_bones: Array[int] = []
+var secondary_rest: Dictionary = {}
 var phase: float = 0.0
 var speed: float = 0.0
 var target_speed: float = 0.0
@@ -25,6 +27,14 @@ func setup(skeleton_node: Skeleton3D, mapping: Dictionary) -> void:
 		bones[key] = index
 		rest_rotation[key] = skeleton.get_bone_pose_rotation(index)
 		rest_position[key] = skeleton.get_bone_pose_position(index)
+	var humanoid_indices: Array = bones.values()
+	for index: int in skeleton.get_bone_count():
+		if humanoid_indices.has(index):
+			continue
+		var bone_name: String = skeleton.get_bone_name(index).to_lower()
+		if bone_name.contains("tail") or bone_name.contains("hair") or bone_name.contains("skirt"):
+			secondary_bones.append(index)
+			secondary_rest[index] = skeleton.get_bone_pose_rotation(index)
 	set_process(true)
 
 func set_motion(horizontal_speed: float, crouch_amount: float) -> void:
@@ -78,6 +88,12 @@ func _process(delta: float) -> void:
 	_rotate("rightLowerLeg", _axis(Vector3.RIGHT, -maxf(0.0, swing) * KNEE_BEND - fold * 1.1))
 	_rotate("leftFoot", _axis(Vector3.RIGHT, maxf(0.0, -swing) * 0.2 + fold * 0.35))
 	_rotate("rightFoot", _axis(Vector3.RIGHT, maxf(0.0, swing) * 0.2 + fold * 0.35))
+
+	for index: int in secondary_bones:
+		var wave: float = sin(time * 1.8 + float(index) * 0.7) * (0.05 + speed * 0.025)
+		var side_wave: float = sin(time * 1.2 + float(index) * 0.4) * (0.03 + speed * 0.015)
+		skeleton.set_bone_pose_rotation(index, secondary_rest[index] *
+			_axis(Vector3.RIGHT, wave) * _axis(Vector3.BACK, side_wave))
 
 func _rotate(key: String, offset: Quaternion) -> void:
 	if not bones.has(key):
