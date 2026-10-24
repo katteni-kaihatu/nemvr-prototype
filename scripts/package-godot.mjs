@@ -53,13 +53,14 @@ try {
   }
   if (platform === "windows") {
     await writeFile(resolve(output, "Start-SteamVR.bat"),
-      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" -- --xr --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%"\r\n');
+      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode on -- --xr --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%"\r\n');
     await writeFile(resolve(output, "Start-Desktop.bat"),
-      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe"\r\n');
+      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode off\r\n');
     await writeFile(resolve(output, "README.txt"),
       ['Proto SNS Godot client','',
        'Desktop: run Start-Desktop.bat','',
        'SteamVR: install SteamVR, set it as the OpenXR runtime, then run Start-SteamVR.bat.',
+       'The VR launcher adds --xr-mode on so Godot initializes OpenXR before the game script.',
        'The VR launcher connects to wss://nemvr.nemnomi.dev/ws with your Windows user name.',
        'To use another server or name, pass arguments after --, for example:',
        '  ProtoSNS-godot.exe -- --xr --server wss://example/ws --name alice','',

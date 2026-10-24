@@ -64,7 +64,8 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--quality high|medium|low`: 画質プリセットを一時的に指定する (Lobby の選択より優先)
 - `--benchmark <秒>`: 指定秒数の FPS を計測し、`benchmark` イベントを出して終了する
 - `--scenario walk`: 前後に歩いて歩行アニメーションと姿勢同期を確認する
-- `--xr`: OpenXR ランタイムがあれば XR カメラで起動する
+- `--xr`: OpenXR ランタイムがあれば XR カメラで起動する。エクスポート版では
+  `--xr-mode on -- --xr` のようにエンジン側の XR モードも有効にする
 - `--xr-mock`: HMD なしで XR カメラ経路を確認する（テスト・撮影用）
 - `--hand-ik`: 同期した手の位置へ腕を合わせる実験的な簡易 IK
 - `--xr-menu`: XR メニューを開いた状態で起動する
@@ -79,7 +80,7 @@ pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
 
 ## XR
 
-`--xr` で OpenXR を初期化し、`XROrigin3D` / `XRCamera3D` に切り替える。HMD の
+`--xr-mode on -- --xr` で OpenXR を初期化し、`XROrigin3D` / `XRCamera3D` に切り替える。HMD の
 頭部姿勢は既存の位置・`space.head` に流用する。ランタイムがない場合は
 デスクトップ表示へ戻る。`--xr-mock` は HMD なしで XR カメラ経路を確認する
 テスト・撮影用モード。
