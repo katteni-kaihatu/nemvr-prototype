@@ -72,6 +72,8 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--xr-snap-turn`: 右スティックを 90° スナップターンにする (既定は滑らかな連続ターン)
 - `--voice`: Pion WebRTC データチャネル経由の PCM ボイスチャットを有効にする。
   official webrtc-native GDExtension と TURN を使用する
+- `--mic <device>`: 使用する入力デバイスを指定する。Lobby の「マイク」でも選択でき、
+  `user://settings.cfg` に保存される
 - `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 

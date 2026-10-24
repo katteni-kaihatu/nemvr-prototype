@@ -25,9 +25,11 @@ var _offer_sdp: String = ""
 var _candidates: Array[String] = []
 
 
-func start(server_url: String) -> void:
+func start(server_url: String, input_device: String = "") -> void:
 	if enabled or server_url.is_empty():
 		return
+	if not input_device.is_empty():
+		AudioServer.set_input_device(input_device)
 	enabled = true
 	_set_state("connecting")
 	var manager := Engine.get_singleton("GDExtensionManager") if Engine.has_singleton("GDExtensionManager") else null

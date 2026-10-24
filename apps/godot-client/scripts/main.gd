@@ -23,6 +23,7 @@ const VoiceChat = preload("res://scripts/voice_chat.gd")
 @onready var server_edit: LineEdit = $Interface/Lobby/Margin/Fields/Server
 @onready var name_edit: LineEdit = $Interface/Lobby/Margin/Fields/Name
 @onready var quality_option: OptionButton = $Interface/Lobby/Margin/Fields/Quality
+@onready var mic_option: OptionButton = $Interface/Lobby/Margin/Fields/MicDevice
 @onready var status_label: Label = $Interface/Lobby/Margin/Fields/Status
 @onready var hud: Control = $Interface/HUD
 @onready var hud_status: Label = $Interface/HUD/Status
@@ -100,6 +101,7 @@ func _ready() -> void:
 	if options.has("benchmark"):
 		_benchmark_seconds = 10.0 if options["benchmark"] is bool else float(options["benchmark"])
 	_setup_quality()
+	_setup_microphone()
 	fields.get_node("Connect").pressed.connect(_connect)
 	fields.get_node("ResetAvatar").pressed.connect(_reset_avatar)
 	name_edit.text_submitted.connect(func(_text: String) -> void: _connect())
@@ -131,6 +133,47 @@ func _ready() -> void:
 		_avatar_path = str(options["avatar"])
 	if options.has("name") and bridge != null:
 		_connect()
+
+func _setup_microphone() -> void:
+	mic_option.clear()
+	var devices: PackedStringArray = AudioServer.get_input_device_list()
+	mic_option.add_item("Default", 0)
+	var index: int = 1
+	for device: String in devices:
+		mic_option.add_item(device, index)
+		index += 1
+	var saved: String = _load_mic()
+	if options.has("mic"):
+		saved = str(options["mic"])
+	var selected: int = 0
+	for i in mic_option.item_count:
+		if mic_option.get_item_text(i) == saved:
+			selected = i
+			break
+	mic_option.selected = selected
+	mic_option.item_selected.connect(_mic_selected)
+
+func _mic_selected(index: int) -> void:
+	var device: String = mic_option.get_item_text(index)
+	if device == "Default":
+		device = ""
+	_save_mic(device)
+
+func _load_mic() -> String:
+	var config: ConfigFile = ConfigFile.new()
+	if config.load("user://settings.cfg") != OK:
+		return ""
+	return str(config.get_value("audio", "microphone", ""))
+
+func _save_mic(device: String) -> void:
+	var config: ConfigFile = ConfigFile.new()
+	config.load("user://settings.cfg")
+	config.set_value("audio", "microphone", device)
+	config.save("user://settings.cfg")
+
+func _selected_mic() -> String:
+	var text: String = mic_option.get_item_text(mic_option.selected)
+	return "" if text == "Default" else text
 
 func _setup_quality() -> void:
 	quality_option.add_item("High", 0)
@@ -207,6 +250,7 @@ func _setup_theme() -> void:
 	fields.get_node("ServerLabel").text = "サーバー / Server"
 	fields.get_node("NameLabel").text = "表示名 / Name"
 	fields.get_node("QualityLabel").text = "画質 / Quality"
+	fields.get_node("MicLabel").text = "マイク / Microphone"
 	fields.get_node("Connect").text = "接続 / Connect"
 
 func _parse_options(arguments: PackedStringArray) -> Dictionary:
@@ -407,9 +451,10 @@ func _state(event: Dictionary) -> void:
 	_ipfs_ready = bool(event.get("ipfsReady", false))
 	status = next_status
 	lobby.hide()
-	hud.show()
 	if options.has("hide-hud") or xr_active:
 		hud.hide()
+	else:
+		hud.show()
 	projection.apply_snapshot(event.get("entities", []), self_id)
 	if entering:
 		_entered = Time.get_ticks_msec() * 0.001
@@ -425,7 +470,7 @@ func _state(event: Dictionary) -> void:
 		if options.has("pitch"):
 			pitch = deg_to_rad(float(options["pitch"]))
 		if voice != null:
-			voice.call("start", server_edit.text)
+			voice.call("start", server_edit.text, _selected_mic())
 		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
 		mirror.set_enabled(options.has("mirror"))
 		if options.has("mirror"):
