@@ -298,27 +298,33 @@ async fn run_actor(
                     let events = events.clone();
                     let http_base = http_base.clone();
                     tasks.spawn(async move {
-                        if let Err(error) = crate::content::ipfs::fetch(
-                            node,
-                            cid.clone(),
-                            save_to.clone(),
-                            events.clone(),
+                        let result = tokio::time::timeout(
+                            std::time::Duration::from_secs(6),
+                            crate::content::ipfs::fetch(
+                                node,
+                                cid.clone(),
+                                save_to.clone(),
+                                events.clone(),
+                            ),
                         )
-                        .await
+                        .await;
+                        let error = match result {
+                            Ok(Ok(())) => return,
+                            Ok(Err(error)) => error,
+                            Err(_) => "IPFS の取得がタイムアウトしました".to_string(),
+                        };
+                        let _ = events.send(ContentEvent::Progress {
+                            cid: Some(cid.clone()),
+                            loaded: 0,
+                            total: None,
+                        });
+                        if let Err(http_error) =
+                            fetch_http(&http_base, &cid, save_to, events.clone()).await
                         {
-                            let _ = events.send(ContentEvent::Progress {
-                                cid: Some(cid.clone()),
-                                loaded: 0,
-                                total: None,
+                            let _ = events.send(ContentEvent::Failed {
+                                cid: Some(cid),
+                                message: format!("{error} / HTTP: {http_error}"),
                             });
-                            if let Err(http_error) =
-                                fetch_http(&http_base, &cid, save_to, events.clone()).await
-                            {
-                                let _ = events.send(ContentEvent::Failed {
-                                    cid: Some(cid),
-                                    message: format!("{error} / HTTP: {http_error}"),
-                                });
-                            }
                         }
                     })
                 } else {
