@@ -412,5 +412,6 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
 ## Voice relay
 
 `proto-voice.service` runs the Pion data-channel relay on `127.0.0.1:8092`
-with ICE UDP 3480. Caddy exposes `POST /voice/offer`; Godot currently needs a
-native WebRTC GDExtension before it can use this endpoint.
+with ICE UDP 3480. Caddy exposes `POST /voice/offer`. Clients use the official
+Godot webrtc-native GDExtension and coturn TURN (`voice` / dev password) because
+direct ICE UDP to the VPS is blocked by the provider.

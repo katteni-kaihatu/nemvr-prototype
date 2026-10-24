@@ -29,3 +29,7 @@ apps/godot-client/native/linux/
 apps/godot-client/native/windows/
 
 apps/voice/voice
+
+apps/godot-client/addons/webrtc_native/
+apps/godot-client/libwebrtc_native.*
+apps/godot-client/webrtc_native.gdextension

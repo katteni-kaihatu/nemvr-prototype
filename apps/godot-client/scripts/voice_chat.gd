@@ -23,6 +23,7 @@ var _offer_type: String = ""
 var _offer_sdp: String = ""
 var _candidates: Array[String] = []
 
+
 func start(server_url: String) -> void:
 	if enabled or server_url.is_empty():
 		return
@@ -31,7 +32,10 @@ func start(server_url: String) -> void:
 	http = HTTPRequest.new()
 	add_child(http)
 	pc = WebRTCPeerConnection.new()
-	if pc.initialize({"iceServers": []}) != OK:
+	if pc.initialize({"iceServers": [
+		{"urls": ["stun:nemvr.nemnomi.dev:3478", "stun:stun.l.google.com:19302"]},
+		{"urls": ["turn:nemvr.nemnomi.dev:3478?transport=udp"], "username": "voice", "credential": "devvoice"}
+	]}) != OK:
 		print("VOICE_ERROR initialize")
 		_set_state("unavailable")
 		return
@@ -62,7 +66,6 @@ func stop() -> void:
 
 func _set_state(value: String) -> void:
 	state = value
-	print("VOICE_STATE ", value)
 	state_changed.emit(value)
 
 func _setup_audio() -> void:
@@ -136,7 +139,6 @@ func _exchange_offer(server_url: String) -> void:
 		print("VOICE_ERROR set remote")
 		_set_state("unavailable")
 		return
-	_set_state("online")
 
 func _http_base(server_url: String) -> String:
 	var base: String = server_url.trim_suffix("/ws").trim_suffix("/")
@@ -152,6 +154,10 @@ func _process(delta: float) -> void:
 	pc.poll()
 	if channel != null:
 		channel.poll()
+		if channel.get_ready_state() == WebRTCDataChannel.STATE_OPEN and state != "online":
+			_set_state("online")
+		if pc.get_connection_state() == WebRTCPeerConnection.STATE_FAILED and state != "unavailable":
+			_set_state("unavailable")
 		_receive()
 	_clock += delta
 	while _clock >= FRAME_SECONDS:

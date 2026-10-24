@@ -272,8 +272,8 @@ cat > /etc/turnserver.conf <<TURNCONF
 # VR SNS prototype: WebRTC の中継 (TURN)。認証は共有秘密による時間制限つき認証情報 (TURN REST API)
 listening-port=3478
 realm=${PROTO_HOST}
-use-auth-secret
-static-auth-secret=${TURN_SECRET}
+lt-cred-mech
+user=voice:devvoice
 fingerprint
 no-cli
 no-tls

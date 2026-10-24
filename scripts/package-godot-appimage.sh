@@ -30,6 +30,9 @@ mkdir -p \
   "$APP/usr/share/licenses/proto-sns"
 
 cp "$BIN" "$PCK" "$LIB" "$APP/usr/bin/"
+for webrtc in "$SOURCE"/libwebrtc_native.*; do
+  [[ -f "$webrtc" ]] && cp "$webrtc" "$APP/usr/bin/"
+done
 cp -r "$SOURCE/licenses/." "$APP/usr/share/licenses/proto-sns/"
 cp "$ROOT/assets/proto-sns.svg" "$APP/usr/share/icons/hicolor/scalable/apps/proto-sns.svg"
 cp "$ROOT/assets/proto-sns-godot.desktop" "$APP/usr/share/applications/proto-sns.desktop"

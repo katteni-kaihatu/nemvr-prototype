@@ -104,11 +104,24 @@ func main() {
 			http.Error(w, "invalid offer", http.StatusBadRequest)
 			return
 		}
-		pc, err := api.NewPeerConnection(webrtc.Configuration{})
+		log.Printf("voice offer room=%s", roomName)
+		turnURL := "turn:" + publicIP + ":3478?transport=udp"
+		pc, err := api.NewPeerConnection(webrtc.Configuration{
+			ICEServers: []webrtc.ICEServer{{
+				URLs:       []string{turnURL},
+				Username:   "voice",
+				Credential: "devvoice",
+			}},
+		})
 		if err != nil {
 			http.Error(w, "peer connection failed", http.StatusInternalServerError)
 			return
 		}
+		pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+			if candidate != nil {
+				log.Printf("ice candidate room=%s %s", roomName, candidate.String())
+			}
+		})
 		p := &peer{pc: pc}
 		space := getRoom(roomName)
 		pc.OnDataChannel(func(dc *webrtc.DataChannel) {
@@ -122,6 +135,9 @@ func main() {
 					space.broadcast(p, msg.Data)
 				}
 			})
+		})
+		pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+			log.Printf("ice state room=%s %s", roomName, state)
 		})
 		pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 			if state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateClosed || state == webrtc.PeerConnectionStateDisconnected {
@@ -148,6 +164,7 @@ func main() {
 		<-webrtc.GatheringCompletePromise(pc)
 		w.Header().Set("content-type", "application/json")
 		_ = json.NewEncoder(w).Encode(pc.LocalDescription())
+		log.Printf("voice answer room=%s", roomName)
 	})
 
 	log.Printf("voice relay listening on 127.0.0.1:8092, ICE udp 3480, public %s", publicIP)
