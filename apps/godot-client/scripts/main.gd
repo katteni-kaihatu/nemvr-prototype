@@ -20,6 +20,7 @@ var _laser_ready: bool = false
 var _laser_hit: Vector3
 var _laser_hit_ready: bool = false
 var _laser_bow: float = 0.0
+var _laser_bow_direction: Vector3 = Vector3.RIGHT
 var _seated_checked: bool = false
 var carry_from_hand: bool = false
 var carry_offset_local: Vector3 = Vector3.ZERO
@@ -699,8 +700,11 @@ func _update_laser() -> void:
 				target = true
 	if target:
 		var dt: float = get_process_delta_time()
-		var difference: float = point.distance_to(_laser_hit) if _laser_hit_ready else 0.0
-		_laser_bow = lerpf(_laser_bow, clampf(difference * 6.0, 0.0, 0.3), 0.35)
+		var correction: Vector3 = (point - _laser_hit) if _laser_hit_ready else Vector3.ZERO
+		var perpendicular: Vector3 = correction - direction * correction.dot(direction)
+		if perpendicular.length() > 0.0005:
+			_laser_bow_direction = perpendicular.normalized()
+		_laser_bow = lerpf(_laser_bow, clampf(perpendicular.length() * 6.0, 0.0, 0.3), 0.35)
 		if not _laser_hit_ready:
 			_laser_hit = point
 			_laser_hit_ready = true
@@ -718,10 +722,7 @@ func _update_laser() -> void:
 	laser_dot.global_position = point
 	if beam:
 		var bow: float = _laser_bow
-		var side: Vector3 = direction.cross(Vector3.UP)
-		if side.length_squared() < 0.0001:
-			side = Vector3.RIGHT
-		side = side.normalized()
+		var side: Vector3 = _laser_bow_direction
 		_laser_mesh.clear_surfaces()
 		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
 		for i in 40:
@@ -730,7 +731,6 @@ func _update_laser() -> void:
 			var curve: float = sin(t * PI)
 			var vertex: Vector3 = origin.lerp(point, t)
 			vertex += side * curve * bow
-			vertex += Vector3.UP * curve * bow * 0.18
 			_laser_mesh.surface_add_vertex(vertex)
 		_laser_mesh.surface_end()
 

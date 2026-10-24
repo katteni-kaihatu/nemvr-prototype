@@ -88,7 +88,7 @@ func _update(id: String, entity: Dictionary) -> void:
 	for key: String in ["space.position", "space.head", "space.yaw", "space.pitch", "space.scale", "space.crouch", "space.lean", "interaction.heldBy"]:
 		visual_key.erase(key)
 	for key: String in visual_key.keys():
-		if key.begins_with("time."):
+		if key.begins_with("time.") or key.begins_with("space.xr."):
 			visual_key.erase(key)
 	if created or root.get_meta("visual_key", {}) != visual_key:
 		for child: Node in root.get_children():
