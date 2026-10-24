@@ -10,6 +10,7 @@
     "dev:native": "rustup run 1.95.0 cargo run -p proto-client",
     "dev:godot": "node scripts/dev-godot.mjs",
     "build:godot": "node scripts/build-godot.mjs",
+    "build:voice": "bash scripts/build-voice.sh",
     "test:godot": "node scripts/test-godot.mjs",
     "test:godot:mirror": "node scripts/test-godot.mjs --mirror",
     "e2e:godot": "node scripts/e2e-godot.mjs",

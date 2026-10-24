@@ -27,3 +27,5 @@ erl_crash.dump
 apps/godot-client/.godot/
 apps/godot-client/native/linux/
 apps/godot-client/native/windows/
+
+apps/voice/voice

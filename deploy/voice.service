@@ -1,0 +1,17 @@
+[Unit]
+Description=Proto SNS Pion voice relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=proto
+Group=proto
+Environment=PUBLIC_IP=__PUBLIC_IP__
+ExecStart=/opt/proto/voice/voice
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

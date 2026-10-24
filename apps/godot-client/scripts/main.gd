@@ -3,6 +3,7 @@ extends Node
 const WorldProjection = preload("res://scripts/world_projection.gd")
 const Mirror = preload("res://scripts/mirror.gd")
 const FloorReflection = preload("res://scripts/floor_reflection.gd")
+const VoiceChat = preload("res://scripts/voice_chat.gd")
 
 @onready var projection: WorldProjection = $World/Entities
 @onready var player: Node3D = $World/Player
@@ -61,6 +62,7 @@ var _avatar_path: String = ""
 var _avatar_reset_pending: bool = false
 var _ipfs_ready: bool = false
 var xr_active: bool = false
+var voice: Node
 var _teleport_marker_until: float = 0.0
 var quality: String = "high"
 var _benchmark_samples: Array[float] = []
@@ -75,6 +77,10 @@ func _ready() -> void:
 	projection.asset_requested.connect(_fetch)
 	projection.observed.connect(_observe)
 	projection.notice.connect(_log)
+	if options.has("voice"):
+		voice = VoiceChat.new()
+		add_child(voice)
+		voice.state_changed.connect(func(value: String) -> void: _log("Voice: " + value))
 	if options.has("xr") or options.has("xr-mock"):
 		xr_active = xr_rig.call("activate", camera, options.has("xr-mock"))
 		if xr_active:
@@ -406,6 +412,8 @@ func _state(event: Dictionary) -> void:
 			yaw = deg_to_rad(float(options["yaw"]))
 		if options.has("pitch"):
 			pitch = deg_to_rad(float(options["pitch"]))
+		if voice != null:
+			voice.call("start", server_edit.text)
 		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
 		mirror.set_enabled(options.has("mirror"))
 		if options.has("mirror"):

@@ -407,3 +407,10 @@ WS_URL=wss://nemvr.nemnomi.dev/ws HTTP_URL=https://nemvr.nemnomi.dev \
   ブラウザ間の直接 WebRTC は、開発 VPS の URL を 2 つのブラウザで開いて確認する。
   4001 を変更した場合は Kubo の再起動が必要 (再起動しないと HOP が広告されない)。
 - 旧 Node サーバーは削除済みで、当時の検証結果はこの Elixir/OTP + Kubo 構成には適用されない。
+
+
+## Voice relay
+
+`proto-voice.service` runs the Pion data-channel relay on `127.0.0.1:8092`
+with ICE UDP 3480. Caddy exposes `POST /voice/offer`; Godot currently needs a
+native WebRTC GDExtension before it can use this endpoint.

@@ -248,6 +248,9 @@ ${PROTO_HOST} {
 	handle /media/* {
 		reverse_proxy 127.0.0.1:8080
 	}
+	handle /voice/* {
+		reverse_proxy 127.0.0.1:8092
+	}
 	handle {
 		root * /srv/proto-client
 		file_server
@@ -311,6 +314,7 @@ ufw allow 4001/tcp >/dev/null  # Kubo の libp2p swarm (TCP)
 ufw allow 3478/tcp >/dev/null  # TURN (制御 / TCP 中継)
 ufw allow 3478/udp >/dev/null  # TURN (制御 / UDP 中継)
 ufw allow 49160:49200/udp >/dev/null  # TURN の中継ポート範囲
+ufw allow 3480/udp >/dev/null        # Pion voice の ICE UDP mux
 ufw --force enable >/dev/null
 ufw status | sed 's/^/    /'
 

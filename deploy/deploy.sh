@@ -46,6 +46,20 @@ if [ -d /srv/proto-client ] && [ -n "$(ls -A /srv/proto-client 2>/dev/null || tr
   cp -a /srv/proto-client /srv/proto-client.prev
 fi'
 
+echo "==> build and upload Pion voice relay"
+bash scripts/build-voice.sh
+VOICE_HOST="${DEPLOY_HOST#*@}"
+PUBLIC_IP="${PROTO_PUBLIC_IP:-$(getent ahostsv4 "$VOICE_HOST" | awk 'NR==1{print $1}')}"
+if [ -z "$PUBLIC_IP" ]; then
+  echo "PROTO_PUBLIC_IP is required for the voice relay" >&2
+  exit 1
+fi
+"${SSH[@]}" "$DEPLOY_HOST" "install -d -o proto -g proto /opt/proto/voice"
+rsync -az --chown=proto:proto -e "${SSH[*]}" apps/voice/voice "$DEPLOY_HOST:/opt/proto/voice/voice"
+sed "s/__PUBLIC_IP__/${PUBLIC_IP}/" deploy/voice.service > /tmp/proto-voice.service
+rsync -az --chown=root:root -e "${SSH[*]}" /tmp/proto-voice.service "$DEPLOY_HOST:/etc/systemd/system/proto-voice.service"
+"${SSH[@]}" "$DEPLOY_HOST" "systemctl daemon-reload && systemctl enable proto-voice >/dev/null && systemctl restart proto-voice && systemctl is-active proto-voice"
+
 echo "==> upload landing page"
 RSYNC=(rsync -az --delete --exclude downloads --chown=proto:proto -e "${SSH[*]}")
 "${RSYNC[@]}" deploy/landing/ "$DEPLOY_HOST:/srv/proto-client/"
@@ -81,6 +95,25 @@ systemctl restart proto-server
 sleep 4
 systemctl is-active proto-server
 journalctl -u proto-server -n 12 --no-pager -o cat'
+echo "==> ensure Caddy voice route and firewall"
+"${SSH[@]}" "$DEPLOY_HOST" "bash -s" <<'REMOTE'
+set -euo pipefail
+if ! grep -q 'handle /voice/' /etc/caddy/Caddyfile; then
+  awk '/^[[:space:]]*handle \{/ && !done {
+    print "\thandle /voice/* {"
+    print "\t\treverse_proxy 127.0.0.1:8092"
+    print "\t}"
+    done = 1
+  }
+  { print }' /etc/caddy/Caddyfile > /tmp/Caddyfile.voice
+  mv /tmp/Caddyfile.voice /etc/caddy/Caddyfile
+fi
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+systemctl reload caddy
+ufw allow 3480/udp >/dev/null
+REMOTE
+
 echo "==> done"
 echo "    site:      https://${DEPLOY_HOST#*@}/"
 echo "    websocket: wss://${DEPLOY_HOST#*@}/ws"
+echo "    voice:     https://${DEPLOY_HOST#*@}/voice/offer"
