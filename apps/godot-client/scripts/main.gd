@@ -69,6 +69,7 @@ var _avatar_path: String = ""
 var _avatar_reset_pending: bool = false
 var _ipfs_ready: bool = false
 var xr_active: bool = false
+var version: String = str(ProjectSettings.get_setting("application/config/version", "dev"))
 var voice: Node
 var _teleport_marker_until: float = 0.0
 var quality: String = "high"
@@ -224,6 +225,8 @@ func _save_quality(level: String) -> void:
 	config.save("user://settings.cfg")
 
 func _setup_theme() -> void:
+	$Interface/Lobby/Margin/Fields/Title.text = "PROTO / SNS  v" + version
+	$Interface/Lobby/Margin/Fields/Subtitle.text = "Shared space · Desktop client · v" + version
 	var theme: Theme = Theme.new()
 	theme.default_font_size = 18
 	var font_path: String = "res://assets/fonts/Migu-1M-regular.ttf"
@@ -508,7 +511,7 @@ func _state(event: Dictionary) -> void:
 						pending.erase(id)
 			elif not _claim_pending(carry_id):
 				_rollback(carry_id)
-	hud_status.text = "%s  /  %s  /  RTT %s ms  /  IPFS %s  %s" % [str(event.get("name", name_edit.text)), next_status, str(event.get("rttMs", "?")), "ready" if event.get("ipfsReady", false) else "starting", _transfer]
+	hud_status.text = "%s  /  %s  /  RTT %s ms  /  IPFS %s  %s  /  v%s" % [str(event.get("name", name_edit.text)), next_status, str(event.get("rttMs", "?")), "ready" if event.get("ipfsReady", false) else "starting", _transfer, version]
 
 func _physics_process(delta: float) -> void:
 	if not in_world or bridge == null:

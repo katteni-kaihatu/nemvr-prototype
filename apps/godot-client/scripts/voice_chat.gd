@@ -5,6 +5,8 @@ extends Node
 signal state_changed(state: String)
 
 const FRAME_SECONDS := 0.01
+const RATE := 48000
+const FRAME_SAMPLES := 480
 
 var enabled: bool = false
 var state: String = "off"
@@ -13,8 +15,8 @@ var channel: WebRTCDataChannel
 var http: HTTPRequest
 var playback_player: AudioStreamPlayer
 var playback: AudioStreamGeneratorPlayback
-var sample_rate: int = 48000
-var frame_samples: int = 960
+var sample_rate: int = RATE
+var frame_samples: int = FRAME_SAMPLES
 var _clock: float = 0.0
 var _play_clock: float = 0.0
 
@@ -118,14 +120,10 @@ func _set_input(input_device: String) -> void:
 	AudioServer.set_input_device_active(true)
 
 func _setup_playback() -> void:
-	sample_rate = int(AudioServer.get_input_mix_rate())
-	if sample_rate <= 0:
-		sample_rate = int(AudioServer.get_mix_rate())
-	if sample_rate <= 0:
-		sample_rate = 48000
-	frame_samples = maxi(1, int(sample_rate * FRAME_SECONDS))
+	sample_rate = RATE
+	frame_samples = FRAME_SAMPLES
 	var generator := AudioStreamGenerator.new()
-	generator.mix_rate = sample_rate
+	generator.mix_rate = RATE
 	generator.buffer_length = 0.15
 	playback_player = AudioStreamPlayer.new()
 	playback_player.stream = generator
@@ -235,17 +233,19 @@ func _send() -> void:
 				_sent_packets = 1
 				print("VOICE_TX audio started")
 		return
+	var input_rate: int = int(AudioServer.get_input_mix_rate())
+	if input_rate <= 0:
+		input_rate = RATE
+	var needed: int = maxi(1, int(round(input_rate * FRAME_SECONDS)))
 	var available: int = AudioServer.get_input_frames_available()
-	if available <= 0:
+	if available < needed:
 		input_level = lerpf(input_level, 0.0, 0.2)
 		output_level = maxf(output_level * 0.8, clampf(_output_peak * 2.5, 0.0, 1.0))
 		_output_peak = 0.0
 		return
-	var frames: PackedVector2Array = AudioServer.get_input_frames(mini(available, frame_samples))
-	if frames.is_empty():
+	var frames: PackedVector2Array = AudioServer.get_input_frames(needed)
+	if frames.size() < 2:
 		input_level = lerpf(input_level, 0.0, 0.2)
-		output_level = maxf(output_level * 0.8, clampf(_output_peak * 2.5, 0.0, 1.0))
-		_output_peak = 0.0
 		return
 	var peak: float = 0.0
 	for i in frames.size():
@@ -256,9 +256,16 @@ func _send() -> void:
 	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN:
 		return
 	var bytes := PackedByteArray()
-	bytes.resize(frames.size() * 2)
-	for i in frames.size():
-		var sample: float = clampf((frames[i].x + frames[i].y) * 0.5, -1.0, 1.0)
+	bytes.resize(FRAME_SAMPLES * 2)
+	var ratio: float = float(frames.size()) / float(FRAME_SAMPLES)
+	for i in FRAME_SAMPLES:
+		var position: float = float(i) * ratio
+		var left: int = mini(int(position), frames.size() - 1)
+		var right: int = mini(left + 1, frames.size() - 1)
+		var weight: float = position - float(left)
+		var x: float = lerpf(frames[left].x, frames[right].x, weight)
+		var y: float = lerpf(frames[left].y, frames[right].y, weight)
+		var sample: float = clampf((x + y) * 0.5, -1.0, 1.0)
 		bytes.encode_s16(i * 2, int(sample * 32767.0))
 	var sent: int = channel.put_packet(bytes)
 	if sent == OK and _sent_packets == 0:
