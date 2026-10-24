@@ -17,6 +17,10 @@ var _laser_mesh: ImmediateMesh
 var _laser_origin: Vector3
 var _laser_direction: Vector3 = Vector3.FORWARD
 var _laser_ready: bool = false
+var _laser_hit: Vector3
+var _laser_hit_ready: bool = false
+var carry_from_hand: bool = false
+var _xr_grip_was: bool = false
 @onready var mic_label: Label = $Interface/HUD/MicLabel
 @onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
 @onready var out_label: Label = $Interface/HUD/OutLabel
@@ -366,6 +370,14 @@ func _process(delta: float) -> void:
 		if bool(xr_rig.call("consume_menu")):
 			xr_menu.visible = not xr_menu.visible
 		_update_laser()
+		var grip_held: bool = bool(xr_rig.call("is_grip_held"))
+		if not carry_id.is_empty():
+			if _xr_grip_was and not grip_held:
+				_toggle_carry()
+		elif grip_held and not _xr_grip_was:
+			var grip_ray: Array = xr_rig.call("hand_ray", "right")
+			_toggle_carry(grip_ray[0], grip_ray[1])
+		_xr_grip_was = grip_held
 		if bool(xr_rig.call("consume_grab")):
 			var ray: Array = xr_rig.call("hand_ray", "right")
 			if xr_menu.visible:
@@ -679,6 +691,19 @@ func _update_laser() -> void:
 				point = floor["position"]
 				distance = origin.distance_to(point)
 				target = true
+	if target:
+		var dt: float = get_process_delta_time()
+		if not _laser_hit_ready:
+			_laser_hit = point
+			_laser_hit_ready = true
+		else:
+			var difference: Vector3 = point - _laser_hit
+			var max_step: float = maxf(0.4, difference.length() * 2.0) * dt
+			if difference.length() > 0.0001:
+				_laser_hit += difference.normalized() * minf(difference.length(), max_step)
+		point = _laser_hit
+	else:
+		_laser_hit_ready = false
 	laser.visible = xr_active and beam
 	laser_dot.visible = xr_active and target
 	if not target:
@@ -720,6 +745,7 @@ func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.Z
 		_send_carry()
 		_mutate({"op": "release", "entityId": carry_id})
 		carry_id = ""
+		carry_from_hand = false
 		rotate_mode = false
 		return
 	var from: Vector3 = camera.global_position if origin == Vector3.INF else origin
@@ -732,7 +758,8 @@ func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.Z
 		_log("Object is held by another peer")
 		return
 	carry_id = id
-	carry_distance = clampf(camera.global_position.distance_to(projection.views[id].global_position), 0.5, 8)
+	carry_from_hand = origin != Vector3.INF
+	carry_distance = clampf(from.distance_to(projection.views[id].global_position), 0.2, 8)
 	carry_yaw = float(dims.get("space.yaw", 0))
 	carry_pitch = float(dims.get("space.pitch", 0))
 	carry_scale = float(dims.get("space.scale", 1))
@@ -750,7 +777,11 @@ func _update_carry() -> void:
 	if carry_id.is_empty() or not projection.views.has(carry_id):
 		return
 	var view: Node3D = projection.views[carry_id]
-	view.global_position = camera.global_position - camera.global_basis.z * carry_distance
+	if carry_from_hand and xr_active:
+		var ray: Array = xr_rig.call("hand_ray", "right")
+		view.global_position = (ray[0] as Vector3) + (ray[1] as Vector3) * carry_distance
+	else:
+		view.global_position = camera.global_position - camera.global_basis.z * carry_distance
 	view.rotation = Vector3(carry_pitch, carry_yaw, 0)
 	view.scale = Vector3.ONE * carry_scale
 
@@ -779,6 +810,7 @@ func _send_carry() -> void:
 func _rollback(id: String) -> void:
 	if carry_id == id:
 		carry_id = ""
+		carry_from_hand = false
 		rotate_mode = false
 	projection.restore(id)
 
