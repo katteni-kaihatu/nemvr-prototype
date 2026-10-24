@@ -141,7 +141,7 @@ defmodule ProtoServer.Space.Entity do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
-  defp put_hand(dimensions, prefix, nil), do: dimensions
+  defp put_hand(dimensions, _prefix, nil), do: dimensions
 
   defp put_hand(dimensions, prefix, hand) when is_map(hand) do
     dimensions
