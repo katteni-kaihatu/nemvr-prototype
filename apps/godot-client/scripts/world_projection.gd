@@ -22,6 +22,7 @@ var _requested: Dictionary = {}
 var _asset_attempts: Dictionary = {}
 var _name_labels: Dictionary = {}
 var _peer_names: Dictionary = {}
+var _fallback_phase: Dictionary = {}
 var hand_ik_enabled: bool = false
 var _loader: Object
 
@@ -66,6 +67,7 @@ func _remove(id: String) -> void:
 		node.queue_free()
 		views.erase(id)
 	_samples.erase(id)
+	_fallback_phase.erase(id)
 
 func _update(id: String, entity: Dictionary) -> void:
 	var dims: Dictionary = entity.get("dimensions", {})
@@ -144,8 +146,10 @@ func _build(root: Node3D, dims: Dictionary, kind: String, id: String) -> void:
 				var head: MeshInstance3D = _box(root, Vector3(0.27, 0.28, 0.26), Vector3(0, 1.53, 0), color.lightened(0.2))
 				head.name = "Head"
 				for side: float in [-1.0, 1.0]:
-					_box(root, Vector3(0.13, 0.6, 0.15), Vector3(side * 0.28, 1.03, 0), color)
-					_box(root, Vector3(0.15, 0.65, 0.17), Vector3(side * 0.12, 0.35, 0), color.darkened(0.2))
+					var arm: MeshInstance3D = _box(root, Vector3(0.13, 0.6, 0.15), Vector3(side * 0.28, 1.03, 0), color)
+					arm.name = "LeftArm" if side < 0.0 else "RightArm"
+					var leg: MeshInstance3D = _box(root, Vector3(0.15, 0.65, 0.17), Vector3(side * 0.12, 0.35, 0), color.darkened(0.2))
+					leg.name = "LeftLeg" if side < 0.0 else "RightLeg"
 			for hand_name: String in ["LeftHand", "RightHand"]:
 				var hand: MeshInstance3D = _box(root, Vector3(0.09, 0.09, 0.15), Vector3.ZERO, Color(0.72, 0.9, 1.0))
 				hand.name = hand_name
@@ -337,7 +341,7 @@ func update_self(position_value: Vector3, yaw: float, crouch: float, lean: float
 		node.position = position_value
 		node.rotation = Vector3(0, yaw, lean * 0.3)
 		if node.get_node_or_null("Avatar") == null:
-			node.scale.y = 1.0 - crouch * 0.4
+			_animate_fallback(self_id, node, motion_speed, crouch)
 		else:
 			node.scale.y = 1.0
 			_animate_avatar(node, motion_speed, crouch)
@@ -345,6 +349,29 @@ func update_self(position_value: Vector3, yaw: float, crouch: float, lean: float
 		if head != null:
 			head.rotation.x = pitch
 
+
+func _animate_fallback(id: String, root: Node3D, speed: float, crouch: float) -> void:
+	var phase: float = float(_fallback_phase.get(id, 0.0)) + (0.35 + speed * 1.7) * get_process_delta_time()
+	_fallback_phase[id] = phase
+	var walk: float = clampf(speed / 1.6, 0.0, 1.0)
+	var swing: float = sin(phase) * walk
+	root.scale.y = 1.0 - crouch * 0.35
+	var left_arm: Node3D = root.get_node_or_null("LeftArm")
+	var right_arm: Node3D = root.get_node_or_null("RightArm")
+	var left_leg: Node3D = root.get_node_or_null("LeftLeg")
+	var right_leg: Node3D = root.get_node_or_null("RightLeg")
+	if left_arm != null:
+		left_arm.rotation.x = -swing * 0.7
+	if right_arm != null:
+		right_arm.rotation.x = swing * 0.7
+	if left_leg != null:
+		left_leg.rotation.x = swing * 0.65
+	if right_leg != null:
+		right_leg.rotation.x = -swing * 0.65
+	var head: Node3D = root.get_node_or_null("Head")
+	if head != null:
+		head.rotation.x = -crouch * 0.25 + sin(phase * 0.5) * 0.03
+		head.rotation.y = sin(phase * 0.37) * 0.06
 
 func _animate_avatar(root: Node3D, speed: float, crouch: float) -> void:
 	var animator: Node = root.get_node_or_null("Avatar/AvatarAnimator")

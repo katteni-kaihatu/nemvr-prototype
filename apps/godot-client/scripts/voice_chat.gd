@@ -132,7 +132,7 @@ func _setup_playback() -> void:
 	frame_samples = FRAME_SAMPLES
 	var generator := AudioStreamGenerator.new()
 	generator.mix_rate = RATE
-	generator.buffer_length = 0.15
+	generator.buffer_length = 0.25
 	playback_player = AudioStreamPlayer.new()
 	playback_player.stream = generator
 	playback_player.bus = "Master"
@@ -277,12 +277,12 @@ func _send() -> void:
 		input_rate = RATE
 	var needed: int = maxi(1, int(round(input_rate * FRAME_SECONDS)))
 	var available: int = AudioServer.get_input_frames_available()
-	if available < needed:
+	if available <= 0:
 		input_level = lerpf(input_level, 0.0, 0.2)
 		output_level = maxf(output_level * 0.85, clampf(_output_peak * 2.5, 0.0, 1.0))
 		_output_peak *= 0.7
 		return
-	var frames: PackedVector2Array = AudioServer.get_input_frames(needed)
+	var frames: PackedVector2Array = AudioServer.get_input_frames(mini(available, needed))
 	if frames.size() < 2:
 		input_level = lerpf(input_level, 0.0, 0.2)
 		return
@@ -352,7 +352,7 @@ func _pump_playback() -> void:
 	if not _rx_started:
 		# Prebuffer a few 10 ms packets before starting playback. This absorbs
 		# TURN jitter without adding a large fixed delay.
-		if _rx_queue.size() < 4:
+		if _rx_queue.size() < 8:
 			return
 		_rx_started = true
 	var selected: Array[Dictionary] = []

@@ -670,12 +670,12 @@ func _update_laser() -> void:
 		return
 	laser_dot.global_position = point
 	if beam:
-		var sag: float = minf(0.18, 0.04 + distance * 0.004)
+		var sag: float = minf(0.012, 0.001 + distance * 0.00025)
 		_laser_mesh.clear_surfaces()
 		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
 		for i in 24:
 			var t: float = float(i) / 23.0
-			var vertex: Vector3 = origin.lerp(point, t) + Vector3.DOWN * sin(t * PI) * sag
+			var vertex: Vector3 = origin.lerp(point, t) + Vector3.DOWN * sin(t * PI) * sag + Vector3.RIGHT * sin(t * PI * 2.0 + Time.get_ticks_msec() * 0.001) * sag * 0.2
 			_laser_mesh.surface_add_vertex(vertex)
 		_laser_mesh.surface_end()
 
