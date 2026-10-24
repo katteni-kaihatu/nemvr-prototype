@@ -25,6 +25,7 @@ var _offer_type: String = ""
 var _offer_sdp: String = ""
 var _candidates: Array[String] = []
 var _received_packets: int = 0
+var _rx_queue: Array[PackedByteArray] = []
 var _test_tone: bool = false
 var _tone_phase: float = 0.0
 var _sent_packets: int = 0
@@ -66,7 +67,9 @@ func start(server_url: String, input_device: String = "", test_tone: bool = fals
 		return
 	pc.session_description_created.connect(_on_local_description)
 	pc.ice_candidate_created.connect(_on_ice_candidate)
-	channel = pc.create_data_channel("voice", {"ordered": false, "maxRetransmits": 0})
+	# Ordered/reliable delivery prevents reordered PCM frames from sounding
+	# robotic. Keep frames short so retransmission stalls stay bounded.
+	channel = pc.create_data_channel("voice", {"ordered": true})
 	if pc.create_offer() != OK:
 		print("VOICE_ERROR create_offer")
 		_set_state("unavailable")
@@ -79,6 +82,7 @@ func stop() -> void:
 	input_level = 0.0
 	output_level = 0.0
 	_output_peak = 0.0
+	_rx_queue.clear()
 	if channel != null:
 		channel.close()
 	if pc != null:
@@ -112,7 +116,7 @@ func _setup_playback() -> void:
 	frame_samples = maxi(1, int(sample_rate * FRAME_SECONDS))
 	var generator := AudioStreamGenerator.new()
 	generator.mix_rate = sample_rate
-	generator.buffer_length = 0.08
+	generator.buffer_length = 0.12
 	playback_player = AudioStreamPlayer.new()
 	playback_player.stream = generator
 	playback_player.bus = "Master"
@@ -189,6 +193,7 @@ func _process(delta: float) -> void:
 		if pc.get_connection_state() == WebRTCPeerConnection.STATE_FAILED and state != "unavailable":
 			_set_state("unavailable")
 		_receive()
+		_drain_playback()
 	_clock += delta
 	while _clock >= FRAME_SECONDS:
 		_clock -= FRAME_SECONDS
@@ -259,7 +264,21 @@ func _receive() -> void:
 		var count: int = packet.size() / 2
 		var peak: float = 0.0
 		for i in count:
-			var sample: float = float(packet.decode_s16(i * 2)) / 32768.0
-			peak = maxf(peak, absf(sample))
-			playback.push_frame(Vector2(sample, sample))
+			peak = maxf(peak, absf(float(packet.decode_s16(i * 2)) / 32768.0))
 		_output_peak = maxf(_output_peak, peak)
+		_rx_queue.append(packet)
+		while _rx_queue.size() > 25:
+			_rx_queue.pop_front()
+
+func _drain_playback() -> void:
+	if playback == null:
+		return
+	while not _rx_queue.is_empty():
+		var packet: PackedByteArray = _rx_queue[0]
+		var count: int = packet.size() / 2
+		if playback.get_frames_available() < count:
+			break
+		_rx_queue.pop_front()
+		for i in count:
+			var sample: float = float(packet.decode_s16(i * 2)) / 32768.0
+			playback.push_frame(Vector2(sample, sample))
