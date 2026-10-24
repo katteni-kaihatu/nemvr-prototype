@@ -252,6 +252,15 @@ Windows zip は MinGW-w64 でクロスビルドした `.dll` を含めて作成�
 GPU / IME / ファイルドロップは未検証。`pnpm smoke:godot:windows` で Wine の headless
 起動 (GDExtension / PCK) を確認できる。
 
+Windows zip には次のランチャーを含める。
+
+- `Start-Desktop.bat`: 通常のデスクトップ起動
+- `Start-SteamVR.bat`: `--xr --server wss://nemvr.nemnomi.dev/ws --name %USERNAME%` で起動
+- `README.txt`: SteamVR を OpenXR ランタイムに設定する手順
+
+SteamVR で動かす場合は、SteamVR を既定の OpenXR ランタイムにしてから
+`Start-SteamVR.bat` を実行する。OpenXR を開始できない場合はデスクトップへ戻る。
+
 `--no-build` は既存の release ライブラリと Godot 出力を使う。ネイティブ API を変更した後は
 必ず通常のパッケージコマンドで再ビルドする。
 

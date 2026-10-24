@@ -51,6 +51,21 @@ try {
   for (const name of await readdir(resolve(project, "assets/fonts"))) {
     if (!/\.(ttf|otf|import)$/.test(name)) await copyFile(resolve(project, "assets/fonts", name), resolve(output, "licenses", name));
   }
+  if (platform === "windows") {
+    await writeFile(resolve(output, "Start-SteamVR.bat"),
+      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" -- --xr --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%"\r\n');
+    await writeFile(resolve(output, "Start-Desktop.bat"),
+      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe"\r\n');
+    await writeFile(resolve(output, "README.txt"),
+      ['Proto SNS Godot client','',
+       'Desktop: run Start-Desktop.bat','',
+       'SteamVR: install SteamVR, set it as the OpenXR runtime, then run Start-SteamVR.bat.',
+       'The VR launcher connects to wss://nemvr.nemnomi.dev/ws with your Windows user name.',
+       'To use another server or name, pass arguments after --, for example:',
+       '  ProtoSNS-godot.exe -- --xr --server wss://example/ws --name alice','',
+       'If OpenXR cannot start, the client falls back to desktop mode.',
+       'Logs are written next to the executable and to %APPDATA%\\Godot\\app_userdata\\Proto SNS\\logs.',''].join("\r\n"));
+  }
   await mkdir(dist, { recursive: true });
   const archive = resolve(dist, `${directoryName}.${platform === "linux" ? "tar.gz" : "zip"}`);
   // A fresh staging directory prevents stale libraries from entering an archive.

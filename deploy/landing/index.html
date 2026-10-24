@@ -66,7 +66,7 @@
       <h1>Proto SNS</h1>
       <p>
         Godot 4.6 ネイティブクライアントで接続する開発用 VR SNS プロトタイプです。
-        Linux は Godot 版、Windows は実機確認が終わるまで Bevy 版を配布しています。
+        Linux は Godot 版。Windows は Godot の SteamVR テスト版と、比較用の Bevy 版を配布しています。
       </p>
 
       <h2>接続先</h2>
@@ -80,8 +80,8 @@
         <a class="button" href="downloads/ProtoSNS-godot-x86_64.AppImage">
           Linux (AppImage, x86_64)
         </a>
-        <a class="button secondary" href="downloads/ProtoSNS-windows-x86_64.zip">
-          Windows (zip, x86_64)
+        <a class="button secondary" href="downloads/ProtoSNS-godot-windows-x86_64.zip">
+          Windows (Godot / SteamVR test)
         </a>
       </div>
 
@@ -92,10 +92,15 @@
       </p>
 
       <p class="small">
+        SteamVR では先に SteamVR を既定の OpenXR ランタイムに設定し、
+        zip 内の <code>Start-SteamVR.bat</code> を実行してください。
+      </p>
+
+      <p class="small">
         その他:
         <a href="downloads/ProtoSNS-godot-linux-x86_64.tar.gz">Linux (tar.gz)</a> /
-        <a href="downloads/ProtoSNS-godot-windows-x86_64.zip">Windows Godot 版 (実機未検証)</a> /
-        <a href="downloads/ProtoSNS-x86_64.AppImage">Linux Bevy 版 (退避経路)</a>
+        <a href="downloads/ProtoSNS-windows-x86_64.zip">Windows Bevy 版 (比較用)</a> /
+        <a href="downloads/ProtoSNS-x86_64.AppImage">Linux Bevy 版 (比較用)</a>
       </p>
     </main>
     <script>
