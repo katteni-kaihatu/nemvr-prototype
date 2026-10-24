@@ -80,7 +80,9 @@ pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
 
 ## XR
 
-`--xr-mode on -- --xr` で OpenXR を初期化し、`XROrigin3D` / `XRCamera3D` に切り替える。HMD の
+`--xr-mode on -- --xr` で OpenXR を初期化し、`XROrigin3D` / `XRCamera3D` に切り替える。
+起動しない場合は `--verbose` と `XR_LOADER_DEBUG=all` を付けると OpenXR ローダーの
+エラーを確認できる。HMD の
 頭部姿勢は既存の位置・`space.head` に流用する。ランタイムがない場合は
 デスクトップ表示へ戻る。`--xr-mock` は HMD なしで XR カメラ経路を確認する
 テスト・撮影用モード。

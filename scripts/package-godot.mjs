@@ -56,6 +56,8 @@ try {
       '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode on -- --xr --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%"\r\n');
     await writeFile(resolve(output, "Start-Desktop.bat"),
       '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode off\r\n');
+    await writeFile(resolve(output, "Start-SteamVR-Debug.bat"),
+      '@echo off\r\ncd /d "%~dp0"\r\nset XR_LOADER_DEBUG=all\r\n"%~dp0ProtoSNS-godot.exe" --verbose --xr-mode on -- --xr --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%" > openxr-debug.log 2>&1\r\necho Exit code %ERRORLEVEL%\r\npause\r\n');
     await writeFile(resolve(output, "README.txt"),
       ['Proto SNS Godot client','',
        'Desktop: run Start-Desktop.bat','',
@@ -65,6 +67,7 @@ try {
        'To use another server or name, pass arguments after --, for example:',
        '  ProtoSNS-godot.exe -- --xr --server wss://example/ws --name alice','',
        'If OpenXR cannot start, the client falls back to desktop mode.',
+       'If it still fails, run Start-SteamVR-Debug.bat and send openxr-debug.log.',
        'Logs are written next to the executable and to %APPDATA%\\Godot\\app_userdata\\Proto SNS\\logs.',''].join("\r\n"));
   }
   await mkdir(dist, { recursive: true });

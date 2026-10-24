@@ -256,6 +256,7 @@ Windows zip には次のランチャーを含める。
 
 - `Start-Desktop.bat`: 通常のデスクトップ起動
 - `Start-SteamVR.bat`: `--xr-mode on -- --xr --server wss://nemvr.nemnomi.dev/ws --name %USERNAME%` で起動
+- `Start-SteamVR-Debug.bat`: `--verbose` と `XR_LOADER_DEBUG=all` で `openxr-debug.log` を出力
 - `README.txt`: SteamVR を OpenXR ランタイムに設定する手順
 
 SteamVR で動かす場合は、SteamVR を既定の OpenXR ランタイムにしてから
