@@ -26,6 +26,7 @@ var _offer_sdp: String = ""
 var _candidates: Array[String] = []
 var _received_packets: int = 0
 var _rx_queue: Array[PackedByteArray] = []
+var _rx_started: bool = false
 var _test_tone: bool = false
 var _tone_phase: float = 0.0
 var _sent_packets: int = 0
@@ -83,6 +84,7 @@ func stop() -> void:
 	output_level = 0.0
 	_output_peak = 0.0
 	_rx_queue.clear()
+	_rx_started = false
 	if channel != null:
 		channel.close()
 	if pc != null:
@@ -116,7 +118,7 @@ func _setup_playback() -> void:
 	frame_samples = maxi(1, int(sample_rate * FRAME_SECONDS))
 	var generator := AudioStreamGenerator.new()
 	generator.mix_rate = sample_rate
-	generator.buffer_length = 0.12
+	generator.buffer_length = 0.15
 	playback_player = AudioStreamPlayer.new()
 	playback_player.stream = generator
 	playback_player.bus = "Master"
@@ -273,6 +275,12 @@ func _receive() -> void:
 func _drain_playback() -> void:
 	if playback == null:
 		return
+	if not _rx_started:
+		# Prebuffer a few 10 ms packets before starting playback. This absorbs
+		# TURN jitter without adding a large fixed delay.
+		if _rx_queue.size() < 4:
+			return
+		_rx_started = true
 	while not _rx_queue.is_empty():
 		var packet: PackedByteArray = _rx_queue[0]
 		var count: int = packet.size() / 2
