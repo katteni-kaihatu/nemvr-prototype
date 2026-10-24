@@ -29,10 +29,19 @@ defmodule ProtoServer.HttpIntegrationTest do
   end
 
   test "image upload rejects empty and non-image bodies without contacting Kubo", %{port: port} do
-    assert {400, _headers, %{"error" => "empty body"}} = request(port, "/media/upload", :post, nil, "")
+    assert {400, _headers, %{"error" => "empty body"}} =
+             request(port, "/media/upload", :post, nil, "")
 
     assert {415, _headers, %{"error" => "unsupported image format"}} =
              request(port, "/media/upload", :post, nil, "not an image")
+  end
+
+  test "avatar upload rejects empty and non-GLB bodies without contacting Kubo", %{port: port} do
+    assert {400, _headers, %{"error" => "avatar too small"}} =
+             request(port, "/media/avatar", :post, nil, "")
+
+    assert {415, _headers, %{"error" => "unsupported avatar format"}} =
+             request(port, "/media/avatar", :post, nil, String.duplicate("x", 28))
   end
 
   test "an unsatisfiable range returns 416 without contacting the gateway", %{port: port} do
