@@ -14,9 +14,6 @@ const VoiceChat = preload("res://scripts/voice_chat.gd")
 @onready var laser: MeshInstance3D = $World/Laser
 @onready var laser_dot: MeshInstance3D = $World/LaserDot
 var _laser_mesh: ImmediateMesh
-var _laser_origin: Vector3
-var _laser_direction: Vector3 = Vector3.FORWARD
-var _laser_ready: bool = false
 var _laser_hit: Vector3
 var _laser_hit_ready: bool = false
 var _laser_bow: float = 0.0
@@ -669,16 +666,8 @@ func _update_laser() -> void:
 	var ray: Array = xr_rig.call("hand_ray", "right")
 	var origin: Vector3 = ray[0]
 	var direction: Vector3 = ray[1]
-	var smoothing: float = 1.0 - exp(-14.0 * get_process_delta_time())
-	if not _laser_ready:
-		_laser_origin = origin
-		_laser_direction = direction
-		_laser_ready = true
-	else:
-		_laser_origin = _laser_origin.lerp(origin, smoothing)
-		_laser_direction = _laser_direction.lerp(direction, smoothing).normalized()
-	origin = _laser_origin
-	direction = _laser_direction
+	# Start the beam exactly at the controller. Only the hit point is damped,
+	# so walking or teleporting never leaves the beam trailing behind the hand.
 	var distance: float = 30.0
 	var point: Vector3 = origin + direction * distance
 	var beam: bool = false
