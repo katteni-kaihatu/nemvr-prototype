@@ -24,6 +24,7 @@ var _laser_bow_direction: Vector3 = Vector3.RIGHT
 var _seated_checked: bool = false
 var carry_from_hand: bool = false
 var carry_offset_local: Vector3 = Vector3.ZERO
+var carry_locked: bool = false
 var _xr_grip_was: bool = false
 @onready var mic_label: Label = $Interface/HUD/MicLabel
 @onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
@@ -511,6 +512,9 @@ func _state(event: Dictionary) -> void:
 	else:
 		hud.show()
 	projection.apply_snapshot(event.get("entities", []), self_id)
+	if not carry_id.is_empty() and projection.entities.has(carry_id):
+		var held: Variant = projection.entities[carry_id].get("dimensions", {}).get("interaction.heldBy")
+		carry_locked = held == self_id
 	if entering:
 		_entered = Time.get_ticks_msec() * 0.001
 		if projection.entities.has(self_id):
@@ -756,6 +760,7 @@ func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.Z
 		_mutate({"op": "release", "entityId": carry_id})
 		carry_id = ""
 		carry_from_hand = false
+		carry_locked = false
 		carry_offset_local = Vector3.ZERO
 		rotate_mode = false
 		return
@@ -788,7 +793,7 @@ func _claim_pending(id: String) -> bool:
 	return false
 
 func _update_carry() -> void:
-	if carry_id.is_empty() or not projection.views.has(carry_id):
+	if carry_id.is_empty() or not carry_locked or not projection.views.has(carry_id):
 		return
 	var view: Node3D = projection.views[carry_id]
 	var target: Vector3
@@ -815,7 +820,7 @@ func _update_target() -> void:
 	label.text = name_value.left(48) + (" / held" if dims.get("interaction.heldBy") != null else "\nRight click: carry / M: actions")
 
 func _send_carry() -> void:
-	if carry_id.is_empty() or not projection.entities.has(carry_id) or not projection.views.has(carry_id):
+	if carry_id.is_empty() or not carry_locked or not projection.entities.has(carry_id) or not projection.views.has(carry_id):
 		return
 	var dims: Dictionary = projection.entities[carry_id].get("dimensions", {})
 	if dims.get("interaction.heldBy") != self_id:
@@ -827,6 +832,7 @@ func _rollback(id: String) -> void:
 	if carry_id == id:
 		carry_id = ""
 		carry_from_hand = false
+		carry_locked = false
 		carry_offset_local = Vector3.ZERO
 		rotate_mode = false
 	projection.restore(id)
