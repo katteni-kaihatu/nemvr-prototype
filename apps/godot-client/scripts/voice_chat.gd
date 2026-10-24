@@ -132,7 +132,7 @@ func _setup_playback() -> void:
 	frame_samples = FRAME_SAMPLES
 	var generator := AudioStreamGenerator.new()
 	generator.mix_rate = RATE
-	generator.buffer_length = 0.25
+	generator.buffer_length = 0.3
 	playback_player = AudioStreamPlayer.new()
 	playback_player.stream = generator
 	playback_player.bus = "Master"
@@ -352,7 +352,7 @@ func _pump_playback() -> void:
 	if not _rx_started:
 		# Prebuffer a few 10 ms packets before starting playback. This absorbs
 		# TURN jitter without adding a large fixed delay.
-		if _rx_queue.size() < 8:
+		if _rx_queue.size() < 10:
 			return
 		_rx_started = true
 	var selected: Array[Dictionary] = []

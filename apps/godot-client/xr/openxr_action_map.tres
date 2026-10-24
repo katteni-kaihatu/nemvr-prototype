@@ -79,17 +79,25 @@ binding_path = "/user/hand/right/input/trigger/click"
 action = SubResource("menu")
 binding_path = "/user/hand/left/input/menu/click"
 
+[sub_resource type="OpenXRIPBinding" id="bind_grab_squeeze"]
+action = SubResource("grab")
+binding_path = "/user/hand/right/input/squeeze/click"
+
+[sub_resource type="OpenXRIPBinding" id="bind_grab_grip"]
+action = SubResource("grab")
+binding_path = "/user/hand/right/input/grip/click"
+
 [sub_resource type="OpenXRIPBinding" id="bind_teleport"]
 action = SubResource("teleport")
 binding_path = "/user/hand/left/input/trigger/click"
 
 [sub_resource type="OpenXRInteractionProfile" id="oculus_touch"]
 interaction_profile_path = "/interaction_profiles/oculus/touch_controller"
-bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_teleport"), SubResource("bind_menu")]
+bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_grab_squeeze"), SubResource("bind_grab_grip"), SubResource("bind_teleport"), SubResource("bind_menu")]
 
 [sub_resource type="OpenXRInteractionProfile" id="valve_index"]
 interaction_profile_path = "/interaction_profiles/valve/index_controller"
-bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_teleport"), SubResource("bind_menu")]
+bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_grab_squeeze"), SubResource("bind_grab_grip"), SubResource("bind_teleport"), SubResource("bind_menu")]
 
 [resource]
 action_sets = [SubResource("action_set")]

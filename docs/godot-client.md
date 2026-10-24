@@ -29,7 +29,8 @@ Godot scenes / scripts
 
 ## 起動
 
-Lobby と HUD にはクライアントのバージョン (`application/config/version`) を表示する。
+Lobby と HUD には `application/config/version` と `application/config/revision` を
+組み合わせたビルド表記 (例: `v0.4.0+r1`) を表示する。
 Lobby のサーバー欄は既定で `wss://nemvr.nemnomi.dev/ws` を指す。ローカルサーバーを
 使う場合だけ明示的に変更する。
 

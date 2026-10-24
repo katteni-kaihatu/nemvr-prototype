@@ -71,6 +71,8 @@ var _avatar_reset_pending: bool = false
 var _ipfs_ready: bool = false
 var xr_active: bool = false
 var version: String = str(ProjectSettings.get_setting("application/config/version", "dev"))
+var revision: String = str(ProjectSettings.get_setting("application/config/revision", ""))
+var build_label: String = "v" + version + (("+" + revision) if not revision.is_empty() else "")
 var voice: Node
 var _teleport_marker_until: float = 0.0
 var quality: String = "high"
@@ -228,8 +230,8 @@ func _save_quality(level: String) -> void:
 	config.save("user://settings.cfg")
 
 func _setup_theme() -> void:
-	$Interface/Lobby/Margin/Fields/Title.text = "PROTO / SNS  v" + version
-	$Interface/Lobby/Margin/Fields/Subtitle.text = "Shared space · Desktop client · v" + version
+	$Interface/Lobby/Margin/Fields/Title.text = "PROTO / SNS  " + build_label
+	$Interface/Lobby/Margin/Fields/Subtitle.text = "Shared space · Desktop client · " + build_label
 	var theme: Theme = Theme.new()
 	theme.default_font_size = 18
 	var font_path: String = "res://assets/fonts/Migu-1M-regular.ttf"
@@ -523,7 +525,7 @@ func _state(event: Dictionary) -> void:
 						pending.erase(id)
 			elif not _claim_pending(carry_id):
 				_rollback(carry_id)
-	hud_status.text = "%s  /  %s  /  RTT %s ms  /  IPFS %s  %s  /  v%s" % [str(event.get("name", name_edit.text)), next_status, str(event.get("rttMs", "?")), "ready" if event.get("ipfsReady", false) else "starting", _transfer, version]
+	hud_status.text = "%s  /  %s  /  RTT %s ms  /  IPFS %s  %s  /  %s" % [str(event.get("name", name_edit.text)), next_status, str(event.get("rttMs", "?")), "ready" if event.get("ipfsReady", false) else "starting", _transfer]
 
 func _physics_process(delta: float) -> void:
 	if not in_world or bridge == null:
@@ -670,12 +672,17 @@ func _update_laser() -> void:
 		return
 	laser_dot.global_position = point
 	if beam:
-		var sag: float = minf(0.012, 0.001 + distance * 0.00025)
+		var wobble: float = minf(0.012, 0.002 + distance * 0.0002)
+		var now: float = Time.get_ticks_msec() * 0.001
 		_laser_mesh.clear_surfaces()
 		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
-		for i in 24:
-			var t: float = float(i) / 23.0
-			var vertex: Vector3 = origin.lerp(point, t) + Vector3.DOWN * sin(t * PI) * sag + Vector3.RIGHT * sin(t * PI * 2.0 + Time.get_ticks_msec() * 0.001) * sag * 0.2
+		for i in 32:
+			var t: float = float(i) / 31.0
+			# Keep the tip stable: the tremor envelope fades to zero at the hit point.
+			var envelope: float = sin(t * PI) * (1.0 - t)
+			var vertex: Vector3 = origin.lerp(point, t)
+			vertex += Vector3.RIGHT * sin(t * PI * 5.0 + now * 4.0) * wobble * envelope
+			vertex += Vector3.UP * sin(t * PI * 3.0 + now * 2.0) * wobble * envelope * 0.45
 			_laser_mesh.surface_add_vertex(vertex)
 		_laser_mesh.surface_end()
 
