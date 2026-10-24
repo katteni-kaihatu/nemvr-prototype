@@ -697,10 +697,8 @@ func _update_laser() -> void:
 			_laser_hit = point
 			_laser_hit_ready = true
 		else:
-			var difference: Vector3 = point - _laser_hit
-			var max_step: float = maxf(0.4, difference.length() * 2.0) * dt
-			if difference.length() > 0.0001:
-				_laser_hit += difference.normalized() * minf(difference.length(), max_step)
+			# Catch the straight ray quickly while still damping hand tremor.
+			_laser_hit = _laser_hit.lerp(point, 1.0 - exp(-25.0 * dt))
 		point = _laser_hit
 	else:
 		_laser_hit_ready = false
@@ -710,17 +708,17 @@ func _update_laser() -> void:
 		return
 	laser_dot.global_position = point
 	if beam:
-		var wobble: float = minf(0.012, 0.002 + distance * 0.0002)
+		var amplitude: float = clampf(0.02 + distance * 0.012, 0.02, 0.18)
 		var now: float = Time.get_ticks_msec() * 0.001
 		_laser_mesh.clear_surfaces()
 		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
-		for i in 32:
-			var t: float = float(i) / 31.0
-			# Keep the tip stable: the tremor envelope fades to zero at the hit point.
-			var envelope: float = sin(t * PI) * (1.0 - t)
+		for i in 40:
+			var t: float = float(i) / 39.0
+			# A travelling whip bend that dies out at the hit point.
+			var envelope: float = (1.0 - t) * sin(t * PI)
 			var vertex: Vector3 = origin.lerp(point, t)
-			vertex += Vector3.RIGHT * sin(t * PI * 5.0 + now * 4.0) * wobble * envelope
-			vertex += Vector3.UP * sin(t * PI * 3.0 + now * 2.0) * wobble * envelope * 0.45
+			vertex += Vector3.RIGHT * sin(t * PI * 2.2 - now * 8.0) * amplitude * envelope
+			vertex += Vector3.UP * sin(t * PI * 3.4 - now * 6.0) * amplitude * envelope * 0.35
 			_laser_mesh.surface_add_vertex(vertex)
 		_laser_mesh.surface_end()
 
