@@ -13,14 +13,10 @@ var state: String = "off"
 var pc: WebRTCPeerConnection
 var channel: WebRTCDataChannel
 var http: HTTPRequest
-var capture: AudioEffectCapture
-var microphone: AudioStreamPlayer
 var playback_player: AudioStreamPlayer
 var playback: AudioStreamGeneratorPlayback
 var _clock: float = 0.0
 
-var _bus: int = -1
-var _silent_bus: int = -1
 var input_level: float = 0.0
 var output_level: float = 0.0
 var _output_peak: float = 0.0
@@ -42,7 +38,6 @@ func start_meter(input_device: String = "") -> void:
 	_set_input(input_device)
 	enabled = true
 	_meter_only = true
-	_setup_capture()
 	_setup_playback()
 	_set_state("meter")
 
@@ -55,7 +50,6 @@ func start(server_url: String, input_device: String = "", test_tone: bool = fals
 	enabled = true
 	_meter_only = false
 	_test_tone = test_tone
-	_setup_capture()
 	_set_state("connecting")
 	var manager := Engine.get_singleton("GDExtensionManager") if Engine.has_singleton("GDExtensionManager") else null
 	if manager != null and manager.has_method("load_extension"):
@@ -90,21 +84,10 @@ func stop() -> void:
 	if pc != null:
 		pc.close()
 	AudioServer.set_input_device_active(false)
-	if microphone != null:
-		microphone.stop()
-		microphone.queue_free()
-		microphone = null
 	if playback_player != null:
 		playback_player.stop()
 		playback_player.queue_free()
 		playback_player = null
-	if _silent_bus >= 0:
-		AudioServer.remove_bus(_silent_bus)
-		_silent_bus = -1
-	if _bus >= 0:
-		AudioServer.remove_bus(_bus)
-		_bus = -1
-	capture = null
 	pc = null
 	channel = null
 	playback = null
@@ -120,26 +103,6 @@ func _set_input(input_device: String) -> void:
 		AudioServer.set_input_device(input_device)
 	AudioServer.set_input_device_active(true)
 
-func _setup_capture() -> void:
-	capture = AudioEffectCapture.new()
-	capture.buffer_length = 0.5
-	_bus = AudioServer.bus_count
-	AudioServer.add_bus()
-	AudioServer.set_bus_name(_bus, "VoiceCapture")
-	AudioServer.add_bus_effect(_bus, capture)
-	_silent_bus = AudioServer.bus_count
-	AudioServer.add_bus()
-	AudioServer.set_bus_name(_silent_bus, "VoiceSilent")
-	AudioServer.set_bus_mute(_silent_bus, true)
-	AudioServer.set_bus_mute(_bus, true)
-	AudioServer.set_bus_send(_bus, "VoiceSilent")
-	microphone = AudioStreamPlayer.new()
-	microphone.stream = AudioStreamMicrophone.new()
-	microphone.bus = "VoiceCapture"
-	add_child(microphone)
-	microphone.play()
-	AudioServer.set_input_device_active(true)
-
 func _setup_playback() -> void:
 	var generator := AudioStreamGenerator.new()
 	generator.mix_rate = RATE
@@ -151,6 +114,7 @@ func _setup_playback() -> void:
 	add_child(playback_player)
 	playback_player.play()
 	playback = playback_player.get_stream_playback() as AudioStreamGeneratorPlayback
+
 
 func _on_local_description(type: String, sdp: String) -> void:
 	_offer_type = type
@@ -247,16 +211,20 @@ func _send() -> void:
 				_sent_packets = 1
 				print("VOICE_TX audio started")
 		return
-	if capture == null:
+	var available: int = AudioServer.get_input_frames_available()
+	if available <= 0:
+		input_level = lerpf(input_level, 0.0, 0.2)
+		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
+		_output_peak = 0.0
 		return
-	var frames: PackedVector2Array = capture.get_buffer(FRAME_SAMPLES)
-	if frames.size() < FRAME_SAMPLES:
+	var frames: PackedVector2Array = AudioServer.get_input_frames(mini(available, FRAME_SAMPLES))
+	if frames.is_empty():
 		input_level = lerpf(input_level, 0.0, 0.2)
 		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
 		_output_peak = 0.0
 		return
 	var peak: float = 0.0
-	for i in FRAME_SAMPLES:
+	for i in frames.size():
 		peak = maxf(peak, absf((frames[i].x + frames[i].y) * 0.5))
 	input_level = lerpf(input_level, clampf(peak * 2.5, 0.0, 1.0), 0.4)
 	output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
@@ -264,8 +232,8 @@ func _send() -> void:
 	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN:
 		return
 	var bytes := PackedByteArray()
-	bytes.resize(FRAME_SAMPLES * 2)
-	for i in FRAME_SAMPLES:
+	bytes.resize(frames.size() * 2)
+	for i in frames.size():
 		var sample: float = clampf((frames[i].x + frames[i].y) * 0.5, -1.0, 1.0)
 		bytes.encode_s16(i * 2, int(sample * 32767.0))
 	var sent: int = channel.put_packet(bytes)
@@ -280,7 +248,8 @@ func _receive() -> void:
 			continue
 		_received_packets += 1
 		if _received_packets == 1:
-			print("VOICE_RX audio started")
+			print("VOICE_RX audio started size=", packet.size(), " playback=", playback)
+
 		var count: int = packet.size() / 2
 		var peak: float = 0.0
 		for i in count:
