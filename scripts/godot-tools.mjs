@@ -75,7 +75,7 @@ export async function importProject(bin = godotBinary()) {
     await run("bash", ["scripts/setup-webrtc-native.sh"]);
   }
   mkdirSync(resolve(project, ".godot"), { recursive: true });
-  writeFileSync(resolve(project, ".godot/extension_list.cfg"), "res://native/proto.gdextension\nres://webrtc_native.gdextension\n");
+  writeFileSync(resolve(project, ".godot/extension_list.cfg"), "res://native/proto.gdextension\n");
   if (process.env.PROTO_SKIP_GODOT_IMPORT === "1") return;
   await run(bin, ["--headless", "--path", project, "--editor", "--import"]);
 }

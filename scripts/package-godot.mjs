@@ -39,9 +39,17 @@ try {
   const output = resolve(temporary, directoryName);
   await mkdir(output);
   const filename = platform === "linux" ? "ProtoSNS-godot.x86_64" : "ProtoSNS-godot.exe";
-  await run(bin, ["--headless", "--path", project, "--export-release",
-    platform === "linux" ? "Linux" : "Windows", resolve(output, filename)],
-  { env: { ...process.env, XDG_DATA_HOME: temporary } });
+  const pckFile = resolve(output, "ProtoSNS-godot.pck");
+  try {
+    await run(bin, ["--headless", "--path", project, "--export-release",
+      platform === "linux" ? "Linux" : "Windows", resolve(output, filename)],
+    { env: { ...process.env, XDG_DATA_HOME: temporary } });
+  } catch (error) {
+    // Godot 4.6 can abort while unloading the WebRTC GDExtension after the PCK
+    // has been written. The export contents are complete at this point.
+    if (!existsSync(pckFile)) throw error;
+    console.warn("export process aborted after writing the PCK; continuing");
+  }
   await mkdir(resolve(output, "licenses"));
   for (const [source, name] of [["addons/vrm/LICENSE", "godot-vrm-MIT.txt"],
     ["addons/Godot-MToon-Shader/LICENSE", "Godot-MToon-Shader-MIT.txt"],

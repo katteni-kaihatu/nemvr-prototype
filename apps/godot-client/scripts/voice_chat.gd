@@ -29,6 +29,9 @@ func start(server_url: String) -> void:
 		return
 	enabled = true
 	_set_state("connecting")
+	var manager := Engine.get_singleton("GDExtensionManager") if Engine.has_singleton("GDExtensionManager") else null
+	if manager != null and manager.has_method("load_extension"):
+		manager.load_extension("res://webrtc_native.gdextension")
 	http = HTTPRequest.new()
 	add_child(http)
 	pc = WebRTCPeerConnection.new()
