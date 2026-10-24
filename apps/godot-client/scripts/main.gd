@@ -708,7 +708,7 @@ func _update_laser() -> void:
 		var perpendicular: Vector3 = correction - direction * correction.dot(direction)
 		if perpendicular.length() > 0.0005:
 			_laser_bow_direction = perpendicular.normalized()
-		_laser_bow = lerpf(_laser_bow, clampf(perpendicular.length() * 3.0, 0.0, 0.1), 0.3)
+		_laser_bow = lerpf(_laser_bow, clampf(perpendicular.length() * 1.5, 0.0, 0.05), 0.3)
 		if not _laser_hit_ready:
 			_laser_hit = point
 			_laser_hit_ready = true
@@ -731,8 +731,9 @@ func _update_laser() -> void:
 		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
 		for i in 40:
 			var t: float = float(i) / 39.0
-			# One large bow between the hand and the hit point.
-			var curve: float = sin(t * PI)
+			# Stiff near the hand, with the small remaining bend carried toward
+			# the middle of the beam; both ends stay anchored.
+			var curve: float = pow(sin(t * PI), 2.0) * t
 			var vertex: Vector3 = origin.lerp(point, t)
 			vertex += side * curve * bow
 			_laser_mesh.surface_add_vertex(vertex)
