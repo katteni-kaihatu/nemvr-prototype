@@ -84,6 +84,7 @@ func _ready() -> void:
 			_log("OpenXR runtime unavailable; desktop mode")
 	mirror.source = camera
 	floor_reflection.source = camera
+	projection.hand_ik_enabled = options.has("hand-ik")
 	if options.has("benchmark"):
 		_benchmark_seconds = 10.0 if options["benchmark"] is bool else float(options["benchmark"])
 	_setup_quality()

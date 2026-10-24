@@ -63,6 +63,7 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--scenario walk`: 前後に歩いて歩行アニメーションと姿勢同期を確認する
 - `--xr`: OpenXR ランタイムがあれば XR カメラで起動する
 - `--xr-mock`: HMD なしで XR カメラ経路を確認する（テスト・撮影用）
+- `--hand-ik`: 同期した手の位置へ腕を合わせる実験的な簡易 IK
 - `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 

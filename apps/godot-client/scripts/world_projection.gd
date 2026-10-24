@@ -20,6 +20,7 @@ var _self_motion_time: float = 0.0
 var _assets: Dictionary = {}
 var _requested: Dictionary = {}
 var _asset_attempts: Dictionary = {}
+var hand_ik_enabled: bool = false
 var _loader: Object
 
 func apply_snapshot(snapshot: Array, own_id: String) -> void:
@@ -102,6 +103,13 @@ func _update(id: String, entity: Dictionary) -> void:
 		if created:
 			root.position = position_value
 		_set_layers(root, SELF_LAYER if id == self_id else WORLD_LAYER)
+		var animator: Node = root.get_node_or_null("Avatar/AvatarAnimator")
+		if hand_ik_enabled and animator != null and animator.has_method("set_hand_targets"):
+			animator.call("set_hand_targets",
+				vec3(dims.get("space.xr.left.position", [0, 0, 0])),
+				vec3(dims.get("space.xr.right.position", [0, 0, 0])),
+				bool(dims.get("space.xr.left.tracked", false)),
+				bool(dims.get("space.xr.right.tracked", false)))
 		for side: String in ["left", "right"]:
 			var hand: Node3D = root.get_node_or_null(side.capitalize() + "Hand")
 			if hand == null:
