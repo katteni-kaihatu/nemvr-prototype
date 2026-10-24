@@ -28,6 +28,10 @@ var _meter_only: bool = false
 var _offer_type: String = ""
 var _offer_sdp: String = ""
 var _candidates: Array[String] = []
+var _received_packets: int = 0
+var _test_tone: bool = false
+var _tone_phase: float = 0.0
+var _sent_packets: int = 0
 
 
 func start_meter(input_device: String = "") -> void:
@@ -42,7 +46,7 @@ func start_meter(input_device: String = "") -> void:
 	_setup_playback()
 	_set_state("meter")
 
-func start(server_url: String, input_device: String = "") -> void:
+func start(server_url: String, input_device: String = "", test_tone: bool = false) -> void:
 	if enabled or server_url.is_empty():
 		return
 	if not input_device.is_empty():
@@ -50,6 +54,7 @@ func start(server_url: String, input_device: String = "") -> void:
 	_set_input(input_device)
 	enabled = true
 	_meter_only = false
+	_test_tone = test_tone
 	_setup_capture()
 	_set_state("connecting")
 	var manager := Engine.get_singleton("GDExtensionManager") if Engine.has_singleton("GDExtensionManager") else null
@@ -126,6 +131,7 @@ func _setup_capture() -> void:
 	AudioServer.add_bus()
 	AudioServer.set_bus_name(_silent_bus, "VoiceSilent")
 	AudioServer.set_bus_mute(_silent_bus, true)
+	AudioServer.set_bus_mute(_bus, true)
 	AudioServer.set_bus_send(_bus, "VoiceSilent")
 	microphone = AudioStreamPlayer.new()
 	microphone.stream = AudioStreamMicrophone.new()
@@ -225,6 +231,22 @@ func get_output_level() -> float:
 	return output_level
 
 func _send() -> void:
+	if _test_tone:
+		var tone := PackedByteArray()
+		tone.resize(FRAME_SAMPLES * 2)
+		for i in FRAME_SAMPLES:
+			var sample: float = sin(_tone_phase) * 0.25
+			_tone_phase = fmod(_tone_phase + TAU * 440.0 / RATE, TAU)
+			tone.encode_s16(i * 2, int(sample * 32767.0))
+		input_level = 0.25
+		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
+		_output_peak = 0.0
+		if channel != null and channel.get_ready_state() == WebRTCDataChannel.STATE_OPEN:
+			var sent_tone: int = channel.put_packet(tone)
+			if sent_tone == OK and _sent_packets == 0:
+				_sent_packets = 1
+				print("VOICE_TX audio started")
+		return
 	if capture == null:
 		return
 	var frames: PackedVector2Array = capture.get_buffer(FRAME_SAMPLES)
@@ -246,13 +268,19 @@ func _send() -> void:
 	for i in FRAME_SAMPLES:
 		var sample: float = clampf((frames[i].x + frames[i].y) * 0.5, -1.0, 1.0)
 		bytes.encode_s16(i * 2, int(sample * 32767.0))
-	channel.put_packet(bytes)
+	var sent: int = channel.put_packet(bytes)
+	if sent == OK and _sent_packets == 0:
+		_sent_packets = 1
+		print("VOICE_TX audio started")
 
 func _receive() -> void:
 	while channel.get_available_packet_count() > 0:
 		var packet: PackedByteArray = channel.get_packet()
 		if packet.size() < 2 or playback == null:
 			continue
+		_received_packets += 1
+		if _received_packets == 1:
+			print("VOICE_RX audio started")
 		var count: int = packet.size() / 2
 		var peak: float = 0.0
 		for i in count:

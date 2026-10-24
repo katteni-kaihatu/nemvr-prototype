@@ -487,7 +487,7 @@ func _state(event: Dictionary) -> void:
 			pitch = deg_to_rad(float(options["pitch"]))
 		if voice != null:
 			if options.has("voice"):
-				voice.call("start", server_edit.text, _selected_mic())
+				voice.call("start", server_edit.text, _selected_mic(), options.has("voice-test-tone"))
 			elif DisplayServer.get_name() != "headless":
 				voice.call("start_meter", _selected_mic())
 		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
@@ -659,7 +659,7 @@ func _on_xr_menu_action(name: String) -> void:
 				_mic_selected(mic_option.selected)
 				if voice != null:
 					voice.call("stop")
-					voice.call("start", server_edit.text, _selected_mic())
+					voice.call("start", server_edit.text, _selected_mic(), options.has("voice-test-tone"))
 		"close":
 			xr_menu.visible = false
 

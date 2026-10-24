@@ -61,7 +61,7 @@ try {
     await writeFile(resolve(output, "Start-SteamVR.bat"),
       '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode on -- --xr --voice --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%"\r\n');
     await writeFile(resolve(output, "Start-Desktop.bat"),
-      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode off\r\n');
+      '@echo off\r\nstart "" "%~dp0ProtoSNS-godot.exe" --xr-mode off -- --voice --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%"\r\n');
     await writeFile(resolve(output, "Start-SteamVR-Debug.bat"),
       '@echo off\r\ncd /d "%~dp0"\r\nset XR_LOADER_DEBUG=all\r\n"%~dp0ProtoSNS-godot.exe" --verbose --xr-mode on -- --xr --voice --server wss://nemvr.nemnomi.dev/ws --name "%USERNAME%" > openxr-debug.log 2>&1\r\necho Exit code %ERRORLEVEL%\r\npause\r\n');
     await writeFile(resolve(output, "README.txt"),
