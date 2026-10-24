@@ -22,6 +22,8 @@ var _clock: float = 0.0
 var _bus: int = -1
 var _silent_bus: int = -1
 var input_level: float = 0.0
+var output_level: float = 0.0
+var _output_peak: float = 0.0
 var _meter_only: bool = false
 var _offer_type: String = ""
 var _offer_sdp: String = ""
@@ -76,6 +78,8 @@ func start(server_url: String, input_device: String = "") -> void:
 func stop() -> void:
 	enabled = false
 	input_level = 0.0
+	output_level = 0.0
+	_output_peak = 0.0
 	if channel != null:
 		channel.close()
 	if pc != null:
@@ -217,17 +221,24 @@ func _process(delta: float) -> void:
 func get_input_level() -> float:
 	return input_level
 
+func get_output_level() -> float:
+	return output_level
+
 func _send() -> void:
 	if capture == null:
 		return
 	var frames: PackedVector2Array = capture.get_buffer(FRAME_SAMPLES)
 	if frames.size() < FRAME_SAMPLES:
 		input_level = lerpf(input_level, 0.0, 0.2)
+		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
+		_output_peak = 0.0
 		return
 	var peak: float = 0.0
 	for i in FRAME_SAMPLES:
 		peak = maxf(peak, absf((frames[i].x + frames[i].y) * 0.5))
 	input_level = lerpf(input_level, clampf(peak * 2.5, 0.0, 1.0), 0.4)
+	output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
+	_output_peak = 0.0
 	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN:
 		return
 	var bytes := PackedByteArray()
@@ -243,6 +254,9 @@ func _receive() -> void:
 		if packet.size() < 2 or playback == null:
 			continue
 		var count: int = packet.size() / 2
+		var peak: float = 0.0
 		for i in count:
 			var sample: float = float(packet.decode_s16(i * 2)) / 32768.0
+			peak = maxf(peak, absf(sample))
 			playback.push_frame(Vector2(sample, sample))
+		_output_peak = maxf(_output_peak, peak)

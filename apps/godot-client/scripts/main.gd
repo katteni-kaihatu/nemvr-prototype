@@ -15,6 +15,8 @@ const VoiceChat = preload("res://scripts/voice_chat.gd")
 @onready var laser_dot: MeshInstance3D = $World/LaserDot
 @onready var mic_label: Label = $Interface/HUD/MicLabel
 @onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
+@onready var out_label: Label = $Interface/HUD/OutLabel
+@onready var out_level: ProgressBar = $Interface/HUD/OutLevel
 @onready var xr_menu: Node3D = $World/Player/XRRig/XRCamera/XRMenu
 @onready var mirror: Mirror = $World/Mirror
 @onready var floor_reflection: FloorReflection = $World/FloorReflection
@@ -392,6 +394,9 @@ func _process(delta: float) -> void:
 		mic_label.visible = true
 		mic_level.visible = true
 		mic_level.value = level
+		out_label.visible = true
+		out_level.visible = true
+		out_level.value = float(voice.call("get_output_level"))
 		if xr_active:
 			var mic_name: String = _selected_mic()
 			if mic_name.is_empty():
@@ -400,8 +405,12 @@ func _process(delta: float) -> void:
 	else:
 		mic_label.visible = false
 		mic_level.visible = false
-	if xr_active and voice == null:
-		xr_status.text = "%d FPS  /  %s" % [Engine.get_frames_per_second(), status]
+		out_label.visible = false
+		out_level.visible = false
+	if xr_active:
+		xr_status.visible = xr_menu.visible or debug_label.visible
+	else:
+		xr_status.visible = false
 	if debug_label.visible:
 		var position: Vector3 = player.position
 		debug_label.text = "FPS %d  /  entities %d\npos %.2f, %.2f, %.2f  /  yaw %.1f°\ncarry %s" % [

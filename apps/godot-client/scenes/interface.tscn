@@ -1,7 +1,14 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [sub_resource type="StyleBoxFlat" id="MicBackground"]
 bg_color = Color(0.035, 0.07, 0.08, 0.9)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="OutFill"]
+bg_color = Color(0.95, 0.62, 0.22, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -153,15 +160,45 @@ horizontal_alignment = 2
 autowrap_mode = 3
 mouse_filter = 2
 
+[node name="OutLabel" type="Label" parent="HUD"]
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -188.0
+offset_right = -20.0
+offset_bottom = -166.0
+text = "OUT"
+horizontal_alignment = 2
+mouse_filter = 2
+
+[node name="OutLevel" type="ProgressBar" parent="HUD"]
+visible = false
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -164.0
+offset_right = -20.0
+offset_bottom = -146.0
+max_value = 1.0
+step = 0.01
+show_percentage = false
+theme_override_styles/background = SubResource("MicBackground")
+theme_override_styles/fill = SubResource("OutFill")
+mouse_filter = 2
+
 [node name="MicLabel" type="Label" parent="HUD"]
 anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -220.0
-offset_top = -122.0
+offset_top = -140.0
 offset_right = -20.0
-offset_bottom = -100.0
+offset_bottom = -118.0
 text = "MIC"
 horizontal_alignment = 2
 mouse_filter = 2
@@ -173,9 +210,9 @@ anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = -220.0
-offset_top = -98.0
+offset_top = -116.0
 offset_right = -20.0
-offset_bottom = -80.0
+offset_bottom = -98.0
 max_value = 1.0
 step = 0.01
 show_percentage = false
