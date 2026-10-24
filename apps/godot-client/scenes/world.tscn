@@ -74,6 +74,15 @@ shader_parameter/glow_energy = 0.9
 shader_parameter/fade_start = 15.0
 shader_parameter/fade_end = 56.0
 
+[sub_resource type="BoxMesh" id="HandMesh"]
+size = Vector3(0.07, 0.06, 0.14)
+
+[sub_resource type="StandardMaterial3D" id="HandMaterial"]
+albedo_color = Color(0.72, 0.9, 1, 1)
+emission_enabled = true
+emission = Color(0.25, 0.65, 0.75, 1)
+emission_energy_multiplier = 0.6
+
 [sub_resource type="BoxMesh" id="MarkerMesh"]
 size = Vector3(0.025, 0.006, 48)
 
@@ -151,9 +160,17 @@ current = false
 tracker = "left_hand"
 pose = &"aim"
 
+[node name="HandMesh" type="MeshInstance3D" parent="Player/XRRig/LeftHand"]
+mesh = SubResource("HandMesh")
+material_override = SubResource("HandMaterial")
+
 [node name="RightHand" type="XRController3D" parent="Player/XRRig"]
 tracker = "right_hand"
 pose = &"aim"
+
+[node name="HandMesh" type="MeshInstance3D" parent="Player/XRRig/RightHand"]
+mesh = SubResource("HandMesh")
+material_override = SubResource("HandMaterial")
 
 [node name="Camera" type="Camera3D" parent="Player"]
 position = Vector3(0, 1.6, 0)
