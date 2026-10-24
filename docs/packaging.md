@@ -284,3 +284,11 @@ scripts/package-linux.sh      Linux AppImage のビルド
 scripts/package-windows.sh    Windows zip のビルド
 .cargo/config.toml            Windows GNU ターゲットのリンカ設定
 ```
+## Build time
+
+Native code changes require the release Rust build. GDScript, scene, or UI-only
+changes can reuse the existing native library with `pnpm package:linux --no-build`
+(or `pnpm package:godot:windows --no-build`). Packaging no longer builds the
+debug native library; the release export only needs the release library.
+Incremental compilation is enabled for debug builds and disabled for release
+and cross-compiled artifacts to keep them reproducible.

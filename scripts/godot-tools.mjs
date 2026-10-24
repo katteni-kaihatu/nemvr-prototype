@@ -32,7 +32,11 @@ export async function build({ release = false, windows = false, skipCargo = fals
     // Interrupted or concurrent Rust builds have produced stale incremental
     // objects with undefined hidden LLVM symbols. Release packaging must not
     // depend on that cache.
-    const env = { ...process.env, CARGO_INCREMENTAL: "0" };
+    const env = { ...process.env };
+    // Release bundles must be reproducible; debug builds benefit from Cargo's
+    // incremental cache on repeat runs.
+    if (release || windows) env.CARGO_INCREMENTAL = "0";
+    else if (env.CARGO_INCREMENTAL === undefined) env.CARGO_INCREMENTAL = "1";
     if (windows) {
       const linker = env.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER || "x86_64-w64-mingw32-gcc";
       const pthread = spawnSync(linker, ["-print-file-name=libpthread.a"], { encoding: "utf8" });

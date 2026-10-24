@@ -27,8 +27,6 @@ try {
   }
   const skipCargo = args.includes("--no-build");
   await build({ release: true, windows: platform === "windows", skipCargo });
-  // The editor runs on the host even when exporting the Windows bridge.
-  await build({ skipCargo });
   await importProject(bin);
   temporary = await mkdtemp(resolve(tmpdir(), "proto-godot-export-"));
   const templateHome = resolve(temporary, "godot/export_templates");
