@@ -11,6 +11,8 @@ const VoiceChat = preload("res://scripts/voice_chat.gd")
 @onready var xr_rig: Node3D = $World/Player/XRRig
 @onready var xr_status: Label3D = $World/Player/XRRig/XRCamera/XRStatus
 @onready var teleport_marker: MeshInstance3D = $World/TeleportMarker
+@onready var mic_label: Label = $Interface/HUD/MicLabel
+@onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
 @onready var xr_menu: Node3D = $World/Player/XRRig/XRCamera/XRMenu
 @onready var mirror: Mirror = $World/Mirror
 @onready var floor_reflection: FloorReflection = $World/FloorReflection
@@ -337,7 +339,17 @@ func _process(delta: float) -> void:
 	if _teleport_marker_until > 0.0 and now > _teleport_marker_until:
 		_teleport_marker_until = 0.0
 		teleport_marker.visible = false
-	if xr_active:
+	if voice != null:
+		var level: float = float(voice.call("get_input_level"))
+		mic_label.visible = true
+		mic_level.visible = true
+		mic_level.value = level
+		if xr_active:
+			xr_status.text = "%d FPS  /  %s  /  MIC %d%%" % [Engine.get_frames_per_second(), status, int(level * 100.0)]
+	else:
+		mic_label.visible = false
+		mic_level.visible = false
+	if xr_active and voice == null:
 		xr_status.text = "%d FPS  /  %s" % [Engine.get_frames_per_second(), status]
 	if debug_label.visible:
 		var position: Vector3 = player.position

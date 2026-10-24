@@ -76,7 +76,9 @@ export async function importProject(bin = godotBinary()) {
   }
   mkdirSync(resolve(project, ".godot"), { recursive: true });
   writeFileSync(resolve(project, ".godot/extension_list.cfg"), "res://native/proto.gdextension\n");
-  if (process.env.PROTO_SKIP_GODOT_IMPORT === "1") return;
+  // The WebRTC GDExtension can abort the headless editor while unloading.
+  // Runtime/export do not need the editor import pass.
+  if (process.env.PROTO_FORCE_IMPORT !== "1") return;
   await run(bin, ["--headless", "--path", project, "--editor", "--import"]);
 }
 

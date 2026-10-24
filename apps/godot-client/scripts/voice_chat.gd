@@ -19,6 +19,7 @@ var playback_player: AudioStreamPlayer
 var playback: AudioStreamGeneratorPlayback
 var _clock: float = 0.0
 var _bus: int = -1
+var input_level: float = 0.0
 var _offer_type: String = ""
 var _offer_sdp: String = ""
 var _candidates: Array[String] = []
@@ -54,6 +55,7 @@ func start(server_url: String) -> void:
 
 func stop() -> void:
 	enabled = false
+	input_level = 0.0
 	if channel != null:
 		channel.close()
 	if pc != null:
@@ -167,11 +169,21 @@ func _process(delta: float) -> void:
 		_clock -= FRAME_SECONDS
 		_send()
 
+func get_input_level() -> float:
+	return input_level
+
 func _send() -> void:
-	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN or capture == null:
+	if capture == null:
 		return
 	var frames: PackedVector2Array = capture.get_buffer(FRAME_SAMPLES)
 	if frames.size() < FRAME_SAMPLES:
+		input_level = lerpf(input_level, 0.0, 0.2)
+		return
+	var peak: float = 0.0
+	for i in FRAME_SAMPLES:
+		peak = maxf(peak, absf((frames[i].x + frames[i].y) * 0.5))
+	input_level = lerpf(input_level, clampf(peak * 2.5, 0.0, 1.0), 0.4)
+	if channel == null or channel.get_ready_state() != WebRTCDataChannel.STATE_OPEN:
 		return
 	var bytes := PackedByteArray()
 	bytes.resize(FRAME_SAMPLES * 2)
