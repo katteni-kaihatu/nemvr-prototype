@@ -485,7 +485,13 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _send_pose() -> void:
 	var head: Quaternion = camera.global_basis.get_rotation_quaternion()
-	_command({"op": "pose", "position": movement["position"], "head": [head.x, head.y, head.z, head.w], "crouch": movement.get("crouch", 0), "lean": movement.get("lean", 0)})
+	var pose: Dictionary = {"op": "pose", "position": movement["position"],
+		"head": [head.x, head.y, head.z, head.w], "crouch": movement.get("crouch", 0),
+		"lean": movement.get("lean", 0)}
+	if xr_active:
+		pose["leftHand"] = xr_rig.call("hand_pose", "left")
+		pose["rightHand"] = xr_rig.call("hand_pose", "right")
+	_command(pose)
 
 func _toggle_carry() -> void:
 	if not carry_id.is_empty():

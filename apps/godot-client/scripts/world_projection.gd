@@ -102,6 +102,15 @@ func _update(id: String, entity: Dictionary) -> void:
 		if created:
 			root.position = position_value
 		_set_layers(root, SELF_LAYER if id == self_id else WORLD_LAYER)
+		for side: String in ["left", "right"]:
+			var hand: Node3D = root.get_node_or_null(side.capitalize() + "Hand")
+			if hand == null:
+				continue
+			var tracked: bool = bool(dims.get("space.xr.%s.tracked" % side, false))
+			hand.visible = tracked
+			if tracked:
+				hand.global_transform = Transform3D(Basis(quat(dims.get("space.xr.%s.rotation" % side, [0, 0, 0, 1]))),
+					vec3(dims.get("space.xr.%s.position" % side, [0, 0, 0])))
 	else:
 		root.position = position_value
 		root.rotation = Vector3(float(dims.get("space.pitch", 0)), float(dims.get("space.yaw", 0)), 0)
@@ -127,6 +136,10 @@ func _build(root: Node3D, dims: Dictionary, kind: String) -> void:
 				for side: float in [-1.0, 1.0]:
 					_box(root, Vector3(0.13, 0.6, 0.15), Vector3(side * 0.28, 1.03, 0), color)
 					_box(root, Vector3(0.15, 0.65, 0.17), Vector3(side * 0.12, 0.35, 0), color.darkened(0.2))
+			for hand_name: String in ["LeftHand", "RightHand"]:
+				var hand: MeshInstance3D = _box(root, Vector3(0.09, 0.09, 0.15), Vector3.ZERO, Color(0.72, 0.9, 1.0))
+				hand.name = hand_name
+				hand.visible = false
 			_label(root, str(dims.get("peer.name", "Guest")), Vector3(0, 1.95, 0))
 		"box":
 			var size: float = clampf(float(dims.get("box.size", 1)), 0.01, 100)
@@ -291,7 +304,6 @@ func _process(_delta: float) -> void:
 		else:
 			node.scale.y = 1.0
 			_animate_avatar(node, motion_speed, crouch)
-		node.rotation.z = lerpf(float(a["lean"]), float(b["lean"]), weight) * 0.3
 
 func update_self(position_value: Vector3, yaw: float, crouch: float, lean: float, pitch: float = 0.0) -> void:
 	if views.has(self_id):

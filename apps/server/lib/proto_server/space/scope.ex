@@ -16,6 +16,8 @@ defmodule ProtoServer.Space.Scope do
 
   @client_peer_dims ~w(
     space.position space.yaw space.pitch space.roll space.scale space.deform space.head space.crouch space.lean
+    space.xr.left.position space.xr.left.rotation space.xr.left.tracked
+    space.xr.right.position space.xr.right.rotation space.xr.right.tracked
     peer.ipfsPeerId
   )
 
@@ -78,8 +80,9 @@ defmodule ProtoServer.Space.Scope do
   end
 
   @spec can_create_kind?(t(), binary()) :: boolean()
-  def can_create_kind?(%__MODULE__{can_create: true}, kind) when kind in ["box", "image", "file", "link"],
-    do: true
+  def can_create_kind?(%__MODULE__{can_create: true}, kind)
+      when kind in ["box", "image", "file", "link"],
+      do: true
 
   def can_create_kind?(_scope, _kind), do: false
 

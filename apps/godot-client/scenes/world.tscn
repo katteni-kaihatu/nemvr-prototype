@@ -147,6 +147,12 @@ script = ExtResource("4")
 [node name="XRCamera" type="XRCamera3D" parent="Player/XRRig"]
 current = false
 
+[node name="LeftHand" type="XRController3D" parent="Player/XRRig"]
+tracker = "left_hand"
+
+[node name="RightHand" type="XRController3D" parent="Player/XRRig"]
+tracker = "right_hand"
+
 [node name="Camera" type="Camera3D" parent="Player"]
 position = Vector3(0, 1.6, 0)
 current = true

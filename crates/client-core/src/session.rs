@@ -142,8 +142,23 @@ impl ClientSession {
                 let head: [f64; 4] = array(command, "head")?;
                 let crouch = number(command, "crouch")?;
                 let lean = number(command, "lean")?;
-                self.pose = Some(json!({"space.position":position,"space.head":head,
-                    "space.crouch":crouch,"space.lean":lean}));
+                let mut pose = json!({"space.position":position,"space.head":head,
+                    "space.crouch":crouch,"space.lean":lean});
+                for (key, prefix) in [
+                    ("leftHand", "space.xr.left"),
+                    ("rightHand", "space.xr.right"),
+                ] {
+                    let Some(hand) = command.get(key) else {
+                        continue;
+                    };
+                    let hand_position: [f64; 3] = array(hand, "position")?;
+                    let hand_rotation: [f64; 4] = array(hand, "rotation")?;
+                    let tracked = hand.get("tracked").and_then(Value::as_bool).unwrap_or(true);
+                    pose[format!("{prefix}.position").as_str()] = json!(hand_position);
+                    pose[format!("{prefix}.rotation").as_str()] = json!(hand_rotation);
+                    pose[format!("{prefix}.tracked").as_str()] = json!(tracked);
+                }
+                self.pose = Some(pose);
                 Ok(json!({"ok":true}))
             }
             "drop" | "avatar" => {

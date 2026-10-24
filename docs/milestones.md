@@ -173,6 +173,7 @@ Bevy の現行機能を Godot 4.6.3 へ移植し、同じ space v2 / Kubo で動
 - [x] VPS の Kubo に 8443 `/tls/ws` で接続 (SNI を保つ DNS 対応)
 - [x] Linux の `dev:client` / `package:linux` を Godot へ切り替え
 - [x] OpenXR の XR カメラ経路と `--xr-mock` テスト
+- [x] 左右の手の位置・回転・トラッキング状態の同期
 - [ ] Windows 実機の GPU / IME / ドロップ
 - [ ] Windows の `package:windows` を Godot へ切り替え
 - [ ] Bevy の撤去 (比較用に当面延期)

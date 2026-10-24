@@ -79,7 +79,9 @@ pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
 デスクトップ表示へ戻る。`--xr-mock` は HMD なしで XR カメラ経路を確認する
 テスト・撮影用モード。
 
-手・コントローラの姿勢同期、XR 入力、VR UI、アバター IK は次の段階。
+左右の手の位置・回転・トラッキング状態を `space.xr.left.*` / `space.xr.right.*` として
+同期する。リモート側では手の位置に小さなハンドメッシュを表示する。手の IK、
+VR 入力、VR UI、実機 HMD での受け入れは次の段階。
 
 ## 描画
 

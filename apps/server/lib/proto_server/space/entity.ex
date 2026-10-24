@@ -54,6 +54,8 @@ defmodule ProtoServer.Space.Entity do
           |> put_value("peer.color", Map.get(object, "color"))
           |> put_value("peer.avatarCid", Map.get(object, "avatarCid"))
           |> put_value("peer.ipfsPeerId", Map.get(object, "ipfsPeerId"))
+          |> put_hand("space.xr.left", Map.get(object, "leftHand"))
+          |> put_hand("space.xr.right", Map.get(object, "rightHand"))
 
         _ ->
           dimensions
@@ -114,6 +116,8 @@ defmodule ProtoServer.Space.Entity do
         |> Map.put("lean", Map.get(dimensions, "space.lean", 0))
         |> maybe_put("avatarCid", Map.get(dimensions, "peer.avatarCid"))
         |> maybe_put("ipfsPeerId", Map.get(dimensions, "peer.ipfsPeerId"))
+        |> maybe_put("leftHand", hand_from_dims(dimensions, "left"))
+        |> maybe_put("rightHand", hand_from_dims(dimensions, "right"))
 
       _ ->
         base
@@ -137,4 +141,30 @@ defmodule ProtoServer.Space.Entity do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+  defp put_hand(dimensions, prefix, nil), do: dimensions
+
+  defp put_hand(dimensions, prefix, hand) when is_map(hand) do
+    dimensions
+    |> put_value(prefix <> ".position", Map.get(hand, "position"))
+    |> put_value(prefix <> ".rotation", Map.get(hand, "rotation"))
+    |> put_value(prefix <> ".tracked", Map.get(hand, "tracked"))
+  end
+
+  defp put_hand(dimensions, _prefix, _hand), do: dimensions
+
+  defp hand_from_dims(dimensions, side) do
+    prefix = "space.xr." <> side
+
+    cond do
+      Map.get(dimensions, prefix <> ".tracked") != true ->
+        nil
+
+      true ->
+        %{
+          "position" => Map.get(dimensions, prefix <> ".position", [0, 0, 0]),
+          "rotation" => Map.get(dimensions, prefix <> ".rotation", [0, 0, 0, 1]),
+          "tracked" => true
+        }
+    end
+  end
 end

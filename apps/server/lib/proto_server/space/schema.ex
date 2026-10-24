@@ -107,6 +107,9 @@ defmodule ProtoServer.Space.Schema do
     end
   end
 
+  def normalize("space.xr.left.rotation", value), do: normalize("space.head", value)
+  def normalize("space.xr.right.rotation", value), do: normalize("space.head", value)
+
   def normalize("time.playback", value) when is_map(value) do
     playing = Map.get(value, "playing")
     time = Map.get(value, "time")
