@@ -7,6 +7,7 @@ const FloorReflection = preload("res://scripts/floor_reflection.gd")
 @onready var projection: WorldProjection = $World/Entities
 @onready var player: Node3D = $World/Player
 @onready var camera: Camera3D = $World/Player/Camera
+@onready var xr_rig: Node3D = $World/Player/XRRig
 @onready var mirror: Mirror = $World/Mirror
 @onready var floor_reflection: FloorReflection = $World/FloorReflection
 @onready var world_environment: WorldEnvironment = $World/Environment
@@ -56,6 +57,7 @@ var _quitting: bool = false
 var _avatar_path: String = ""
 var _avatar_reset_pending: bool = false
 var _ipfs_ready: bool = false
+var xr_active: bool = false
 var quality: String = "high"
 var _benchmark_samples: Array[float] = []
 var _benchmark_started_at: float = 0.0
@@ -69,6 +71,13 @@ func _ready() -> void:
 	projection.asset_requested.connect(_fetch)
 	projection.observed.connect(_observe)
 	projection.notice.connect(_log)
+	if options.has("xr") or options.has("xr-mock"):
+		xr_active = xr_rig.call("activate", camera, options.has("xr-mock"))
+		if xr_active:
+			camera = xr_rig.get_node("XRCamera")
+			_log("OpenXR active" if not options.has("xr-mock") else "XR mock active")
+		else:
+			_log("OpenXR runtime unavailable; desktop mode")
 	mirror.source = camera
 	floor_reflection.source = camera
 	if options.has("benchmark"):

@@ -61,6 +61,8 @@ HUD 右上には FPS とフレーム時間を常時表示する。
 - `--quality high|medium|low`: 画質プリセットを一時的に指定する (Lobby の選択より優先)
 - `--benchmark <秒>`: 指定秒数の FPS を計測し、`benchmark` イベントを出して終了する
 - `--scenario walk`: 前後に歩いて歩行アニメーションと姿勢同期を確認する
+- `--xr`: OpenXR ランタイムがあれば XR カメラで起動する
+- `--xr-mock`: HMD なしで XR カメラ経路を確認する（テスト・撮影用）
 - `PROTO_KUBO_WSS_ONLY=1`: TCP 4001 を試さず、Kubo の `/tls/ws` だけで接続する
 - `--screenshot <path>` / `--screenshot-delay <秒>`: 自動撮影
 
@@ -69,6 +71,15 @@ pnpm dev:client -- --server wss://nemvr.nemnomi.dev/ws --name visual \
   --position 0,0,5 --pitch -6 --hide-hud \
   --screenshot /tmp/proto.png --screenshot-delay 2.5 --duration 8
 ```
+
+## XR
+
+`--xr` で OpenXR を初期化し、`XROrigin3D` / `XRCamera3D` に切り替える。HMD の
+頭部姿勢は既存の位置・`space.head` に流用する。ランタイムがない場合は
+デスクトップ表示へ戻る。`--xr-mock` は HMD なしで XR カメラ経路を確認する
+テスト・撮影用モード。
+
+手・コントローラの姿勢同期、XR 入力、VR UI、アバター IK は次の段階。
 
 ## 描画
 

@@ -13,7 +13,7 @@ try {
   temporary = await mkdtemp(resolve(tmpdir(), "proto-godot-tests-"));
   const tests = args.includes("--mirror") ? ["mirror_render_test.gd"]
     : (await readdir(resolve(project, "tests"))).filter((name) =>
-      name === "native_bridge.gd" || name === "presentation_test.gd" ||
+      name === "native_bridge.gd" || name === "presentation_test.gd" || name === "xr_rig_test.gd" ||
       (/^avatar.*\.gd$/.test(name) && name !== "avatar_pack.gd")).sort();
   if (!tests.length) throw new Error("No Godot tests found");
   for (const test of tests) {

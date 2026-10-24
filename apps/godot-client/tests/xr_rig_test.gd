@@ -1,0 +1,30 @@
+extends SceneTree
+var checks := 0
+var failures := 0
+
+func _check(condition: bool, label: String) -> void:
+	checks += 1
+	if not condition:
+		failures += 1
+		push_error("XR_TEST failed: " + label)
+
+func _initialize() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
+	var world: Node3D = load("res://scenes/world.tscn").instantiate()
+	root.add_child(world)
+	var rig: Node3D = world.get_node("Player/XRRig")
+	var desktop: Camera3D = world.get_node("Player/Camera")
+	var xr_camera: XRCamera3D = world.get_node("Player/XRRig/XRCamera")
+	_check(not xr_camera.current, "XR camera starts inactive")
+	var active: bool = rig.call("activate", desktop, true)
+	_check(active, "mock XR activates")
+	_check(xr_camera.current, "XR camera becomes current")
+	_check(not desktop.current, "desktop camera is disabled")
+	_check(is_equal_approx(xr_camera.position.y, 1.6), "mock eye height")
+	rig.call("deactivate")
+	_check(desktop.current, "desktop camera restores")
+	_check(not xr_camera.current, "XR camera deactivates")
+	print("XR_TEST " + JSON.stringify({"checks": checks, "failures": failures}))
+	quit(0 if failures == 0 else 1)

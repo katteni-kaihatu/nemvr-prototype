@@ -1,8 +1,9 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/world_projection.gd" id="1"]
 [ext_resource type="Shader" path="res://shaders/sky.gdshader" id="2"]
 [ext_resource type="Shader" path="res://shaders/floor_grid.gdshader" id="3"]
+[ext_resource type="Script" path="res://scripts/xr_rig.gd" id="4"]
 
 [sub_resource type="ShaderMaterial" id="SkyMaterial"]
 shader = ExtResource("2")
@@ -139,6 +140,12 @@ material_override = SubResource("MarkerMaterial")
 script = ExtResource("1")
 
 [node name="Player" type="Node3D" parent="."]
+
+[node name="XRRig" type="XROrigin3D" parent="Player"]
+script = ExtResource("4")
+
+[node name="XRCamera" type="XRCamera3D" parent="Player/XRRig"]
+current = false
 
 [node name="Camera" type="Camera3D" parent="Player"]
 position = Vector3(0, 1.6, 0)

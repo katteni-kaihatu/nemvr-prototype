@@ -24,7 +24,7 @@ GDScript、同期・IPFS・移動計算は Bevy 非依存の `crates/client-core
 VRM 0.x アバター (`.vrm` のドロップ / `--avatar`)、idle / walk / crouch の
 プロシージャルアニメーション、自分のアバターを見る鏡 (`V`)。
 
-未実装: VRM 1.0、指・spring bone、OpenXR / PC VR、動画、URL 取り込み。
+未実装: VRM 1.0、指・spring bone、OpenXR の実機入力・手の同期、動画、URL 取り込み。
 
 ```sh
 nix develop
