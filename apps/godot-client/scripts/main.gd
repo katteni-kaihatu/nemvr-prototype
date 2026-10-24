@@ -11,6 +11,8 @@ const VoiceChat = preload("res://scripts/voice_chat.gd")
 @onready var xr_rig: Node3D = $World/Player/XRRig
 @onready var xr_status: Label3D = $World/Player/XRRig/XRCamera/XRStatus
 @onready var teleport_marker: MeshInstance3D = $World/TeleportMarker
+@onready var laser: MeshInstance3D = $World/Laser
+@onready var laser_dot: MeshInstance3D = $World/LaserDot
 @onready var mic_label: Label = $Interface/HUD/MicLabel
 @onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
 @onready var xr_menu: Node3D = $World/Player/XRRig/XRCamera/XRMenu
@@ -89,6 +91,8 @@ func _ready() -> void:
 		if xr_active:
 			camera = xr_rig.get_node("XRCamera")
 			xr_status.visible = true
+			laser.visible = true
+			laser_dot.visible = true
 			xr_menu.action.connect(_on_xr_menu_action)
 			if options.has("xr-menu"):
 				xr_menu.visible = true
@@ -349,6 +353,7 @@ func _process(delta: float) -> void:
 			yaw -= float(xr_rig.call("get_turn")) * deg_to_rad(90.0) * delta
 		if bool(xr_rig.call("consume_menu")):
 			xr_menu.visible = not xr_menu.visible
+		_update_laser()
 		if bool(xr_rig.call("consume_grab")):
 			var ray: Array = xr_rig.call("hand_ray", "right")
 			if xr_menu.visible:
@@ -389,7 +394,10 @@ func _process(delta: float) -> void:
 		mic_level.visible = true
 		mic_level.value = level
 		if xr_active:
-			xr_status.text = "%d FPS  /  %s  /  MIC %d%%" % [Engine.get_frames_per_second(), status, int(level * 100.0)]
+			var mic_name: String = _selected_mic()
+			if mic_name.is_empty():
+				mic_name = "Default"
+			xr_status.text = "%d FPS  /  %s  /  MIC %d%%  /  %s" % [Engine.get_frames_per_second(), status, int(level * 100.0), mic_name]
 	else:
 		mic_label.visible = false
 		mic_level.visible = false
@@ -603,12 +611,44 @@ func _send_pose() -> void:
 		pose["rightHand"] = xr_rig.call("hand_pose", "right")
 	_command(pose)
 
+func _update_laser() -> void:
+	var ray: Array = xr_rig.call("hand_ray", "right")
+	var origin: Vector3 = ray[0]
+	var direction: Vector3 = ray[1]
+	var distance: float = 4.0
+	var point: Vector3 = origin + direction * distance
+	var menu_target: String = xr_menu.pick(origin, direction) if xr_menu.visible else ""
+	if not menu_target.is_empty():
+		distance = 1.0
+		point = origin + direction * distance
+	else:
+		var hit: Dictionary = projection.pick_hit(origin, direction, distance)
+		if not str(hit["id"]).is_empty():
+			distance = float(hit["distance"])
+			point = hit["position"]
+		else:
+			var floor: Dictionary = projection.floor_hit(origin, direction, 12.0)
+			if floor.get("hit", false):
+				point = floor["position"]
+				distance = origin.distance_to(point)
+	laser.global_position = origin + direction * (distance * 0.5)
+	laser.look_at(point, Vector3.UP)
+	laser.scale = Vector3(1, 1, distance)
+	laser_dot.global_position = point
+
 func _on_xr_menu_action(name: String) -> void:
 	match name:
 		"box":
 			_place_box(_floor_target())
 		"mirror":
 			mirror.set_enabled(not mirror.visible)
+		"mic":
+			if mic_option.item_count > 0:
+				mic_option.selected = (mic_option.selected + 1) % mic_option.item_count
+				_mic_selected(mic_option.selected)
+				if voice != null:
+					voice.call("stop")
+					voice.call("start", server_edit.text, _selected_mic())
 		"close":
 			xr_menu.visible = false
 

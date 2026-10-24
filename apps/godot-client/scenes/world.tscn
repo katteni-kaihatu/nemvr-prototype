@@ -75,6 +75,20 @@ shader_parameter/glow_energy = 0.9
 shader_parameter/fade_start = 15.0
 shader_parameter/fade_end = 56.0
 
+[sub_resource type="BoxMesh" id="LaserMesh"]
+size = Vector3(0.006, 0.006, 1)
+
+[sub_resource type="StandardMaterial3D" id="LaserMaterial"]
+shading_mode = 0
+albedo_color = Color(0.3, 1, 0.9, 1)
+emission_enabled = true
+emission = Color(0.2, 1, 0.8, 1)
+emission_energy_multiplier = 2.0
+
+[sub_resource type="SphereMesh" id="LaserDotMesh"]
+radius = 0.025
+height = 0.05
+
 [sub_resource type="CylinderMesh" id="TeleportMesh"]
 top_radius = 0.32
 bottom_radius = 0.32
@@ -157,6 +171,16 @@ position = Vector3(0, 0.006, 0)
 rotation_degrees = Vector3(0, 90, 0)
 mesh = SubResource("MarkerMesh")
 material_override = SubResource("MarkerMaterial")
+
+[node name="Laser" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("LaserMesh")
+material_override = SubResource("LaserMaterial")
+
+[node name="LaserDot" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("LaserDotMesh")
+material_override = SubResource("LaserMaterial")
 
 [node name="TeleportMarker" type="MeshInstance3D" parent="."]
 visible = false

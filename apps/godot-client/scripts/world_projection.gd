@@ -348,9 +348,10 @@ func floor_hit(origin: Vector3, direction: Vector3, distance: float = 30.0) -> D
 		return {"hit": false}
 	return {"hit": true, "position": point}
 
-func pick(origin: Vector3, direction: Vector3, distance: float = 10.0) -> String:
+func pick_hit(origin: Vector3, direction: Vector3, distance: float = 10.0) -> Dictionary:
 	var chosen: String = ""
 	var nearest: float = distance
+	var point: Vector3 = origin + direction * distance
 	for id: String in views:
 		var dims: Dictionary = entities[id].get("dimensions", {})
 		if dims.get("entity.kind") == "peer":
@@ -366,11 +367,16 @@ func pick(origin: Vector3, direction: Vector3, distance: float = 10.0) -> String
 		var local_end: Vector3 = node.to_local(origin + direction * distance)
 		var hit: Variant = AABB(center - extent, extent * 2).intersects_segment(local_origin, local_end)
 		if hit is Vector3:
-			var length: float = origin.distance_to(node.to_global(hit))
+			var global_hit: Vector3 = node.to_global(hit)
+			var length: float = origin.distance_to(global_hit)
 			if length < nearest:
 				nearest = length
 				chosen = id
-	return chosen
+				point = global_hit
+	return {"id": chosen, "position": point, "distance": nearest}
+
+func pick(origin: Vector3, direction: Vector3, distance: float = 10.0) -> String:
+	return str(pick_hit(origin, direction, distance)["id"])
 
 func obstacles(excluded: String = "") -> Array:
 	var result: Array = []

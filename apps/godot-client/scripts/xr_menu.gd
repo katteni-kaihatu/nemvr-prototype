@@ -2,7 +2,7 @@ extends Node3D
 
 signal action(name: String)
 
-const BUTTONS := [["box", "Box"], ["mirror", "Mirror"], ["close", "Close"]]
+const BUTTONS := [["box", "Box"], ["mirror", "Mirror"], ["mic", "Mic"], ["close", "Close"]]
 var _buttons: Array[Dictionary] = []
 
 func _ready() -> void:
@@ -15,13 +15,13 @@ func _ready() -> void:
 	for index in BUTTONS.size():
 		var key: String = BUTTONS[index][0]
 		var label: String = BUTTONS[index][1]
-		var x: float = -0.3 + index * 0.3
+		var x: float = -0.33 + index * 0.22
 		var material := StandardMaterial3D.new()
 		material.albedo_color = Color(0.10, 0.28, 0.30)
 		material.emission_enabled = true
 		material.emission = Color(0.08, 0.35, 0.36)
 		material.emission_energy_multiplier = 0.8
-		var node: MeshInstance3D = _box(Vector3(0.25, 0.18, 0.02), Vector3(x, 0, 0.02), material)
+		var node: MeshInstance3D = _box(Vector3(0.20, 0.18, 0.02), Vector3(x, 0, 0.02), material)
 		var text := Label3D.new()
 		text.text = label
 		text.font_size = 20
