@@ -74,6 +74,18 @@ shader_parameter/glow_energy = 0.9
 shader_parameter/fade_start = 15.0
 shader_parameter/fade_end = 56.0
 
+[sub_resource type="CylinderMesh" id="TeleportMesh"]
+top_radius = 0.32
+bottom_radius = 0.32
+height = 0.015
+radial_segments = 48
+
+[sub_resource type="StandardMaterial3D" id="TeleportMaterial"]
+albedo_color = Color(0.2, 0.35, 0.4, 1)
+emission_enabled = true
+emission = Color(0.2, 0.9, 0.8, 1)
+emission_energy_multiplier = 1.6
+
 [sub_resource type="BoxMesh" id="HandMesh"]
 size = Vector3(0.07, 0.06, 0.14)
 
@@ -145,6 +157,11 @@ rotation_degrees = Vector3(0, 90, 0)
 mesh = SubResource("MarkerMesh")
 material_override = SubResource("MarkerMaterial")
 
+[node name="TeleportMarker" type="MeshInstance3D" parent="."]
+visible = false
+mesh = SubResource("TeleportMesh")
+material_override = SubResource("TeleportMaterial")
+
 [node name="Entities" type="Node3D" parent="."]
 script = ExtResource("1")
 
@@ -155,6 +172,15 @@ script = ExtResource("4")
 
 [node name="XRCamera" type="XRCamera3D" parent="Player/XRRig"]
 current = false
+
+[node name="XRStatus" type="Label3D" parent="Player/XRRig/XRCamera"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.38, -1.2)
+visible = false
+text = "XR"
+font_size = 20
+pixel_size = 0.003
+outline_size = 6
+no_depth_test = true
 
 [node name="LeftHand" type="XRController3D" parent="Player/XRRig"]
 tracker = "left_hand"
