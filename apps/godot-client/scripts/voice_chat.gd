@@ -20,10 +20,21 @@ var playback: AudioStreamGeneratorPlayback
 var _clock: float = 0.0
 var _bus: int = -1
 var input_level: float = 0.0
+var _meter_only: bool = false
 var _offer_type: String = ""
 var _offer_sdp: String = ""
 var _candidates: Array[String] = []
 
+
+func start_meter(input_device: String = "") -> void:
+	if enabled:
+		return
+	if not input_device.is_empty():
+		AudioServer.set_input_device(input_device)
+	enabled = true
+	_meter_only = true
+	_setup_audio()
+	_set_state("meter")
 
 func start(server_url: String, input_device: String = "") -> void:
 	if enabled or server_url.is_empty():
@@ -31,6 +42,7 @@ func start(server_url: String, input_device: String = "") -> void:
 	if not input_device.is_empty():
 		AudioServer.set_input_device(input_device)
 	enabled = true
+	_meter_only = false
 	_set_state("connecting")
 	var manager := Engine.get_singleton("GDExtensionManager") if Engine.has_singleton("GDExtensionManager") else null
 	if manager != null and manager.has_method("load_extension"):
@@ -64,11 +76,20 @@ func stop() -> void:
 		pc.close()
 	if microphone != null:
 		microphone.stop()
+		microphone.queue_free()
+		microphone = null
+	if playback_player != null:
+		playback_player.stop()
+		playback_player.queue_free()
+		playback_player = null
 	if _bus >= 0:
-		AudioServer.set_bus_mute(_bus, true)
+		AudioServer.remove_bus(_bus)
+		_bus = -1
+	capture = null
 	pc = null
 	channel = null
 	playback = null
+	_meter_only = false
 	_set_state("off")
 
 func _set_state(value: String) -> void:
@@ -156,9 +177,10 @@ func _http_base(server_url: String) -> String:
 	return base
 
 func _process(delta: float) -> void:
-	if not enabled or pc == null:
+	if not enabled:
 		return
-	pc.poll()
+	if pc != null:
+		pc.poll()
 	if channel != null:
 		channel.poll()
 		if channel.get_ready_state() == WebRTCDataChannel.STATE_OPEN and state != "online":

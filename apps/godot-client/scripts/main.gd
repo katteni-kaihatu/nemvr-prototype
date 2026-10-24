@@ -82,10 +82,9 @@ func _ready() -> void:
 	projection.asset_requested.connect(_fetch)
 	projection.observed.connect(_observe)
 	projection.notice.connect(_log)
-	if options.has("voice"):
-		voice = VoiceChat.new()
-		add_child(voice)
-		voice.state_changed.connect(func(value: String) -> void: _log("Voice: " + value))
+	voice = VoiceChat.new()
+	add_child(voice)
+	voice.state_changed.connect(func(value: String) -> void: _log("Voice: " + value))
 	if options.has("xr") or options.has("xr-mock"):
 		xr_active = xr_rig.call("activate", camera, options.has("xr-mock"))
 		if xr_active:
@@ -478,7 +477,10 @@ func _state(event: Dictionary) -> void:
 		if options.has("pitch"):
 			pitch = deg_to_rad(float(options["pitch"]))
 		if voice != null:
-			voice.call("start", server_edit.text, _selected_mic())
+			if options.has("voice"):
+				voice.call("start", server_edit.text, _selected_mic())
+			elif DisplayServer.get_name() != "headless":
+				voice.call("start_meter", _selected_mic())
 		_emit({"event": "welcome", "selfId": self_id, "name": event.get("name", name_edit.text), "server": event.get("server", server_edit.text)})
 		mirror.set_enabled(options.has("mirror"))
 		if options.has("mirror"):
