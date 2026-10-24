@@ -11,9 +11,11 @@ var move_input: Vector2 = Vector2.ZERO
 var snap_turn: float = 0.0
 var grab_requested: bool = false
 var teleport_requested: bool = false
+var menu_requested: bool = false
 var _right_zone: int = 0
 var _grab_was: bool = false
 var _teleport_was: bool = false
+var _menu_was: bool = false
 
 func _ready() -> void:
 	xr_camera = get_node_or_null("XRCamera") as XRCamera3D
@@ -58,6 +60,11 @@ func consume_grab() -> bool:
 	grab_requested = false
 	return value
 
+func consume_menu() -> bool:
+	var value: bool = menu_requested
+	menu_requested = false
+	return value
+
 func consume_teleport() -> bool:
 	var value: bool = teleport_requested
 	teleport_requested = false
@@ -93,6 +100,10 @@ func _process(_delta: float) -> void:
 	if teleport and not _teleport_was:
 		teleport_requested = true
 	_teleport_was = teleport
+	var menu: bool = left_hand.is_button_pressed("menu")
+	if menu and not _menu_was:
+		menu_requested = true
+	_menu_was = menu
 
 func hand_pose(side: String) -> Dictionary:
 	var node: XRController3D = left_hand if side == "left" else right_hand

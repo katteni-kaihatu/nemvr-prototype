@@ -4,6 +4,7 @@
 [ext_resource type="Shader" path="res://shaders/sky.gdshader" id="2"]
 [ext_resource type="Shader" path="res://shaders/floor_grid.gdshader" id="3"]
 [ext_resource type="Script" path="res://scripts/xr_rig.gd" id="4"]
+[ext_resource type="Script" path="res://scripts/xr_menu.gd" id="5"]
 
 [sub_resource type="ShaderMaterial" id="SkyMaterial"]
 shader = ExtResource("2")
@@ -172,6 +173,11 @@ script = ExtResource("4")
 
 [node name="XRCamera" type="XRCamera3D" parent="Player/XRRig"]
 current = false
+
+[node name="XRMenu" type="Node3D" parent="Player/XRRig/XRCamera"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.12, -0.9)
+visible = false
+script = ExtResource("5")
 
 [node name="XRStatus" type="Label3D" parent="Player/XRRig/XRCamera"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.38, -1.2)

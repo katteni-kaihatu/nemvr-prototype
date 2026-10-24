@@ -10,6 +10,7 @@ const FloorReflection = preload("res://scripts/floor_reflection.gd")
 @onready var xr_rig: Node3D = $World/Player/XRRig
 @onready var xr_status: Label3D = $World/Player/XRRig/XRCamera/XRStatus
 @onready var teleport_marker: MeshInstance3D = $World/TeleportMarker
+@onready var xr_menu: Node3D = $World/Player/XRRig/XRCamera/XRMenu
 @onready var mirror: Mirror = $World/Mirror
 @onready var floor_reflection: FloorReflection = $World/FloorReflection
 @onready var world_environment: WorldEnvironment = $World/Environment
@@ -79,6 +80,9 @@ func _ready() -> void:
 		if xr_active:
 			camera = xr_rig.get_node("XRCamera")
 			xr_status.visible = true
+			xr_menu.action.connect(_on_xr_menu_action)
+			if options.has("xr-menu"):
+				xr_menu.visible = true
 			_log("OpenXR active" if not options.has("xr-mock") else "XR mock active")
 		else:
 			_log("OpenXR runtime unavailable; desktop mode")
@@ -288,9 +292,18 @@ func _process(delta: float) -> void:
 		var turn: float = float(xr_rig.call("consume_snap_turn"))
 		if turn != 0.0:
 			yaw += turn
+		if bool(xr_rig.call("consume_menu")):
+			xr_menu.visible = not xr_menu.visible
 		if bool(xr_rig.call("consume_grab")):
 			var ray: Array = xr_rig.call("hand_ray", "right")
-			_toggle_carry(ray[0], ray[1])
+			if xr_menu.visible:
+				var chosen: String = xr_menu.pick(ray[0], ray[1])
+				if not chosen.is_empty():
+					_on_xr_menu_action(chosen)
+				else:
+					_toggle_carry(ray[0], ray[1])
+			else:
+				_toggle_carry(ray[0], ray[1])
 		if bool(xr_rig.call("consume_teleport")):
 			var ray: Array = xr_rig.call("hand_ray", "right")
 			var hit: Dictionary = projection.floor_hit(ray[0], ray[1])
@@ -521,6 +534,15 @@ func _send_pose() -> void:
 		pose["leftHand"] = xr_rig.call("hand_pose", "left")
 		pose["rightHand"] = xr_rig.call("hand_pose", "right")
 	_command(pose)
+
+func _on_xr_menu_action(name: String) -> void:
+	match name:
+		"box":
+			_place_box(_floor_target())
+		"mirror":
+			mirror.set_enabled(not mirror.visible)
+		"close":
+			xr_menu.visible = false
 
 func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.ZERO) -> void:
 	if not carry_id.is_empty():
