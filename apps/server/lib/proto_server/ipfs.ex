@@ -248,13 +248,33 @@ defmodule ProtoServer.Ipfs do
 
     case Finch.request(request, ProtoServer.Finch, receive_timeout: timeout_ms) do
       {:ok, %{status: 200}} ->
+        _ = do_provide(cid, 10_000)
         :ok
 
       {:ok, %{body: body}} ->
-        if already_pinned?(body), do: :ok, else: {:error, body}
+        if already_pinned?(body) do
+          _ = do_provide(cid, 10_000)
+          :ok
+        else
+          {:error, body}
+        end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp do_provide(cid, timeout_ms) do
+    request =
+      Finch.build(
+        :post,
+        api_url() <> "/api/v0/routing/provide?arg=" <> encode_cid(cid)
+      )
+
+    case Finch.request(request, ProtoServer.Finch, receive_timeout: timeout_ms) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: status}} -> {:error, {:http_status, status}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
