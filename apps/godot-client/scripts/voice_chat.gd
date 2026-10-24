@@ -4,9 +4,7 @@ extends Node
 
 signal state_changed(state: String)
 
-const RATE := 48000
-const FRAME_SAMPLES := 960
-const FRAME_SECONDS := 0.02
+const FRAME_SECONDS := 0.01
 
 var enabled: bool = false
 var state: String = "off"
@@ -15,6 +13,8 @@ var channel: WebRTCDataChannel
 var http: HTTPRequest
 var playback_player: AudioStreamPlayer
 var playback: AudioStreamGeneratorPlayback
+var sample_rate: int = 48000
+var frame_samples: int = 960
 var _clock: float = 0.0
 
 var input_level: float = 0.0
@@ -66,7 +66,7 @@ func start(server_url: String, input_device: String = "", test_tone: bool = fals
 		return
 	pc.session_description_created.connect(_on_local_description)
 	pc.ice_candidate_created.connect(_on_ice_candidate)
-	channel = pc.create_data_channel("voice", {})
+	channel = pc.create_data_channel("voice", {"ordered": false, "maxRetransmits": 0})
 	if pc.create_offer() != OK:
 		print("VOICE_ERROR create_offer")
 		_set_state("unavailable")
@@ -104,9 +104,15 @@ func _set_input(input_device: String) -> void:
 	AudioServer.set_input_device_active(true)
 
 func _setup_playback() -> void:
+	sample_rate = int(AudioServer.get_input_mix_rate())
+	if sample_rate <= 0:
+		sample_rate = int(AudioServer.get_mix_rate())
+	if sample_rate <= 0:
+		sample_rate = 48000
+	frame_samples = maxi(1, int(sample_rate * FRAME_SECONDS))
 	var generator := AudioStreamGenerator.new()
-	generator.mix_rate = RATE
-	generator.buffer_length = 0.25
+	generator.mix_rate = sample_rate
+	generator.buffer_length = 0.08
 	playback_player = AudioStreamPlayer.new()
 	playback_player.stream = generator
 	playback_player.bus = "Master"
@@ -197,10 +203,10 @@ func get_output_level() -> float:
 func _send() -> void:
 	if _test_tone:
 		var tone := PackedByteArray()
-		tone.resize(FRAME_SAMPLES * 2)
-		for i in FRAME_SAMPLES:
+		tone.resize(frame_samples * 2)
+		for i in frame_samples:
 			var sample: float = sin(_tone_phase) * 0.25
-			_tone_phase = fmod(_tone_phase + TAU * 440.0 / RATE, TAU)
+			_tone_phase = fmod(_tone_phase + TAU * 440.0 / float(sample_rate), TAU)
 			tone.encode_s16(i * 2, int(sample * 32767.0))
 		input_level = 0.25
 		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
@@ -217,7 +223,7 @@ func _send() -> void:
 		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
 		_output_peak = 0.0
 		return
-	var frames: PackedVector2Array = AudioServer.get_input_frames(mini(available, FRAME_SAMPLES))
+	var frames: PackedVector2Array = AudioServer.get_input_frames(mini(available, frame_samples))
 	if frames.is_empty():
 		input_level = lerpf(input_level, 0.0, 0.2)
 		output_level = lerpf(output_level, clampf(_output_peak * 2.5, 0.0, 1.0), 0.4)
