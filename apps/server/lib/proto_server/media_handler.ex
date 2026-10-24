@@ -16,6 +16,7 @@ defmodule ProtoServer.MediaHandler do
   alias ProtoServer.Space.Store
 
   @max_image_bytes 24 * 1024 * 1024
+  @max_avatar_bytes 64 * 1024 * 1024
 
   @impl :cowboy_handler
   def init(req, state) do
@@ -39,6 +40,9 @@ defmodule ProtoServer.MediaHandler do
     cond do
       method == "POST" and path == "/media/upload" ->
         upload(req, state)
+
+      method == "POST" and path == "/media/avatar" ->
+        upload_avatar(req, state)
 
       not String.starts_with?(path, "/media/") ->
         reply_not_found(req, state)
@@ -105,6 +109,40 @@ defmodule ProtoServer.MediaHandler do
 
       {:error, reason} ->
         Logger.warning("[media] upload request failed: #{inspect(reason)}")
+        reply_json(req, state, 400, %{"error" => "invalid request"})
+    end
+  end
+
+  defp upload_avatar(req, state) do
+    case :cowboy_req.read_body(req, %{length: @max_avatar_bytes, period: 30_000}) do
+      {:ok, body, req} ->
+        cond do
+          byte_size(body) < 28 ->
+            reply_json(req, state, 400, %{"error" => "avatar too small"})
+
+          byte_size(body) > @max_avatar_bytes ->
+            reply_json(req, state, 413, %{"error" => "avatar too large"})
+
+          binary_part(body, 0, 4) != "glTF" ->
+            reply_json(req, state, 415, %{"error" => "unsupported avatar format"})
+
+          true ->
+            case Ipfs.add_bytes(body) do
+              {:ok, cid, _dag_size} ->
+                Logger.info("[avatar] uploaded #{cid} (#{Media.format_bytes(byte_size(body))})")
+                reply_json(req, state, 200, %{"cid" => cid, "size" => byte_size(body)})
+
+              {:error, reason} ->
+                Logger.warning("[avatar] upload failed: #{inspect(reason)}")
+                reply_json(req, state, 502, %{"error" => "IPFS add failed"})
+            end
+        end
+
+      {:more, _partial, _req} ->
+        reply_json(req, state, 413, %{"error" => "avatar too large"})
+
+      {:error, reason} ->
+        Logger.warning("[media] avatar upload request failed: #{inspect(reason)}")
         reply_json(req, state, 400, %{"error" => "invalid request"})
     end
   end

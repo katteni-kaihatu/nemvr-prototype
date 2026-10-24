@@ -18,6 +18,10 @@ pub enum ContentCommand {
     AddFile {
         path: PathBuf,
     },
+    UploadAvatar {
+        path: PathBuf,
+        cid: String,
+    },
     Fetch {
         cid: String,
         save_to: Option<PathBuf>,
@@ -56,6 +60,13 @@ pub enum ContentEvent {
     },
     UploadFailed {
         path: PathBuf,
+        message: String,
+    },
+    AvatarUploaded {
+        cid: String,
+    },
+    AvatarUploadFailed {
+        cid: String,
         message: String,
     },
 }
@@ -126,6 +137,12 @@ impl ContentService {
 
     pub fn add_file(&self, path: PathBuf) {
         self.commands.send(ContentCommand::AddFile { path }).ok();
+    }
+
+    pub fn upload_avatar(&self, path: PathBuf, cid: String) {
+        self.commands
+            .send(ContentCommand::UploadAvatar { path, cid })
+            .ok();
     }
 
     pub fn start_ipfs(&self, repo: PathBuf) {
@@ -262,6 +279,77 @@ async fn run_actor(
                 #[cfg(not(feature = "ipfs"))]
                 let _ = addresses;
             }
+            ContentCommand::UploadAvatar { path, cid } => {
+                let events = events.clone();
+                let http_base = http_base.clone();
+                tasks.spawn(async move {
+                    let bytes = match tokio::fs::read(&path).await {
+                        Ok(bytes) => bytes,
+                        Err(error) => {
+                            let _ = events.send(ContentEvent::AvatarUploadFailed {
+                                cid,
+                                message: format!("アバターを読み込めません: {error}"),
+                            });
+                            return;
+                        }
+                    };
+                    let client = match reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build()
+                    {
+                        Ok(client) => client,
+                        Err(error) => {
+                            let _ = events.send(ContentEvent::AvatarUploadFailed {
+                                cid,
+                                message: format!("HTTP クライアントを作成できません: {error}"),
+                            });
+                            return;
+                        }
+                    };
+                    let url = format!("{}/media/avatar", http_base.trim_end_matches('/'));
+                    match client.post(&url).body(bytes).send().await {
+                        Ok(response) if response.status().is_success() => {
+                            match response.json::<serde_json::Value>().await {
+                                Ok(value) => {
+                                    if let Some(uploaded) =
+                                        value.get("cid").and_then(|v| v.as_str())
+                                    {
+                                        let _ = events.send(ContentEvent::AvatarUploaded {
+                                            cid: uploaded.to_string(),
+                                        });
+                                    } else {
+                                        let _ = events.send(ContentEvent::AvatarUploadFailed {
+                                            cid,
+                                            message: "アバターの CID が返りませんでした".into(),
+                                        });
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ = events.send(ContentEvent::AvatarUploadFailed {
+                                        cid,
+                                        message: format!("アバターの応答を読めません: {error}"),
+                                    });
+                                }
+                            }
+                        }
+                        Ok(response) => {
+                            let _ = events.send(ContentEvent::AvatarUploadFailed {
+                                cid,
+                                message: format!(
+                                    "アバターをサーバーへ送れません: HTTP {}",
+                                    response.status()
+                                ),
+                            });
+                        }
+                        Err(error) => {
+                            let _ = events.send(ContentEvent::AvatarUploadFailed {
+                                cid,
+                                message: format!("アバターをサーバーへ送れません: {error}"),
+                            });
+                        }
+                    }
+                });
+            }
             ContentCommand::AddFile { path } => {
                 #[cfg(feature = "ipfs")]
                 if let Some(node) = ipfs.clone() {
@@ -380,7 +468,13 @@ async fn fetch_http(
     events: UnboundedSender<ContentEvent>,
 ) -> Result<(), String> {
     let url = format!("{}/media/{}", http_base.trim_end_matches('/'), cid);
-    let response = reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("HTTP クライアントを作成できません: {error}"))?;
+    let response = client
+        .get(&url)
+        .send()
         .await
         .map_err(|error| format!("取得できません: {error}"))?;
     if !response.status().is_success() {

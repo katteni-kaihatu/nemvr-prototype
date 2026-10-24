@@ -338,17 +338,11 @@ fn poll_content(
                         std::fs::create_dir_all(&dir).ok();
                         std::fs::copy(&path, dir.join(format!("{cid}.vrm"))).ok();
                     }
-                    config.avatar_cid = Some(cid.clone());
                     config.avatar_path = Some(path.clone());
                     config.save();
-                    let command_id = Uuid::new_v4().to_string();
-                    let _ = net.send(ClientMessage::SpaceSetAvatar {
-                        command_id,
-                        cid: Some(cid),
-                    });
                     state.avatar_sent = true;
                     state.avatar_upload = None;
-                    state.notice = Some("アバターを設定しました".into());
+                    state.notice = Some("アバターをサーバーへ送信中".into());
                     state.log("アバターをアップロードしました");
                     continue;
                 }
@@ -417,6 +411,26 @@ fn poll_content(
                 if let Some(cid) = cid {
                     state.progress.remove(&cid);
                 }
+            }
+            ContentEvent::AvatarUploaded { cid } => {
+                config.avatar_cid = Some(cid.clone());
+                config.save();
+                let command_id = Uuid::new_v4().to_string();
+                let _ = net.send(ClientMessage::SpaceSetAvatar {
+                    command_id,
+                    cid: Some(cid),
+                });
+                state.notice = Some("アバターを設定しました".into());
+                state.log("アバターをサーバーへ送信しました");
+            }
+            ContentEvent::AvatarUploadFailed { cid, message } => {
+                let command_id = Uuid::new_v4().to_string();
+                let _ = net.send(ClientMessage::SpaceSetAvatar {
+                    command_id,
+                    cid: Some(cid),
+                });
+                state.notice = Some(message.clone());
+                state.log(message);
             }
             ContentEvent::UploadFailed { path, message } => {
                 pending.by_path.remove(&path);

@@ -379,6 +379,19 @@ impl ClientSession {
                         json!({"type":"progress","cid":cid,"loaded":loaded,"total":total}),
                     );
                 }
+                ContentEvent::AvatarUploaded { cid } => {
+                    self.config.avatar_cid = Some(cid.clone());
+                    if let Err(message) = self.config.save_to(&self.paths.config_file) {
+                        self.events
+                            .push_back(json!({"type":"error","message":message}));
+                    }
+                    self.send_avatar(cid);
+                }
+                ContentEvent::AvatarUploadFailed { cid, message } => {
+                    self.events
+                        .push_back(json!({"type":"error","message":message}));
+                    self.send_avatar(cid);
+                }
                 ContentEvent::Failed { cid, message } => {
                     if let Some(cid) = cid {
                         self.transfers.retain(|_, active| active != &cid);
@@ -557,19 +570,27 @@ impl ClientSession {
         }
     }
 
+    fn send_avatar(&mut self, cid: String) {
+        let _ = self.send(ClientMessage::SpaceSetAvatar {
+            command_id: Uuid::new_v4().to_string(),
+            cid: Some(cid),
+        });
+    }
+
     fn added(&mut self, cid: String, name: String, path: PathBuf) {
         if self.avatar_upload.as_ref() == Some(&path) {
             self.avatar_upload = None;
             self.config.avatar_cid = Some(cid.clone());
-            self.config.avatar_path = Some(path);
+            self.config.avatar_path = Some(path.clone());
             if let Err(message) = self.config.save_to(&self.paths.config_file) {
                 self.events
                     .push_back(json!({"type":"error","message":message}));
             }
-            let _ = self.send(ClientMessage::SpaceSetAvatar {
-                command_id: Uuid::new_v4().to_string(),
-                cid: Some(cid),
-            });
+            if let Some(content) = &self.content {
+                content.upload_avatar(path, cid);
+            } else {
+                self.send_avatar(cid);
+            }
         } else if let Some(placement) = self.placements.remove(&path) {
             let dimensions = placement_dimensions(&path, &cid, &name, &placement);
             let _ = self.send(ClientMessage::SpaceMutate {

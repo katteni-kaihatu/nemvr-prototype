@@ -310,8 +310,11 @@ func _handle_event(event: Dictionary) -> void:
 			if pending.has(command_id):
 				_rollback(str(pending[command_id]["entityId"]))
 				pending.erase(command_id)
+			var failed_cid: String = str(event.get("cid", ""))
+			if not failed_cid.is_empty():
+				projection.asset_failed(failed_cid)
 			_log(str(event.get("message", "Error")))
-			_emit({"event": "error", "message": event.get("message", ""), "commandId": event.get("commandId"), "code": event.get("code")})
+			_emit({"event": "error", "message": event.get("message", ""), "commandId": event.get("commandId"), "code": event.get("code"), "cid": event.get("cid")})
 		"log":
 			_log(str(event.get("message", "")))
 

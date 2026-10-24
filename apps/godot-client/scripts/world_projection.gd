@@ -19,6 +19,7 @@ var _samples: Dictionary = {}
 var _self_motion_time: float = 0.0
 var _assets: Dictionary = {}
 var _requested: Dictionary = {}
+var _asset_attempts: Dictionary = {}
 var _loader: Object
 
 func apply_snapshot(snapshot: Array, own_id: String) -> void:
@@ -211,10 +212,22 @@ func _label(parent: Node3D, text: String, at: Vector3, billboard: bool = true) -
 	parent.add_child(node)
 
 func _request(cid: String) -> void:
-	if cid.is_empty() or _requested.has(cid):
+	if cid.is_empty() or _assets.has(cid) or _requested.has(cid):
 		return
 	_requested[cid] = true
+	_asset_attempts[cid] = int(_asset_attempts.get(cid, 0)) + 1
 	asset_requested.emit(cid)
+
+func asset_failed(cid: String) -> void:
+	if cid.is_empty() or _assets.has(cid):
+		return
+	_requested.erase(cid)
+	if int(_asset_attempts.get(cid, 0)) >= 3:
+		notice.emit("Content fetch failed after retries: " + cid)
+		return
+	notice.emit("Content fetch retry: " + cid)
+	await get_tree().create_timer(1.0).timeout
+	_request(cid)
 
 func asset_ready(cid: String, path: String) -> void:
 	_assets[cid] = path
