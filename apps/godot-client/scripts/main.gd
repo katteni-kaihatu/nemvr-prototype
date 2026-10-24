@@ -20,6 +20,7 @@ var _laser_ready: bool = false
 var _laser_hit: Vector3
 var _laser_hit_ready: bool = false
 var carry_from_hand: bool = false
+var carry_offset_local: Vector3 = Vector3.ZERO
 var _xr_grip_was: bool = false
 @onready var mic_label: Label = $Interface/HUD/MicLabel
 @onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
@@ -708,17 +709,20 @@ func _update_laser() -> void:
 		return
 	laser_dot.global_position = point
 	if beam:
-		var amplitude: float = clampf(0.02 + distance * 0.012, 0.02, 0.18)
-		var now: float = Time.get_ticks_msec() * 0.001
+		var bow: float = clampf(0.06 + distance * 0.02, 0.06, 0.35)
+		var side: Vector3 = direction.cross(Vector3.UP)
+		if side.length_squared() < 0.0001:
+			side = Vector3.RIGHT
+		side = side.normalized()
 		_laser_mesh.clear_surfaces()
 		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
 		for i in 40:
 			var t: float = float(i) / 39.0
-			# A travelling whip bend that dies out at the hit point.
-			var envelope: float = (1.0 - t) * sin(t * PI)
+			# One large bow between the hand and the hit point.
+			var curve: float = sin(t * PI)
 			var vertex: Vector3 = origin.lerp(point, t)
-			vertex += Vector3.RIGHT * sin(t * PI * 2.2 - now * 8.0) * amplitude * envelope
-			vertex += Vector3.UP * sin(t * PI * 3.4 - now * 6.0) * amplitude * envelope * 0.35
+			vertex += side * curve * bow
+			vertex += Vector3.UP * curve * bow * 0.18
 			_laser_mesh.surface_add_vertex(vertex)
 		_laser_mesh.surface_end()
 
@@ -744,11 +748,13 @@ func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.Z
 		_mutate({"op": "release", "entityId": carry_id})
 		carry_id = ""
 		carry_from_hand = false
+		carry_offset_local = Vector3.ZERO
 		rotate_mode = false
 		return
 	var from: Vector3 = camera.global_position if origin == Vector3.INF else origin
 	var dir: Vector3 = -camera.global_basis.z if direction == Vector3.ZERO else direction
-	var id: String = projection.pick(from, dir)
+	var hit: Dictionary = projection.pick_hit(from, dir)
+	var id: String = str(hit["id"])
 	if id.is_empty():
 		return
 	var dims: Dictionary = projection.entities[id].get("dimensions", {})
@@ -757,7 +763,9 @@ func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.Z
 		return
 	carry_id = id
 	carry_from_hand = origin != Vector3.INF
-	carry_distance = clampf(from.distance_to(projection.views[id].global_position), 0.2, 8)
+	var hit_point: Vector3 = hit["position"]
+	carry_offset_local = projection.views[id].global_transform.affine_inverse() * hit_point
+	carry_distance = clampf(from.distance_to(hit_point), 0.2, 8)
 	carry_yaw = float(dims.get("space.yaw", 0))
 	carry_pitch = float(dims.get("space.pitch", 0))
 	carry_scale = float(dims.get("space.scale", 1))
@@ -775,13 +783,15 @@ func _update_carry() -> void:
 	if carry_id.is_empty() or not projection.views.has(carry_id):
 		return
 	var view: Node3D = projection.views[carry_id]
+	var target: Vector3
 	if carry_from_hand and xr_active:
 		var ray: Array = xr_rig.call("hand_ray", "right")
-		view.global_position = (ray[0] as Vector3) + (ray[1] as Vector3) * carry_distance
+		target = (ray[0] as Vector3) + (ray[1] as Vector3) * carry_distance
 	else:
-		view.global_position = camera.global_position - camera.global_basis.z * carry_distance
+		target = camera.global_position - camera.global_basis.z * carry_distance
 	view.rotation = Vector3(carry_pitch, carry_yaw, 0)
 	view.scale = Vector3.ONE * carry_scale
+	view.global_position = target - view.global_basis * carry_offset_local
 
 func _update_target() -> void:
 	var label: Label = $Interface/HUD/Target
@@ -809,6 +819,7 @@ func _rollback(id: String) -> void:
 	if carry_id == id:
 		carry_id = ""
 		carry_from_hand = false
+		carry_offset_local = Vector3.ZERO
 		rotate_mode = false
 	projection.restore(id)
 
