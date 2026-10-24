@@ -104,7 +104,7 @@ func _process(_delta: float) -> void:
 	if zone != 0 and zone != _right_zone:
 		snap_turn = -float(zone) * PI * 0.5
 	_right_zone = zone
-	var grab: bool = right_hand.is_button_pressed("grab")
+	var grab: bool = right_hand.is_button_pressed("grab") or right_hand.get_float("grip") > 0.5
 	if grab and not _grab_was:
 		grab_requested = true
 	_grab_was = grab

@@ -6,7 +6,7 @@ config/name="Proto SNS"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/version="0.4.0"
-config/revision="r1"
+config/revision="r2"
 
 [display]
 window/size/viewport_width=1280

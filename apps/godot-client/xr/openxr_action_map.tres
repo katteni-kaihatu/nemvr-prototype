@@ -36,6 +36,12 @@ localized_name = "Menu"
 action_type = 0
 toplevel_paths = PackedStringArray("/user/hand/left")
 
+[sub_resource type="OpenXRAction" id="grip"]
+resource_name = "grip"
+localized_name = "Grip"
+action_type = 1
+toplevel_paths = PackedStringArray("/user/hand/right")
+
 [sub_resource type="OpenXRAction" id="teleport"]
 resource_name = "teleport"
 localized_name = "Teleport"
@@ -45,7 +51,7 @@ toplevel_paths = PackedStringArray("/user/hand/left")
 [sub_resource type="OpenXRActionSet" id="action_set"]
 resource_name = "proto"
 localized_name = "Proto SNS"
-actions = [SubResource("aim_pose"), SubResource("haptic"), SubResource("move"), SubResource("turn"), SubResource("grab"), SubResource("teleport"), SubResource("menu")]
+actions = [SubResource("aim_pose"), SubResource("haptic"), SubResource("move"), SubResource("turn"), SubResource("grab"), SubResource("grip"), SubResource("teleport"), SubResource("menu")]
 
 [sub_resource type="OpenXRIPBinding" id="bind_aim_left"]
 action = SubResource("aim_pose")
@@ -87,17 +93,25 @@ binding_path = "/user/hand/right/input/squeeze/click"
 action = SubResource("grab")
 binding_path = "/user/hand/right/input/grip/click"
 
+[sub_resource type="OpenXRIPBinding" id="bind_grip_value"]
+action = SubResource("grip")
+binding_path = "/user/hand/right/input/squeeze/value"
+
+[sub_resource type="OpenXRIPBinding" id="bind_grip_index_value"]
+action = SubResource("grip")
+binding_path = "/user/hand/right/input/grip/value"
+
 [sub_resource type="OpenXRIPBinding" id="bind_teleport"]
 action = SubResource("teleport")
 binding_path = "/user/hand/left/input/trigger/click"
 
 [sub_resource type="OpenXRInteractionProfile" id="oculus_touch"]
 interaction_profile_path = "/interaction_profiles/oculus/touch_controller"
-bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_grab_squeeze"), SubResource("bind_grab_grip"), SubResource("bind_teleport"), SubResource("bind_menu")]
+bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_grab_squeeze"), SubResource("bind_grab_grip"), SubResource("bind_grip_value"), SubResource("bind_grip_index_value"), SubResource("bind_teleport"), SubResource("bind_menu")]
 
 [sub_resource type="OpenXRInteractionProfile" id="valve_index"]
 interaction_profile_path = "/interaction_profiles/valve/index_controller"
-bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_grab_squeeze"), SubResource("bind_grab_grip"), SubResource("bind_teleport"), SubResource("bind_menu")]
+bindings = [SubResource("bind_aim_left"), SubResource("bind_aim_right"), SubResource("bind_haptic_left"), SubResource("bind_haptic_right"), SubResource("bind_move"), SubResource("bind_turn"), SubResource("bind_grab"), SubResource("bind_grab_squeeze"), SubResource("bind_grab_grip"), SubResource("bind_grip_value"), SubResource("bind_grip_index_value"), SubResource("bind_teleport"), SubResource("bind_menu")]
 
 [resource]
 action_sets = [SubResource("action_set")]
