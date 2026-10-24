@@ -64,7 +64,7 @@ func start(server_url: String, input_device: String = "") -> void:
 		print("VOICE_ERROR create_offer")
 		_set_state("unavailable")
 		return
-	_setup_audio()
+	_setup_playback()
 	_exchange_offer.call_deferred(server_url)
 
 func stop() -> void:
@@ -105,6 +105,15 @@ func _setup_playback() -> void:
 	add_child(playback_player)
 	playback_player.play()
 	playback = playback_player.get_stream_playback() as AudioStreamGeneratorPlayback
+
+func _on_local_description(type: String, sdp: String) -> void:
+	_offer_type = type
+	_offer_sdp = sdp
+	pc.set_local_description(type, sdp)
+
+func _on_ice_candidate(_mid: String, _mline: int, candidate: String) -> void:
+	if not candidate.is_empty():
+		_candidates.append(candidate)
 
 func _exchange_offer(server_url: String) -> void:
 	var deadline: int = Time.get_ticks_msec() + 3000
