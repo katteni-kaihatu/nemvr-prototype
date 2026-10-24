@@ -12,6 +12,8 @@ var snap_turn: float = 0.0
 var grab_requested: bool = false
 var teleport_requested: bool = false
 var _right_zone: int = 0
+var _grab_was: bool = false
+var _teleport_was: bool = false
 
 func _ready() -> void:
 	xr_camera = get_node_or_null("XRCamera") as XRCamera3D
@@ -77,16 +79,20 @@ func hand_ray(side: String) -> Array:
 func _process(_delta: float) -> void:
 	if not active or mock or left_hand == null or right_hand == null:
 		return
-	move_input = left_hand.get_vector2("primary")
-	var turn: float = right_hand.get_vector2("primary").x
+	move_input = left_hand.get_vector2("move")
+	var turn: float = right_hand.get_vector2("turn").x
 	var zone: int = 1 if turn > 0.7 else (-1 if turn < -0.7 else 0)
 	if zone != 0 and zone != _right_zone:
 		snap_turn = -float(zone) * PI * 0.5
 	_right_zone = zone
-	if right_hand.is_button_pressed("trigger_click") or right_hand.is_button_pressed("grip_click"):
+	var grab: bool = right_hand.is_button_pressed("grab")
+	if grab and not _grab_was:
 		grab_requested = true
-	if left_hand.is_button_pressed("trigger_click"):
+	_grab_was = grab
+	var teleport: bool = left_hand.is_button_pressed("teleport")
+	if teleport and not _teleport_was:
 		teleport_requested = true
+	_teleport_was = teleport
 
 func hand_pose(side: String) -> Dictionary:
 	var node: XRController3D = left_hand if side == "left" else right_hand

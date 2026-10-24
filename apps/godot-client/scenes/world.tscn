@@ -149,9 +149,11 @@ current = false
 
 [node name="LeftHand" type="XRController3D" parent="Player/XRRig"]
 tracker = "left_hand"
+pose = &"aim"
 
 [node name="RightHand" type="XRController3D" parent="Player/XRRig"]
 tracker = "right_hand"
+pose = &"aim"
 
 [node name="Camera" type="Camera3D" parent="Player"]
 position = Vector3(0, 1.6, 0)

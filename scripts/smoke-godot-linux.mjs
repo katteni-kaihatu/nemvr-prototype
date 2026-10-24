@@ -25,13 +25,15 @@ try {
   if (!existsSync(archive)) throw new Error(`Missing ${archive}. Run pnpm package:godot:linux first.`);
 
   const headless = run(["--headless", "--quit-after", "5"], 60000);
+  const engineOutput = headless.output.replace(
+    /^ERROR: OpenXR: Failed to enumerate number of extension properties.*$/gm, "");
   check(!headless.result.error, `headless failed to start: ${headless.result.error?.message}`);
   check(headless.result.status === 0, `headless exited ${headless.result.status ?? headless.result.signal}`);
   check(headless.output.includes("Initialize godot-rust"), "headless did not initialize the GDExtension");
   check(/Godot Engine v4\.6/.test(headless.output), "headless did not start Godot 4.6");
   check(!/stack smashing detected/.test(headless.output), "headless reported stack smashing");
   check(!/Unable to create DisplayServer/.test(headless.output), "headless could not create a DisplayServer");
-  check(!/\bERROR:/.test(headless.output), "headless reported an engine error");
+  check(!/\bERROR:/.test(engineOutput), "headless reported an engine error");
 
   const graphical = process.env.DISPLAY || process.env.WAYLAND_DISPLAY;
   if (graphical) {

@@ -19,5 +19,12 @@ renderer/rendering_method.mobile="forward_plus"
 textures/default_filters/use_nearest_mipmap_filter=false
 environment/defaults/default_clear_color=Color(0.075, 0.10, 0.14, 1)
 
+[xr]
+openxr/enabled=true
+openxr/default_action_map="res://xr/openxr_action_map.tres"
+openxr/foveation_level=3
+openxr/foveation_dynamic=true
+shaders/enabled=true
+
 [physics]
 common/physics_ticks_per_second=60
