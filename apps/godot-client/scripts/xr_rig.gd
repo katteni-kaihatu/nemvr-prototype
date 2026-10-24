@@ -55,6 +55,16 @@ func activate(desktop: Camera3D, use_mock: bool = false) -> bool:
 	desktop_camera.current = false
 	return true
 
+func seated_adjust(force: bool = false) -> void:
+	if xr_camera == null:
+		return
+	var eye_height: float = xr_camera.global_position.y
+	if force or eye_height < 1.3:
+		var target: float = 1.55
+		var delta: float = target - eye_height
+		if absf(delta) > 0.05:
+			position.y += delta
+
 func is_grip_held() -> bool:
 	return not mock and right_hand != null and right_hand.get_float("grip") > 0.5
 
