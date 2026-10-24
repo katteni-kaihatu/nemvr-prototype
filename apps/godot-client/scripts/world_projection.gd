@@ -329,6 +329,17 @@ func _animate_avatar(root: Node3D, speed: float, crouch: float) -> void:
 	if animator != null and animator.has_method("set_motion"):
 		animator.call("set_motion", speed, crouch)
 
+func floor_hit(origin: Vector3, direction: Vector3, distance: float = 30.0) -> Dictionary:
+	if absf(direction.y) < 0.0001:
+		return {"hit": false}
+	var t: float = -origin.y / direction.y
+	if t < 0.0 or t > distance:
+		return {"hit": false}
+	var point: Vector3 = origin + direction * t
+	if absf(point.x) > 24.0 or absf(point.z) > 24.0:
+		return {"hit": false}
+	return {"hit": true, "position": point}
+
 func pick(origin: Vector3, direction: Vector3, distance: float = 10.0) -> String:
 	var chosen: String = ""
 	var nearest: float = distance

@@ -7,6 +7,11 @@ var left_hand: XRController3D
 var right_hand: XRController3D
 var active: bool = false
 var mock: bool = false
+var move_input: Vector2 = Vector2.ZERO
+var snap_turn: float = 0.0
+var grab_requested: bool = false
+var teleport_requested: bool = false
+var _right_zone: int = 0
 
 func _ready() -> void:
 	xr_camera = get_node_or_null("XRCamera") as XRCamera3D
@@ -37,6 +42,51 @@ func activate(desktop: Camera3D, use_mock: bool = false) -> bool:
 	xr_camera.current = true
 	desktop_camera.current = false
 	return true
+
+func get_move() -> Vector2:
+	return move_input
+
+func consume_snap_turn() -> float:
+	var value: float = snap_turn
+	snap_turn = 0.0
+	return value
+
+func consume_grab() -> bool:
+	var value: bool = grab_requested
+	grab_requested = false
+	return value
+
+func consume_teleport() -> bool:
+	var value: bool = teleport_requested
+	teleport_requested = false
+	return value
+
+func set_mock_input(move: Vector2, turn: bool, grab: bool) -> void:
+	move_input = move
+	if turn:
+		snap_turn = PI * 0.5
+	if grab:
+		grab_requested = true
+
+func hand_ray(side: String) -> Array:
+	var node: XRController3D = left_hand if side == "left" else right_hand
+	if node == null:
+		return [Vector3.ZERO, Vector3.FORWARD]
+	return [node.global_position, -node.global_basis.z]
+
+func _process(_delta: float) -> void:
+	if not active or mock or left_hand == null or right_hand == null:
+		return
+	move_input = left_hand.get_vector2("primary")
+	var turn: float = right_hand.get_vector2("primary").x
+	var zone: int = 1 if turn > 0.7 else (-1 if turn < -0.7 else 0)
+	if zone != 0 and zone != _right_zone:
+		snap_turn = -float(zone) * PI * 0.5
+	_right_zone = zone
+	if right_hand.is_button_pressed("trigger_click") or right_hand.is_button_pressed("grip_click"):
+		grab_requested = true
+	if left_hand.is_button_pressed("trigger_click"):
+		teleport_requested = true
 
 func hand_pose(side: String) -> Dictionary:
 	var node: XRController3D = left_hand if side == "left" else right_hand

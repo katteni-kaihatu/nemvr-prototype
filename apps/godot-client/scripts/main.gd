@@ -279,6 +279,18 @@ func _process(delta: float) -> void:
 			_send_pose()
 			_send_carry()
 		_automation(now)
+	if xr_active:
+		var turn: float = float(xr_rig.call("consume_snap_turn"))
+		if turn != 0.0:
+			yaw += turn
+		if bool(xr_rig.call("consume_grab")):
+			var ray: Array = xr_rig.call("hand_ray", "right")
+			_toggle_carry(ray[0], ray[1])
+		if bool(xr_rig.call("consume_teleport")):
+			var ray: Array = xr_rig.call("hand_ray", "right")
+			var hit: Dictionary = projection.floor_hit(ray[0], ray[1])
+			if hit.get("hit", false):
+				movement["position"] = WorldProjection.array3(hit["position"])
 	_fps_clock += delta
 	if _fps_clock >= 0.25:
 		_fps_clock = 0.0
@@ -390,9 +402,13 @@ func _physics_process(delta: float) -> void:
 		return
 	var enabled: bool = _controls_enabled()
 	var input_value: Dictionary = {"moveX": 0.0, "moveZ": 0.0, "sprint": false, "jump": false, "jumpPressed": false, "crouch": false, "lean": 0.0}
-	if enabled:
+	if enabled or xr_active:
 		input_value["moveX"] = float(_key(KEY_D) or _key(KEY_RIGHT)) - float(_key(KEY_A) or _key(KEY_LEFT))
 		input_value["moveZ"] = float(_key(KEY_S) or _key(KEY_DOWN)) - float(_key(KEY_W) or _key(KEY_UP))
+		if xr_active:
+			var stick: Vector2 = xr_rig.call("get_move")
+			input_value["moveX"] = float(input_value["moveX"]) + stick.x
+			input_value["moveZ"] = float(input_value["moveZ"]) - stick.y
 		input_value["sprint"] = _key(KEY_SHIFT)
 		input_value["jump"] = _key(KEY_SPACE)
 		input_value["jumpPressed"] = _jump_pressed
@@ -493,14 +509,16 @@ func _send_pose() -> void:
 		pose["rightHand"] = xr_rig.call("hand_pose", "right")
 	_command(pose)
 
-func _toggle_carry() -> void:
+func _toggle_carry(origin: Vector3 = Vector3.INF, direction: Vector3 = Vector3.ZERO) -> void:
 	if not carry_id.is_empty():
 		_send_carry()
 		_mutate({"op": "release", "entityId": carry_id})
 		carry_id = ""
 		rotate_mode = false
 		return
-	var id: String = projection.pick(camera.global_position, -camera.global_basis.z)
+	var from: Vector3 = camera.global_position if origin == Vector3.INF else origin
+	var dir: Vector3 = -camera.global_basis.z if direction == Vector3.ZERO else direction
+	var id: String = projection.pick(from, dir)
 	if id.is_empty():
 		return
 	var dims: Dictionary = projection.entities[id].get("dimensions", {})
