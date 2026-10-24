@@ -43,6 +43,8 @@ func activate(desktop: Camera3D, use_mock: bool = false) -> bool:
 	if interface == null or not interface.is_initialized() and not interface.initialize():
 		return false
 	get_viewport().use_xr = true
+	if interface.has_method("set_play_area_mode"):
+		interface.set_play_area_mode(XRInterface.XR_PLAY_AREA_STAGE)
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	var viewport: Viewport = get_viewport()
 	viewport.scaling_3d_scale = 1.0

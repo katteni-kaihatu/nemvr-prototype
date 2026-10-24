@@ -34,6 +34,7 @@ var _rx_queue: Array[Dictionary] = []
 var _rx_started: bool = false
 var _self_id: String = ""
 var _speaker_levels: Dictionary = {}
+var _speaker_positions: Dictionary = {}
 var _record: FileAccess
 var _test_tone: bool = false
 var _tone_phase: float = 0.0
@@ -98,6 +99,7 @@ func stop() -> void:
 	_rx_queue.clear()
 	_rx_started = false
 	_speaker_levels.clear()
+	_speaker_positions.clear()
 	if channel != null:
 		channel.close()
 	if pc != null:
@@ -221,6 +223,22 @@ func get_input_level() -> float:
 
 func get_output_level() -> float:
 	return output_level
+
+func set_speaker_positions(positions: Dictionary) -> void:
+	_speaker_positions = positions
+
+func _spatial_gains(sender: String) -> Vector2:
+	var camera: Camera3D = get_viewport().get_camera_3d()
+	if camera == null or not _speaker_positions.has(sender):
+		return Vector2.ONE
+	var offset: Vector3 = _speaker_positions[sender] - camera.global_position
+	var distance: float = offset.length()
+	if distance < 0.01:
+		return Vector2.ONE
+	var pan: float = clampf(offset.normalized().dot(camera.global_basis.x.normalized()), -1.0, 1.0)
+	var angle: float = (pan + 1.0) * PI * 0.25
+	var attenuation: float = clampf(1.0 / (1.0 + distance * 0.18), 0.08, 1.0)
+	return Vector2(cos(angle) * sqrt(2.0), sin(angle) * sqrt(2.0)) * attenuation
 
 func get_speaking_ids() -> Array:
 	var result: Array = []
@@ -353,16 +371,22 @@ func _pump_playback() -> void:
 	if playback.get_frames_available() < FRAME_SAMPLES:
 		_rx_queue.append_array(selected)
 		return
-	var mixed := PackedFloat32Array()
-	mixed.resize(FRAME_SAMPLES)
+	var left_mix := PackedFloat32Array()
+	var right_mix := PackedFloat32Array()
+	left_mix.resize(FRAME_SAMPLES)
+	right_mix.resize(FRAME_SAMPLES)
 	for entry: Dictionary in selected:
 		var payload: PackedByteArray = entry["payload"]
+		var gains: Vector2 = _spatial_gains(str(entry["sender"]))
 		var count: int = mini(payload.size() / 2, FRAME_SAMPLES)
 		for i in count:
-			mixed[i] += float(payload.decode_s16(i * 2)) / 32768.0
+			var sample: float = float(payload.decode_s16(i * 2)) / 32768.0
+			left_mix[i] += sample * gains.x
+			right_mix[i] += sample * gains.y
 	var divisor: float = float(selected.size())
 	for i in FRAME_SAMPLES:
-		var sample: float = clampf(mixed[i] / divisor, -1.0, 1.0)
-		_last_sample = sample
+		var left: float = clampf(left_mix[i] / divisor, -1.0, 1.0)
+		var right: float = clampf(right_mix[i] / divisor, -1.0, 1.0)
+		_last_sample = (left + right) * 0.5
 		_plc_gain = 1.0
-		playback.push_frame(Vector2(sample, sample))
+		playback.push_frame(Vector2(left, right))

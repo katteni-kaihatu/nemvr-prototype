@@ -13,6 +13,7 @@ const VoiceChat = preload("res://scripts/voice_chat.gd")
 @onready var teleport_marker: MeshInstance3D = $World/TeleportMarker
 @onready var laser: MeshInstance3D = $World/Laser
 @onready var laser_dot: MeshInstance3D = $World/LaserDot
+var _laser_mesh: ImmediateMesh
 @onready var mic_label: Label = $Interface/HUD/MicLabel
 @onready var mic_level: ProgressBar = $Interface/HUD/MicLevel
 @onready var out_label: Label = $Interface/HUD/OutLabel
@@ -101,6 +102,8 @@ func _ready() -> void:
 			_log("OpenXR active" if not options.has("xr-mock") else "XR mock active")
 		else:
 			_log("OpenXR runtime unavailable; desktop mode")
+	_laser_mesh = ImmediateMesh.new()
+	laser.mesh = _laser_mesh
 	mirror.source = camera
 	floor_reflection.source = camera
 	projection.hand_ik_enabled = options.has("hand-ik")
@@ -393,6 +396,14 @@ func _process(delta: float) -> void:
 		_teleport_marker_until = 0.0
 		teleport_marker.visible = false
 	if voice != null:
+		var positions: Dictionary = {}
+		for id: String in projection.views:
+			if id == self_id or not projection.entities.has(id):
+				continue
+			var kind: String = str(projection.entities[id].get("dimensions", {}).get("entity.kind", ""))
+			if kind == "peer":
+				positions[id] = projection.views[id].global_position + Vector3(0, 1.55, 0)
+		voice.call("set_speaker_positions", positions)
 		projection.set_speakers(voice.call("get_speaking_ids"))
 		var level: float = float(voice.call("get_input_level"))
 		mic_label.visible = true
@@ -630,26 +641,43 @@ func _update_laser() -> void:
 	var ray: Array = xr_rig.call("hand_ray", "right")
 	var origin: Vector3 = ray[0]
 	var direction: Vector3 = ray[1]
-	var distance: float = 4.0
+	var distance: float = 30.0
 	var point: Vector3 = origin + direction * distance
+	var beam: bool = false
+	var target: bool = false
 	var menu_target: String = xr_menu.pick(origin, direction) if xr_menu.visible else ""
 	if not menu_target.is_empty():
 		distance = 1.0
 		point = origin + direction * distance
+		beam = true
+		target = true
 	else:
 		var hit: Dictionary = projection.pick_hit(origin, direction, distance)
 		if not str(hit["id"]).is_empty():
 			distance = float(hit["distance"])
 			point = hit["position"]
+			beam = true
+			target = true
 		else:
-			var floor: Dictionary = projection.floor_hit(origin, direction, 12.0)
+			var floor: Dictionary = projection.floor_hit(origin, direction, distance)
 			if floor.get("hit", false):
 				point = floor["position"]
 				distance = origin.distance_to(point)
-	laser.global_position = origin + direction * (distance * 0.5)
-	laser.look_at(point, Vector3.UP)
-	laser.scale = Vector3(1, 1, distance)
+				target = true
+	laser.visible = xr_active and beam
+	laser_dot.visible = xr_active and target
+	if not target:
+		return
 	laser_dot.global_position = point
+	if beam:
+		var sag: float = minf(0.18, 0.04 + distance * 0.004)
+		_laser_mesh.clear_surfaces()
+		_laser_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, laser.material_override)
+		for i in 24:
+			var t: float = float(i) / 23.0
+			var vertex: Vector3 = origin.lerp(point, t) + Vector3.DOWN * sin(t * PI) * sag
+			_laser_mesh.surface_add_vertex(vertex)
+		_laser_mesh.surface_end()
 
 func _on_xr_menu_action(name: String) -> void:
 	match name:
