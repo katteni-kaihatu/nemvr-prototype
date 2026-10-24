@@ -150,10 +150,10 @@ func _build(root: Node3D, dims: Dictionary, kind: String, id: String) -> void:
 					arm.name = "LeftArm" if side < 0.0 else "RightArm"
 					var leg: MeshInstance3D = _box(root, Vector3(0.15, 0.65, 0.17), Vector3(side * 0.12, 0.35, 0), color.darkened(0.2))
 					leg.name = "LeftLeg" if side < 0.0 else "RightLeg"
-			for hand_name: String in ["LeftHand", "RightHand"]:
-				var hand: MeshInstance3D = _box(root, Vector3(0.09, 0.09, 0.15), Vector3.ZERO, Color(0.72, 0.9, 1.0))
-				hand.name = hand_name
-				hand.visible = false
+				for hand_name: String in ["LeftHand", "RightHand"]:
+					var hand: MeshInstance3D = _box(root, Vector3(0.09, 0.09, 0.15), Vector3.ZERO, Color(0.72, 0.9, 1.0))
+					hand.name = hand_name
+					hand.visible = false
 			var peer_name: String = str(dims.get("peer.name", "Guest"))
 			_peer_names[id] = peer_name
 			_name_labels[id] = _label(root, peer_name, Vector3(0, 1.95, 0))

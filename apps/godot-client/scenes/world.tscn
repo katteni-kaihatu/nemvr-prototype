@@ -197,6 +197,7 @@ script = ExtResource("4")
 
 [node name="XRCamera" type="XRCamera3D" parent="Player/XRRig"]
 current = false
+cull_mask = 37
 
 [node name="XRMenu" type="Node3D" parent="Player/XRRig/XRCamera"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.12, -0.9)

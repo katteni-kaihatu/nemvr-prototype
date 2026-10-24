@@ -704,7 +704,7 @@ func _update_laser() -> void:
 		var perpendicular: Vector3 = correction - direction * correction.dot(direction)
 		if perpendicular.length() > 0.0005:
 			_laser_bow_direction = perpendicular.normalized()
-		_laser_bow = lerpf(_laser_bow, clampf(perpendicular.length() * 6.0, 0.0, 0.3), 0.35)
+		_laser_bow = lerpf(_laser_bow, clampf(perpendicular.length() * 3.0, 0.0, 0.1), 0.3)
 		if not _laser_hit_ready:
 			_laser_hit = point
 			_laser_hit_ready = true
