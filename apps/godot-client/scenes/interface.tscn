@@ -1,4 +1,18 @@
-[gd_scene format=3]
+[gd_scene load_steps=3 format=3]
+
+[sub_resource type="StyleBoxFlat" id="MicBackground"]
+bg_color = Color(0.035, 0.07, 0.08, 0.9)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="MicFill"]
+bg_color = Color(0.16, 0.78, 0.66, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
 
 [node name="Interface" type="CanvasLayer"]
 
@@ -160,6 +174,8 @@ offset_bottom = -80.0
 max_value = 1.0
 step = 0.01
 show_percentage = false
+theme_override_styles/background = SubResource("MicBackground")
+theme_override_styles/fill = SubResource("MicFill")
 mouse_filter = 2
 
 [node name="Log" type="Label" parent="HUD"]
